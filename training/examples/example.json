@@ -1,0 +1,30 @@
+[
+  {
+    "transcript": "the kerry cable stations are recognised as world heritage communications sites",
+    "files": [
+      {
+        "channels": 1,
+        "sample_rate": 16000.0,
+        "duration": 7.776,
+        "num_samples": 124416,
+        "fname": "wav_clips/common_voice_en_27988632.wav"
+      }
+    ],
+    "original_duration": 7.776,
+    "original_num_samples": 124416
+  },
+  {
+    "transcript": "so too was the sign at bromley kent",
+    "files": [
+      {
+        "channels": 1,
+        "sample_rate": 16000.0,
+        "duration": 4.968,
+        "num_samples": 79488,
+        "fname": "wav_clips/common_voice_en_27988633.wav"
+      }
+    ],
+    "original_duration": 4.968,
+    "original_num_samples": 79488
+  }
+]

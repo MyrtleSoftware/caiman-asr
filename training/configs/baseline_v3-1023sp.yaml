@@ -1,0 +1,91 @@
+# Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Modified by Myrtle.
+# Note that, in general, modification of these config parameters outside the
+# recommendations made in the training README may yield an RNN-T model that is
+# incompatible with Myrtle's existing hardware accelerated inference server.
+
+tokenizer:
+    sentpiece_model: /datasets/sentencepieces/librispeech1023.model
+    labels: [" ", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+             "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "'"]
+
+# For validation we don't trim silence: its effect on WER is very small, it pushes WER on clean and noisy speech
+# in different directions, it would be difficult to implement in a streaming system, and a VAD would be better.
+input_val:
+  audio_dataset: &val_dataset
+    sample_rate: &sample_rate 16000
+    trim_silence: false
+    normalize_transcripts: true
+
+  filterbank_features: &val_features
+    normalize: per_feature
+    sample_rate: *sample_rate
+    window_size: 0.02
+    window_stride: 0.01
+    window: hann
+    n_fft: 512
+    n_filt: &n_filt 80
+    dither: 0.00001
+  frame_splicing: &val_splicing
+    frame_stacking: 3
+    frame_subsampling: 3
+
+# For training we trim silence, keep samples < max_duration and apply augmentation
+input_train:
+  audio_dataset:
+    <<: *val_dataset
+    trim_silence: true    
+    max_duration: 16.7
+    speed_perturbation:
+        min_rate: 0.85
+        max_rate: 1.15
+        p: 1.0
+
+  filterbank_features: *val_features
+  frame_splicing: *val_splicing
+
+  spec_augment:
+    freq_masks: 2
+    min_freq: 0
+    max_freq: 20
+    time_masks: 10
+    min_time: 0
+    max_time: 0.03
+
+rnnt:
+  in_feats: 240  # n_filt x frame_stacking
+
+  enc_n_hid: 1024
+  enc_pre_rnn_layers: 2
+  enc_post_rnn_layers: 3
+  enc_stack_time_factor: 2
+  enc_dropout: 0.1
+  enc_batch_norm: false
+  
+  pred_n_hid: 512
+  pred_rnn_layers: 2
+  pred_dropout: 0.3
+  pred_batch_norm: false
+  
+  joint_n_hid: 512
+  joint_dropout: 0.3
+
+  forget_gate_bias: 1.0
+
+  custom_lstm: false
+  hard_activation_functions: false
+  quantize: false
+
