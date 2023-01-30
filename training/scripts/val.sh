@@ -47,5 +47,5 @@ ARGS+=" --max_symbol_per_sample=$MAX_SYMBOL_PER_SAMPLE"
 [ "$AMP" = true ] &&                 ARGS+=" --amp"
 [ "$CUDNN_BENCHMARK" = true ] &&     ARGS+=" --cudnn_benchmark"
 
-DISTRIBUTED=${DISTRIBUTED:-"-m torch.distributed.launch --nproc_per_node=$NUM_GPUS"}
-python ${DISTRIBUTED} val.py ${ARGS}
+DISTRIBUTED=${DISTRIBUTED:-"torchrun --standalone --nnodes 1 --nproc_per_node=$NUM_GPUS"}
+${DISTRIBUTED} val.py ${ARGS}

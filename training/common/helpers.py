@@ -128,11 +128,9 @@ def num_weights(module):
 
 class Checkpointer(object):
 
-    def __init__(self, save_dir, model_name, keep_milestones=[100,200,300],
-                 use_amp=False):
+    def __init__(self, save_dir, model_name, keep_milestones=[100,200,300]):
         self.save_dir = save_dir
         self.keep_milestones = keep_milestones
-        self.use_amp = use_amp
         self.model_name = model_name
 
         tracked = [

@@ -48,8 +48,14 @@ def evaluate(epoch, step, val_loader, val_feat_proc, detokenize,
 
         # note : more misleading variable names : 'log_prob*' are actually logits - rob@myrtle
         log_probs, log_prob_lens = ema_model(feats, feat_lens, txt, txt_lens)
+        # batch_offset and max_f_len parameters are required for the apex transducer loss
+        batch_offset = torch.cumsum(feat_lens*(txt_lens+1), dim=0)
+        max_f_len = max(feat_lens)
         loss = loss_fn(log_probs[:, :log_prob_lens.max().item()],
-                       log_prob_lens, txt, txt_lens)
+                       log_prob_lens, txt, txt_lens,
+                       batch_offset=batch_offset,
+                       max_f_len=max_f_len,
+                       )
 
         pred = greedy_decoder.decode(ema_model, feats, feat_lens)
 

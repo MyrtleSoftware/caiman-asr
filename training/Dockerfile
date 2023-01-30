@@ -14,49 +14,29 @@
 
 # modified by rob@myrtle
 
-ARG FROM_IMAGE_NAME=pytorch/pytorch:1.7.0-cuda11.0-cudnn8-devel
+ARG FROM_IMAGE_NAME=nvcr.io/nvidia/pytorch:22.11-py3
 FROM ${FROM_IMAGE_NAME}
 
-ENV PYTORCH_VERSION=1.7.0a0+7036e91 
+# pytorch version taken from here:
+# https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-22-11.html#rel-22-11
+ENV PYTORCH_VERSION=1.13.0a0+936e930
 
 # Added by rob@myrtle May 2022 to fix NVIDIA key rotation problem.
 # See https://forums.developer.nvidia.com/t/notice-cuda-linux-repository-key-rotation/212771 for details.
 RUN apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64/3bf863cc.pub
 
 RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata && \
     apt-get install -y libsndfile1 sox git cmake jq ffmpeg && \
     apt-get install -y --no-install-recommends numactl && \
     rm -rf /var/lib/apt/lists/*
-
-RUN COMMIT_SHA=f546575109111c455354861a0567c8aa794208a2 && \
-    git clone https://github.com/HawkAaron/warp-transducer deps/warp-transducer && \
-    cd deps/warp-transducer && \
-    git checkout $COMMIT_SHA && \
-    sed -i 's/set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -gencode arch=compute_30,code=sm_30 -O2")/#set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -gencode arch=compute_30,code=sm_30 -O2")/g' CMakeLists.txt && \
-    sed -i 's/set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -gencode arch=compute_75,code=sm_75")/set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -gencode arch=compute_80,code=sm_80")/g' CMakeLists.txt && \
-    mkdir build && \
-    cd build && \
-    cmake .. && \
-    make VERBOSE=1 && \
-    export CUDA_HOME="/usr/local/cuda" && \
-    export WARP_RNNT_PATH=`pwd` && \
-    export CUDA_TOOLKIT_ROOT_DIR=$CUDA_HOME && \
-    export LD_LIBRARY_PATH="$CUDA_HOME/extras/CUPTI/lib64:$LD_LIBRARY_PATH" && \
-    export LIBRARY_PATH=$CUDA_HOME/lib64:$LIBRARY_PATH && \
-    export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH && \
-    export CFLAGS="-I$CUDA_HOME/include $CFLAGS" && \
-    cd ../pytorch_binding && \
-    python3 setup.py install && \
-    rm -rf ../tests test ../tensorflow_binding && \
-    cd ../../..
 
 WORKDIR /workspace/rnnt
 
 RUN pip install --no-cache --extra-index-url https://developer.download.nvidia.com/compute/redist nvidia-dali-cuda110==0.28.0
 
-RUN pip install --global-option="--cpp_ext" --global-option="--cuda_ext" https://github.com/NVIDIA/apex/archive/8a1ed9e8d35dfad26fb973996319965e4224dcdd.zip
-
 COPY requirements.txt .
 RUN pip install --no-cache --disable-pip-version-check -U -r requirements.txt
 
 COPY . .
+

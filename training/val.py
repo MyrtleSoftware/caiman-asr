@@ -27,8 +27,7 @@ import torch
 import numpy as np
 import multiprocessing
 import torch.distributed as dist
-#from apex import amp
-from apex.parallel import DistributedDataParallel
+from torch.nn.parallel import DistributedDataParallel
 
 from common import helpers
 from common.data.dali import sampler as dali_sampler
@@ -42,7 +41,7 @@ from common.evaluate import evaluate
 
 from rnnt import config
 from rnnt.decoder import RNNTGreedyDecoder
-from rnnt.loss import RNNTLoss
+from rnnt.loss import apexTransducerLoss
 from rnnt.model import RNNT
 
 from mlperf import logging
@@ -166,7 +165,7 @@ def main():
     model = RNNT(n_classes=tokenizer.num_labels + 1, **rnnt_config)
     model.cuda()
     blank_idx = tokenizer.num_labels
-    loss_fn = RNNTLoss(blank_idx=blank_idx)
+    loss_fn = apexTransducerLoss(blank_idx=blank_idx, packed_input=False)
     logging.log_event(logging.constants.EVAL_MAX_PREDICTION_SYMBOLS, value=args.max_symbol_per_sample)
     greedy_decoder = RNNTGreedyDecoder( blank_idx=blank_idx,
                                         max_symbol_per_sample=args.max_symbol_per_sample)
@@ -189,7 +188,7 @@ def main():
     assert args.ckpt is not None
         
     # setup checkpointer
-    checkpointer = Checkpointer(args.output_dir, 'RNN-T', [], args.amp)
+    checkpointer = Checkpointer(args.output_dir, 'RNN-T', [])
 
     # load checkpoint (modified to not need optimizer / meta args)
     checkpointer.load(args.ckpt, model, ema_model)

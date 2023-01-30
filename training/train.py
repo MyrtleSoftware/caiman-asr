@@ -26,7 +26,7 @@ import numpy as np
 import torch.multiprocessing as mp
 import torch.distributed as dist
 from apex.optimizers import FusedLAMB
-from apex.parallel import DistributedDataParallel
+from torch.nn.parallel import DistributedDataParallel
 
 from common import helpers
 from common.data.dali import sampler as dali_sampler
@@ -42,7 +42,7 @@ from common.evaluate import evaluate
 
 from rnnt import config
 from rnnt.decoder import RNNTGreedyDecoder
-from rnnt.loss import RNNTLoss
+from rnnt.loss import apexTransducerLoss
 from rnnt.model import RNNT
 
 from mlperf import logging
@@ -329,7 +329,7 @@ def main():
     model = RNNT(n_classes=tokenizer.num_labels + 1, **rnnt_config)
     model.cuda()
     blank_idx = tokenizer.num_labels
-    loss_fn = RNNTLoss(blank_idx=blank_idx)
+    loss_fn = apexTransducerLoss(blank_idx=blank_idx, packed_input=False)
     logging.log_event(logging.constants.EVAL_MAX_PREDICTION_SYMBOLS, value=args.max_symbol_per_sample)
     greedy_decoder = RNNTGreedyDecoder( blank_idx=blank_idx,
                                         max_symbol_per_sample=args.max_symbol_per_sample)
@@ -380,7 +380,7 @@ def main():
     # load checkpoint
     meta = {'best_wer': 10**6, 'start_epoch': 0}
     checkpointer = Checkpointer(args.output_dir, 'RNN-T',
-                                args.keep_milestones, args.amp)
+                                args.keep_milestones)
 
     # we cannot both resume and fine_tune
     if args.resume or args.fine_tune:
@@ -494,18 +494,30 @@ def main():
             feats, feat_lens = train_feat_proc([audio, audio_lens])
             all_feat_lens += feat_lens
             
+            # parameters used for the APEX transducer loss function
+            batch_offset = torch.cumsum(feat_lens*(txt_lens+1), dim=0)
+            max_f_len = max(feat_lens)
+
             if args.amp:
                 # use autocast from pytorch AMP 
                 with torch.cuda.amp.autocast():
                     # note : more misleading variable names : 'log_prob*' are actually logits - rob@myrtle
+                    # log_probs are cast to float16 w/ autocast.
                     log_probs, log_prob_lens = model(feats, feat_lens, txt, txt_lens)
                     loss = loss_fn(log_probs[:, :log_prob_lens.max().item()],
-                                   log_prob_lens, txt, txt_lens)
+                                   log_prob_lens, txt, txt_lens, 
+                                   batch_offset=batch_offset,
+                                   max_f_len=max_f_len,
+                                   )
                     loss /= args.grad_accumulation_steps
             else:
+                # log_probs are float32
                 log_probs, log_prob_lens = model(feats, feat_lens, txt, txt_lens)
                 loss = loss_fn(log_probs[:, :log_prob_lens.max().item()],
-                               log_prob_lens, txt, txt_lens)
+                               log_prob_lens, txt, txt_lens,
+                               batch_offset=batch_offset,
+                               max_f_len=max_f_len,
+                               )
                 loss /= args.grad_accumulation_steps
 
             del log_probs, log_prob_lens

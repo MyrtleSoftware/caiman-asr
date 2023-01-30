@@ -14,52 +14,32 @@
 # limitations under the License.
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from warprnnt_pytorch import RNNTLoss as WarpRNNTLoss
+from apex.contrib.transducer import TransducerLoss
 
-
-class RNNTLoss(torch.nn.Module):
-    """Wrapped :py:class:`warprnnt_pytorch.RNNTLoss`.
-    Args:
-        blank_idx: Index of the blank label.
-    Attributes:
-        rnnt_loss: A :py:class:`warprnnt_pytorch.RNNTLoss` instance.
+class apexTransducerLoss(torch.nn.Module):
     """
-
-    def __init__(self, blank_idx):
+    NVIDIA apex RNNT implementation from the apex module transducer_loss_cuda.
+    """
+    def __init__(self, blank_idx, packed_input):
         super().__init__()
-        self.rnnt_loss = WarpRNNTLoss(blank=blank_idx)
-        self.use_cuda = torch.cuda.is_available()
+        self.t_loss = TransducerLoss(packed_input=packed_input)
+        self.blank_idx = blank_idx
 
-    def forward(self, logits, logit_lens, y, y_lens):
-        """Computes RNNT loss.
-        All inputs are moved to the GPU with :py:meth:`torch.nn.Module.cuda` if
-        :py:func:`torch.cuda.is_available` was :py:data:`True` on
-        initialisation.
-        Args:
-            inputs: A tuple where the first element is the unnormalized network
-                :py:class:`torch.Tensor` outputs of size ``[batch, max_seq_len,
-                max_output_seq_len + 1, vocab_size + 1)``. The second element
-                is a Tuple of two :py:class:`torch.Tensor`s both of
-                size ``[batch]`` that contain the lengths of a) the audio features
-                logits and b) the target sequence logits.
-            targets: A tuple where the first element is a
-                :py:class:`torch.Tensor` such that each entry in the target
-                sequence is a class index. Target indices cannot be the blank
-                index. It must have size ``[batch, max_seq_len]``. In the former
-                form each target sequence is padded to the length of the longest
-                sequence and stacked.
-                The second element is a :py:class:`torch.Tensor` that gives
-                the lengths of the targets. Lengths are specified for each
-                sequence to achieve masking under the assumption that sequences
-                are padded to equal lengths.
+    def forward(self, logits, logit_lens, y, y_lens, batch_offset, max_f_len):
         """
-
-
-        # cast to required types
-        if logits.dtype != torch.float:
-            logits = logits.float()
+        Computes the RNNT loss function
+        
+        Args:
+            inputs:
+                logits: logits tensor of size [B, T, U, K+1] or [batch, max_seq_len,
+                max_output_seq, vocab_size+1]. Precision is float32, or float16 when 
+                AMP=true.
+                logit_lens: the length of logits tensor.
+                y: text transcription tensor.
+                y_lens: the length text tensor.
+                batch_offset: cumulative sum of T*(U+1).
+                max_f_len: max number of features.
+        """
 
         if y.dtype != torch.int32:
             y = y.int()
@@ -70,19 +50,13 @@ class RNNTLoss(torch.nn.Module):
         if y_lens.dtype != torch.int32:
             y_lens = y_lens.int()
 
-        # send to gpu
-        if self.use_cuda:
-            logits = logits.cuda()
-            logit_lens = logit_lens.cuda()
-            y = y.cuda()
-            y_lens = y_lens.cuda()
-
-        loss = self.rnnt_loss(
-            acts=logits, labels=y, act_lens=logit_lens, label_lens=y_lens
-        )
-
-        # del new variables that may have been created due to float/int/cuda()
-        del logits, y, logit_lens, y_lens
-
+        loss = self.t_loss(logits,
+                            y,
+                            logit_lens,
+                            y_lens,
+                            self.blank_idx,
+                            batch_offset=batch_offset,
+                            max_f_len=max_f_len,
+                            ).mean()
         return loss
 

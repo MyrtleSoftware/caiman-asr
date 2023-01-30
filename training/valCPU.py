@@ -267,7 +267,7 @@ def main():
     assert args.ckpt is not None
 
     # setup checkpointer
-    checkpointer = Checkpointer(args.output_dir, 'RNN-T', [], args.amp)
+    checkpointer = Checkpointer(args.output_dir, 'RNN-T', [])
 
     # load checkpoint (modified to not need optimizer / meta args)
     checkpointer.load(args.ckpt, model, ema_model)

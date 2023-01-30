@@ -45,7 +45,7 @@ cd training
 ```
 
 #### Requirements
-Currently, the reference uses CUDA-11.0 (see [Dockerfile](Dockerfile#L15)).
+Currently, the reference uses CUDA-11.8 (see [Dockerfile](Dockerfile#L15)).
 Here you can find a table listing compatible drivers: https://docs.nvidia.com/deploy/cuda-compatibility/index.html#binary-compatibility__table-toolkit-driver
 
 
