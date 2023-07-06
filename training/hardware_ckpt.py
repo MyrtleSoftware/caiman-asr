@@ -6,10 +6,12 @@
 import torch
 import argparse
 
+from rnnt import config
+
 parser = argparse.ArgumentParser(description='Gather training results into a hardware checkpoint')
 parser.add_argument('--fine_tuned_ckpt', type=str, default='/results/RNN-T_best_checkpoint.pt',
                     help='fine-tuned checkpoint file')
-parser.add_argument('--config', type=str, default='configs/baseline_v3-1023sp.yaml',
+parser.add_argument('--config', type=str, default='configs/testing-1023sp_run.yaml',
                     help='config file')
 parser.add_argument('--melmeans', type=str, default='/results/melmeans.pt',
                     help='mel means file')
@@ -56,6 +58,12 @@ with open(spmfn, 'rb') as f:
 
 # store the bytes object in the hardware checkpoint
 hardcp['sentpiece_model'] = spmb
+
+# add the semantic version number of the hardware checkpoint
+hardcp['version'] = '1.2.0'
+
+# copy in loaded config
+hardcp['rnnt_config'] = config.load(args.config)
 
 # save the hardware checkpoint to disk
 torch.save(hardcp, args.output_ckpt)

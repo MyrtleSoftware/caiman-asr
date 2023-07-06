@@ -3,7 +3,7 @@
 
 import torch
 from qtorch import FloatingPoint, BlockFloatingPoint
-from qtorch.quant import Quantizer
+from qtorch.quant import Quantizer # this import is _very_ slow when it is first run
 
 class NullClass(torch.nn.Module):
     def __init__(self):

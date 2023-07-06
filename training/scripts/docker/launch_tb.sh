@@ -31,4 +31,4 @@ docker run -it --rm \
   -v $PWD:/code \
   -v $PWD:/workspace/rnnt \
   -p 6010:6010 \
-  mlperf/rnn_speech_recognition bash
+  myrtle/rnnt:v1.2.0 bash

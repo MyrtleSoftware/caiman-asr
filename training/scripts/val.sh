@@ -20,7 +20,7 @@
 export OMP_NUM_THREADS=1
 
 : ${DATA_DIR:=${1:-"/datasets/LibriSpeech"}}
-: ${MODEL_CONFIG:=${2:-"configs/baseline_v3-1023sp.yaml"}}
+: ${MODEL_CONFIG:=${2:-"configs/testing-1023sp_run.yaml"}}
 : ${OUTPUT_DIR:=${3:-"/results"}}
 : ${CHECKPOINT:=${4:-"/results/RNN-T_best_checkpoint.pt"}}
 : ${VAL_MANIFESTS:="$DATA_DIR/librispeech-dev-clean-wav.json"}

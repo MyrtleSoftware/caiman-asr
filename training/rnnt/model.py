@@ -59,6 +59,7 @@ class RNNT(nn.Module):
         pred_n_hid:  Internal hidden unit size of the prediction network.
         pred_rnn_layers: Prediction network number of layers.
         joint_n_hid: Internal hidden unit size of the joint network.
+        *lr_factor: network or layer-specific learning rate factor.
     """
     def __init__(self, n_classes, in_feats, enc_n_hid, enc_batch_norm, pred_batch_norm,
                  enc_pre_rnn_layers, enc_post_rnn_layers, enc_stack_time_factor,
@@ -67,12 +68,15 @@ class RNNT(nn.Module):
                  forget_gate_bias, custom_lstm=False, hard_activation_functions=False,
                  quantize=False,
                  hidden_hidden_bias_scale=0.0, weights_init_scale=1.0,
-                 enc_lr_factor=1.0, pred_lr_factor=1.0, joint_lr_factor=1.0):
+                 enc_lr_factor=1.0, pred_lr_factor=1.0,
+                 joint_enc_lr_factor=1.0, joint_pred_lr_factor=1.0, joint_net_lr_factor=1.0):
         super(RNNT, self).__init__()
 
-        self.enc_lr_factor = enc_lr_factor
-        self.pred_lr_factor = pred_lr_factor
-        self.joint_lr_factor = joint_lr_factor
+        self.enc_lr_factor        = enc_lr_factor
+        self.pred_lr_factor       = pred_lr_factor
+        self.joint_enc_lr_factor  = joint_enc_lr_factor
+        self.joint_pred_lr_factor = joint_pred_lr_factor
+        self.joint_net_lr_factor  = joint_net_lr_factor
 
         self.pred_n_hid = pred_n_hid
 
@@ -258,8 +262,12 @@ class RNNT(nn.Module):
                  'lr': lr * self.enc_lr_factor},
                 {'params': chain_params(self.prediction),
                  'lr': lr * self.pred_lr_factor},
-                {'params': chain_params(self.joint_enc, self.joint_pred, self.joint_net),
-                 'lr': lr * self.joint_lr_factor},
+                {'params': chain_params(self.joint_enc),
+                 'lr': lr * self.joint_enc_lr_factor},
+                {'params': chain_params(self.joint_pred),
+                 'lr': lr * self.joint_pred_lr_factor},
+                {'params': chain_params(self.joint_net),
+                 'lr': lr * self.joint_net_lr_factor},
                ]
 
 

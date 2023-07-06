@@ -17,28 +17,26 @@ from torch.optim import Optimizer
 import math
 
 
-def lr_policy(step, epoch, initial_lr, optimizer, steps_per_epoch, warmup_epochs,
-              hold_epochs, min_lr=1e-5,
-              exp_gamma=None):
+def lr_policy(optimizer, initial_lr, min_lr, step,
+              warmup_steps, hold_steps, half_life_steps):
     """
-    learning rate decay
+    learning rate policy
     Args:
+        optimizer: optimizer
         initial_lr: base learning rate
-        step: current iteration number
-        N: total number of iterations over which learning rate is decayed
-        lr_steps: list of steps to apply exp_gamma
+        min_lr: minimum learning rate
+        step: current iteration (update) number
+        warmup_steps: number of steps over which learning rate ramps up
+        hold_steps: number of steps over which learning rate is constant
+        half_life_steps: learning rate half-life in steps during decay
     """
-    warmup_steps = warmup_epochs * steps_per_epoch
-    hold_steps = hold_epochs * steps_per_epoch
-
-    assert exp_gamma is not None
 
     if step < warmup_steps:
         a = (step + 1) / (warmup_steps + 1)
     elif step < warmup_steps + hold_steps:
         a = 1.0
     else:
-        a = exp_gamma ** (epoch - warmup_epochs - hold_epochs)
+        a = 0.5 ** ((step - warmup_steps - hold_steps) / half_life_steps)
 
     if type(initial_lr) is float:
         initial_lr = [initial_lr]

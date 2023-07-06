@@ -18,7 +18,7 @@
 # incompatible with Myrtle's existing hardware accelerated inference server.
 
 tokenizer:
-    sentpiece_model: /datasets/sentencepieces/librispeech1023.model
+    sentpiece_model: /datasets/sentencepieces/SENTENCEPIECE.model
     labels: [" ", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
              "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "'"]
 
@@ -43,12 +43,12 @@ input_val:
     frame_stacking: 3
     frame_subsampling: 3
 
-# For training we trim silence, keep samples < max_duration and apply augmentation
+# For training we trim silence, keep samples <= max_duration and apply augmentation
 input_train:
   audio_dataset:
     <<: *val_dataset
     trim_silence: true    
-    max_duration: 16.7
+    max_duration: MAX_DURATION
     speed_perturbation:
         min_rate: 0.85
         max_rate: 1.15
@@ -82,6 +82,7 @@ rnnt:
   
   joint_n_hid: 512
   joint_dropout: 0.3
+  joint_net_lr_factor: 1.0
 
   forget_gate_bias: 1.0
 

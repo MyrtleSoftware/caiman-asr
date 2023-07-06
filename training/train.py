@@ -54,10 +54,12 @@ def parse_args():
     training = parser.add_argument_group('training setup')
     training.add_argument('--epochs', default=100, type=int,
                           help='Number of epochs for the entire training')
-    training.add_argument("--warmup_epochs", default=6, type=int,
-                          help='Initial epochs of increasing learning rate')
-    training.add_argument("--hold_epochs", default=40, type=int,
-                          help='Constant max learning rate epochs after warmup')
+    training.add_argument("--warmup_steps", default=1632, type=int,
+                          help='Initial steps of increasing learning rate')
+    training.add_argument("--hold_steps", default=10880, type=int,
+                          help='Constant max learning rate steps after warmup')
+    training.add_argument("--half_life_steps", default=2805, type=int,
+                          help='half life (in steps) for exponential learning rate decay')
     training.add_argument('--epochs_this_job', default=0, type=int,
                           help=('Run for a number of epochs with no effect on the lr schedule.'
                                 'Useful for re-starting the training.'))
@@ -79,20 +81,18 @@ def parse_args():
                           help='Dump unnormalized mel stats, then stop.')
     
     optim = parser.add_argument_group('optimization setup')
-    optim.add_argument('--batch_size', default=128, type=int,
-                       help='Effective batch size per GPU (might require grad accumulation')
+    optim.add_argument('--accum_batch_size', default=128, type=int,
+                       help='Effective batch size per GPU after grad accumulation')
     optim.add_argument('--val_batch_size', default=2, type=int,
                        help='Evalution time batch size')
     optim.add_argument('--lr', default=4e-3, type=float,
                        help='Peak learning rate')
     optim.add_argument("--min_lr", default=1e-5, type=float,
                        help='minimum learning rate')
-    optim.add_argument("--lr_exp_gamma", default=0.935, type=float,
-                       help='gamma factor for exponential lr scheduler')
     optim.add_argument('--weight_decay', default=1e-3, type=float,
                        help='Weight decay for the optimizer')
-    optim.add_argument('--grad_accumulation_steps', default=8, type=int,
-                       help='Number of accumulation steps')
+    optim.add_argument('--grad_accumulation_batches', default=8, type=int,
+                       help='Number of batches that must be accumulated for a single model update (step)')
     optim.add_argument('--clip_norm', default=1, type=float,
                        help='If provided, gradients will be clipped above this norm')
     optim.add_argument('--beta1', default=0.9, type=float, help='Beta 1 for optimizer')
@@ -115,15 +115,15 @@ def parse_args():
                     help='Checkpoint saving frequency in epochs')
     io.add_argument('--keep_milestones', default=[], type=int, nargs='+',
                     help='Milestone checkpoints to keep from removing')
-    io.add_argument('--save_best_from', default=200, type=int,
+    io.add_argument('--save_best_from', default=1, type=int,
                     help='Epoch on which to begin tracking best checkpoint (dev WER)')
     io.add_argument('--val_frequency', default=1, type=int,
                     help='Number of epochs between evaluations on dev set')
-    io.add_argument('--log_frequency', default=25, type=int,
+    io.add_argument('--log_frequency', default=1, type=int,
                     help='Number of steps between printing training stats')
     io.add_argument('--prediction_frequency', default=None, type=int,
                     help='Number of steps between printing sample decodings')
-    io.add_argument('--model_config', default='configs/baseline_v3-1023sp.yaml',
+    io.add_argument('--model_config', default='configs/testing-1023sp_run.yaml',
                     type=str, required=True,
                     help='Path of the model configuration file')
     io.add_argument('--num_buckets', type=int, default=6,
@@ -191,10 +191,10 @@ def main():
     cfg = config.load(args.model_config)
     config.apply_duration_flags(cfg, args.max_duration)
 
-    assert args.grad_accumulation_steps >= 1
-    assert args.batch_size % args.grad_accumulation_steps == 0, f'{args.batch_size} % {args.grad_accumulation_steps} != 0'
-    logging.log_event(logging.constants.GRADIENT_ACCUMULATION_STEPS, value=args.grad_accumulation_steps)
-    batch_size = args.batch_size // args.grad_accumulation_steps
+    assert args.grad_accumulation_batches >= 1
+    assert args.accum_batch_size % args.grad_accumulation_batches == 0, f'{args.accum_batch_size} % {args.grad_accumulation_batches} != 0'
+    logging.log_event(logging.constants.GRADIENT_ACCUMULATION_STEPS, value=args.grad_accumulation_batches)
+    batch_size = args.accum_batch_size // args.grad_accumulation_batches
 
     logging.log_event(logging.constants.SUBMISSION_BENCHMARK, value=logging.constants.RNNT)
     logging.log_event(logging.constants.SUBMISSION_ORG, value='my-organization')
@@ -242,7 +242,7 @@ def main():
     logging.log_event(logging.constants.DATA_SPEC_AUGMENT_TIME_MAX,
                       value=train_specaugm_kw['max_time'])
     logging.log_event(logging.constants.GLOBAL_BATCH_SIZE,
-                      value=batch_size * world_size * args.grad_accumulation_steps)
+                      value=batch_size * world_size * args.grad_accumulation_batches)
 
     # if mel stats are being collected these are for use in inference streaming normalization
     # the stats should therefore reflect the processing that will be used in inference
@@ -288,7 +288,7 @@ def main():
                                   json_names=args.train_manifests,
                                   batch_size=batch_size,
                                   sampler=sampler,
-                                  grad_accumulation_steps=args.grad_accumulation_steps,
+                                  grad_accumulation_batches=args.grad_accumulation_batches,
                                   pipeline_type="train",
                                   normalize=not args.dump_mel_stats, 
                                   num_cpu_threads=mp.cpu_count(),
@@ -314,7 +314,7 @@ def main():
     train_feat_proc.cuda()
     val_feat_proc.cuda()
 
-    steps_per_epoch = len(train_loader) // args.grad_accumulation_steps
+    steps_per_epoch = len(train_loader) // args.grad_accumulation_batches
 
     logging.log_event(logging.constants.TRAIN_SAMPLES, value=train_loader.dataset_size)
     logging.log_event(logging.constants.EVAL_SAMPLES, value=val_loader.dataset_size)
@@ -340,9 +340,6 @@ def main():
     logging.log_event(logging.constants.OPT_NAME, value='lamb')
     logging.log_event(logging.constants.OPT_BASE_LR, value=args.lr)
     logging.log_event(logging.constants.OPT_LAMB_EPSILON, value=opt_eps)
-    logging.log_event(logging.constants.OPT_LAMB_LR_DECAY_POLY_POWER, value=args.lr_exp_gamma)
-    logging.log_event(logging.constants.OPT_LR_WARMUP_EPOCHS, value=args.warmup_epochs)
-    logging.log_event(logging.constants.OPT_LAMB_LR_HOLD_EPOCHS, value=args.hold_epochs)
     logging.log_event(logging.constants.OPT_LAMB_BETA_1, value=args.beta1)
     logging.log_event(logging.constants.OPT_LAMB_BETA_2, value=args.beta2)
     logging.log_event(logging.constants.OPT_GRADIENT_CLIP_NORM, value=args.clip_norm)
@@ -360,11 +357,10 @@ def main():
     print_once(f'Starting with LRs: {initial_lrs}')
     optimizer = FusedLAMB(betas=(args.beta1, args.beta2), eps=opt_eps, max_grad_norm=args.clip_norm, **kw)
 
-    adjust_lr = lambda step, epoch: lr_policy(
-        step, epoch, initial_lrs, optimizer, steps_per_epoch=steps_per_epoch,
-        warmup_epochs=args.warmup_epochs, hold_epochs=args.hold_epochs,
-        min_lr=args.min_lr, exp_gamma=args.lr_exp_gamma)
-
+    adjust_lr = lambda step: lr_policy(
+        optimizer, initial_lrs, args.min_lr, step,
+        args.warmup_steps, args.hold_steps, args.half_life_steps)
+    
     if args.amp:
         scaler = torch.cuda.amp.GradScaler()
 
@@ -404,7 +400,6 @@ def main():
     start_epoch = meta['start_epoch']
     best_wer = meta['best_wer']
     last_wer = meta['best_wer']
-    epoch = 1
     step = start_epoch * steps_per_epoch + 1
 
     if args.dump_melmat != 'none':
@@ -461,7 +456,7 @@ def main():
         for batch in train_loader:
 
             if accumulated_batches == 0:
-                adjust_lr(step, epoch)
+                adjust_lr(step)
                 optimizer.zero_grad()
                 step_utts = 0
                 step_start_time = time.time()
@@ -509,7 +504,7 @@ def main():
                                    batch_offset=batch_offset,
                                    max_f_len=max_f_len,
                                    )
-                    loss /= args.grad_accumulation_steps
+                    loss /= args.grad_accumulation_batches
             else:
                 # log_probs are float32
                 log_probs, log_prob_lens = model(feats, feat_lens, txt, txt_lens)
@@ -518,7 +513,7 @@ def main():
                                batch_offset=batch_offset,
                                max_f_len=max_f_len,
                                )
-                loss /= args.grad_accumulation_steps
+                loss /= args.grad_accumulation_batches
 
             del log_probs, log_prob_lens
 
@@ -538,7 +533,7 @@ def main():
                 accumulated_batches += 1
 
             # the > 0 condition is a bugfix; absence was causing 1st batch NaNs to enter this code - rob
-            if accumulated_batches > 0 and accumulated_batches % args.grad_accumulation_steps == 0:
+            if accumulated_batches > 0 and accumulated_batches % args.grad_accumulation_batches == 0:
 
                 total_norm = 0.0
 

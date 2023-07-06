@@ -12,12 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Modified by Myrtle
 
 #!/bin/bash
 
 DATASETS=$1
 CHECKPOINTS=$2
 RESULTS=$3
+
+# Any additional arguments are treated as volumes to be mounted
+# This allows docker container to follow symlinks in the mounted 
+# <DATASETS>, <CHECKPOINTS>, and <RESULTS> directories to different 
+# drives on the host machine
+volumes=""
+for i in "${@:4}"
+do
+  volumes=$volumes"-v $i:$i "
+done
 
 docker run -it --rm \
   --gpus='all' \
@@ -29,4 +40,5 @@ docker run -it --rm \
   -v "$RESULTS":/results/ \
   -v $PWD:/code \
   -v $PWD:/workspace/rnnt \
-  mlperf/rnn_speech_recognition bash
+  $volumes \
+  myrtle/rnnt:v1.2.0 bash

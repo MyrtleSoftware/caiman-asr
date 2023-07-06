@@ -19,7 +19,7 @@
 export OMP_NUM_THREADS=1
 
 : ${DATA_DIR:=${1:-"/datasets/LibriSpeech"}}
-: ${MODEL_CONFIG:=${2:-"configs/baseline_v3-1023sp.yaml"}}
+: ${MODEL_CONFIG:=${2:-"configs/testing-1023sp_run.yaml"}}
 : ${OUTPUT_DIR:=${3:-"/results"}}
 : ${CHECKPOINT:=${4:-}}
 : ${CUDNN_BENCHMARK:=true}
@@ -27,16 +27,17 @@ export OMP_NUM_THREADS=1
 : ${AMP:=false}
 : ${GLOBAL_BATCH_SIZE:=1024}
 : ${VAL_BATCH_SIZE:=2}
-: ${GRAD_ACCUMULATION_STEPS:=8}
+: ${GRAD_ACCUMULATION_BATCHES:=8}
 : ${LEARNING_RATE:=0.004}
-: ${LR_EXP_GAMMA:=0.935}  # ~0.005 in 80 epochs
+: ${MIN_LEARNING_RATE:=4e-4}
 : ${NUM_BUCKETS=6} # empty means to use torch.utils.data.distributed.DistributedSampler
 : ${EMA:=0.999}
 : ${SEED=1}
 : ${EPOCHS:=100}
-: ${WARMUP_EPOCHS:=6}  # 8000 steps with 1x8x24 should be ~5.6 epochs
-: ${HOLD_EPOCHS:=40}
-: ${SAVE_AT_THE_END:=false}
+: ${WARMUP_STEPS:=1632}
+: ${HOLD_STEPS:=10880}
+: ${HALF_LIFE_STEPS:=2805}
+: ${SAVE_AT_THE_END:=true}
 : ${DUMP_MELMAT:="none"}
 : ${DUMP_MEL_STATS:=false}
 : ${EPOCHS_THIS_JOB:=0}
@@ -58,7 +59,7 @@ export OMP_NUM_THREADS=1
 : ${WEIGHTS_INIT_SCALE=0.5}
 : ${CLIP_NORM:=1}
 
-BATCH_SIZE=$(( $GLOBAL_BATCH_SIZE / $NUM_GPUS ))
+ACCUM_BATCH_SIZE=$(( $GLOBAL_BATCH_SIZE / $NUM_GPUS ))
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -68,20 +69,20 @@ ARGS+=" --train_manifests $TRAIN_MANIFESTS"
 ARGS+=" --model_config=$MODEL_CONFIG"
 ARGS+=" --output_dir=$OUTPUT_DIR"
 ARGS+=" --lr=$LEARNING_RATE"
-ARGS+=" --batch_size=$BATCH_SIZE"
+ARGS+=" --min_lr=$MIN_LEARNING_RATE"
+ARGS+=" --accum_batch_size=$ACCUM_BATCH_SIZE"
 ARGS+=" --val_batch_size=$VAL_BATCH_SIZE"
-ARGS+=" --min_lr=1e-5"
-ARGS+=" --lr_exp_gamma=$LR_EXP_GAMMA"
 ARGS+=" --epochs=$EPOCHS"
-ARGS+=" --warmup_epochs=$WARMUP_EPOCHS"
-ARGS+=" --hold_epochs=$HOLD_EPOCHS"
+ARGS+=" --warmup_steps=$WARMUP_STEPS"
+ARGS+=" --hold_steps=$HOLD_STEPS"
+ARGS+=" --half_life_steps=$HALF_LIFE_STEPS"
 ARGS+=" --epochs_this_job=$EPOCHS_THIS_JOB"
 ARGS+=" --ema=$EMA"
 ARGS+=" --seed=$SEED"
 ARGS+=" --weight_decay=1e-3"
 ARGS+=" --log_frequency=$LOG_FREQUENCY"
 ARGS+=" --val_frequency=$VAL_FREQUENCY"
-ARGS+=" --grad_accumulation_steps=$GRAD_ACCUMULATION_STEPS "
+ARGS+=" --grad_accumulation_batches=$GRAD_ACCUMULATION_BATCHES"
 ARGS+=" --dali_device=$DALI_DEVICE"
 ARGS+=" --beta1=$BETA1"
 ARGS+=" --beta2=$BETA2"

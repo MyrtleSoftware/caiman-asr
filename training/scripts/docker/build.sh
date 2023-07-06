@@ -1,3 +1,3 @@
 #!/bin/bash
 
-docker build . --rm -t mlperf/rnn_speech_recognition
+docker build . --rm -t myrtle/rnnt:v1.2.0

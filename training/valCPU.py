@@ -71,7 +71,7 @@ def parse_args():
     io = parser.add_argument_group('feature and checkpointing setup')
     io.add_argument('--ckpt', default=None, type=str,
                     help='Path to the checkpoint to use')
-    io.add_argument('--model_config', default='configs/baseline_v3-1023sp.yaml',
+    io.add_argument('--model_config', default='configs/testing-1023sp_run.yaml',
                     type=str, required=True,
                     help='Path of the model configuration file')
     io.add_argument('--val_manifests', type=str, required=True, nargs='+',

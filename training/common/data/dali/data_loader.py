@@ -73,10 +73,10 @@ class DaliDataLoader:
 
     def __init__(self, gpu_id, dataset_path: str, config_data: dict, config_features: dict, json_names: list,
                  tokenizer, batch_size: int, sampler, pipeline_type: str, normalize: bool, num_cpu_threads: int,
-                 grad_accumulation_steps: int = 1, device_type: str = "gpu"):
+                 grad_accumulation_batches: int = 1, device_type: str = "gpu"):
         import torch
         self.batch_size = batch_size
-        self.grad_accumulation_steps = grad_accumulation_steps
+        self.grad_accumulation_batches = grad_accumulation_batches
         self.drop_last = (pipeline_type == 'train')
         self.device_type = device_type
         self.pipeline_type = self._parse_pipeline_type(pipeline_type)
@@ -127,7 +127,7 @@ class DaliDataLoader:
         """
         world_size = dist.get_world_size() if dist.is_initialized() else 1
         if self.drop_last:
-            divisor = world_size * self.batch_size * self.grad_accumulation_steps
+            divisor = world_size * self.batch_size * self.grad_accumulation_batches
             return self.dataset_size // divisor * divisor // world_size
         else:
             return int(math.ceil(self.dataset_size / world_size))

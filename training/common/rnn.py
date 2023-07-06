@@ -20,7 +20,6 @@ import math
 import torch
 from torch.nn import Parameter
 from mlperf import logging
-from common.custom_lstm import CustomLSTM
 
 
 def rnn(input_size, hidden_size, num_layers, batch_norm,
@@ -61,6 +60,10 @@ class LSTM(torch.nn.Module):
         self.num_layers = num_layers
         self.batch_norm = batch_norm
 
+        if kwargs['custom_lstm']:
+            # CustomLSTM import takes O(30s) on startup due to third-party qtorch import
+            # As such, we only do this if we need it
+            from common.custom_lstm import CustomLSTM
         if batch_norm:
             # if applying batch norm after every LSTM layer, then we'll need separate 1-layer LSTMs
             self.lstms       = torch.nn.ModuleList([])
