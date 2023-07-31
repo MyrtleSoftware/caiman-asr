@@ -28,7 +28,7 @@ input_val:
   audio_dataset: &val_dataset
     sample_rate: &sample_rate 16000
     trim_silence: false
-    normalize_transcripts: true
+    normalize_transcripts: false
 
   filterbank_features: &val_features
     normalize: per_feature
@@ -47,8 +47,9 @@ input_val:
 input_train:
   audio_dataset:
     <<: *val_dataset
-    trim_silence: true    
+    trim_silence: true
     max_duration: 16.7
+    max_transcript_len: 450
     speed_perturbation:
         min_rate: 0.85
         max_rate: 1.15
@@ -74,12 +75,12 @@ rnnt:
   enc_stack_time_factor: 2
   enc_dropout: 0.1
   enc_batch_norm: false
-  
+
   pred_n_hid: 512
   pred_rnn_layers: 2
   pred_dropout: 0.3
   pred_batch_norm: false
-  
+
   joint_n_hid: 512
   joint_dropout: 0.3
   joint_net_lr_factor: 1.0
@@ -89,4 +90,3 @@ rnnt:
   custom_lstm: false
   hard_activation_functions: false
   quantize: false
-

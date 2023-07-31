@@ -33,10 +33,20 @@ RUN apt-get update && \
 
 WORKDIR /workspace/rnnt
 
-RUN pip install --no-cache --extra-index-url https://developer.download.nvidia.com/compute/redist nvidia-dali-cuda110==0.28.0
+# Install torchdata from source.
+# This is necessary because, when running pip install torchdata, the PyTorch
+# version in this nvcr image is not recognized as PYTORCH_VERSION=1.13.0a0+936e930
+# is different to the `1.13.0` expected by pip.
+#
+# We also checkout to torchdata==v0.5.0 as this matches PyTorch 1.13.0
+RUN mkdir deps -p && git clone https://github.com/pytorch/data.git deps/data && \
+    cd deps/data && \
+    git checkout v0.5.0 && \
+    git submodule update --init --recursive --jobs 8 && \
+    python setup.py install
 
 COPY requirements.txt .
 RUN pip install --no-cache --disable-pip-version-check -U -r requirements.txt
 
 COPY . .
-
+RUN python -m pip install -e .

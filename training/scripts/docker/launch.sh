@@ -21,8 +21,8 @@ CHECKPOINTS=$2
 RESULTS=$3
 
 # Any additional arguments are treated as volumes to be mounted
-# This allows docker container to follow symlinks in the mounted 
-# <DATASETS>, <CHECKPOINTS>, and <RESULTS> directories to different 
+# This allows docker container to follow symlinks in the mounted
+# <DATASETS>, <CHECKPOINTS>, and <RESULTS> directories to different
 # drives on the host machine
 volumes=""
 for i in "${@:4}"
@@ -41,4 +41,5 @@ docker run -it --rm \
   -v $PWD:/code \
   -v $PWD:/workspace/rnnt \
   $volumes \
-  myrtle/rnnt:v1.2.0 bash
+  -e TZ=$(cat /etc/timezone) \
+  myrtle/rnnt:v1.3.0 sh -c "./scripts/docker/settimezone.sh && bash"

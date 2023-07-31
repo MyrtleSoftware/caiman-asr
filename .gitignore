@@ -1,9 +1,14 @@
+# py packages
+*.egg-info
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
 *~
 *#
+
+# testing
+.hypothesis
 
 # logs
 *.log

@@ -14,11 +14,11 @@
 
 ########################## EDIT AS REQUIRED ##########################
 
-# If you are using a different dataset and/or model configuration, 
+# If you are using a different dataset and/or model configuration,
 # you will need to edit the following variables to match your setup.
-# If you are changing the dataset, you will also need to edit the glob 
+# If you are changing the dataset, you will also need to edit the glob
 # below that currently reads:
-# '/datasets/LibriSpeech/librispeech-train-*-wav.json' 
+# '/datasets/LibriSpeech/librispeech-train-*-wav.json'
 # to point at your dataset's json files.
 SPM_SIZE=1023
 CONFIG_NAME=testing-1023sp

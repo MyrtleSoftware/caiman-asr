@@ -22,6 +22,7 @@
 
 import sys
 
+
 def __levenshtein(a, b):
     """Calculates the Levenshtein distance between two sequences."""
 
@@ -51,8 +52,10 @@ def word_error_rate(hypotheses, references):
     words = 0
     len_diff = len(references) - len(hypotheses)
     if len_diff > 0:
-        raise ValueError("Uneqal number of hypthoses and references: "
-                         "{0} and {1}".format(len(hypotheses), len(references)))
+        raise ValueError(
+            "Uneqal number of hypthoses and references: "
+            "{0} and {1}".format(len(hypotheses), len(references))
+        )
     elif len_diff < 0:
         hypotheses = hypotheses[:len_diff]
 
@@ -62,20 +65,20 @@ def word_error_rate(hypotheses, references):
         words += len(r_list)
         scores += __levenshtein(h_list, r_list)
     if words != 0:
-        wer = 1.0*scores/words
+        wer = 1.0 * scores / words
     else:
-        wer = float('inf')
+        wer = float("inf")
     return wer, scores, words
 
 
 references = []
 hypotheses = []
 
-with open(sys.argv[1], 'r') as f:
+with open(sys.argv[1], "r") as f:
     for line in f:
         references.append(line)
 
-with open(sys.argv[2], 'r') as f:
+with open(sys.argv[2], "r") as f:
     for line in f:
         hypotheses.append(line)
 

@@ -53,8 +53,7 @@ export OMP_NUM_THREADS=1
                       $DATA_DIR/librispeech-train-clean-360-wav.json \
                       $DATA_DIR/librispeech-train-other-500-wav.json"}
 : ${VAL_MANIFESTS:="$DATA_DIR/librispeech-dev-clean-wav.json"}
-: ${USE_OLD_VAL:=true}
-: ${USE_NEW_VAL:=false}
+: ${READ_FROM_TAR:=false}
 : ${MAX_SYMBOL_PER_SAMPLE=300}
 : ${WEIGHTS_INIT_SCALE=0.5}
 : ${CLIP_NORM:=1}
@@ -94,9 +93,11 @@ ARGS+=" --dump_melmat=$DUMP_MELMAT"
 [ "$CUDNN_BENCHMARK" = true ] &&     ARGS+=" --cudnn_benchmark"
 [ "$SAVE_AT_THE_END" = true ] &&     ARGS+=" --save_at_the_end"
 [ "$DUMP_MEL_STATS" = true ] &&      ARGS+=" --dump_mel_stats"
+[ "$READ_FROM_TAR" = true ] &&       ARGS+=" --read_from_tar"
+[ -n "$TRAIN_TAR_FILES" ] &&         ARGS+=" --train_tar_files $TRAIN_TAR_FILES"
+[ -n "$VAL_TAR_FILES" ] &&           ARGS+=" --val_tar_files $VAL_TAR_FILES"
 [ -n "$CHECKPOINT" ] &&              ARGS+=" --ckpt=$CHECKPOINT"
 [ -n "$NUM_BUCKETS" ] &&             ARGS+=" --num_buckets=$NUM_BUCKETS"
-[ -n "$TARGET" ] &&                  ARGS+=" --target=$TARGET"
 [ -n "$CLIP_NORM" ] &&               ARGS+=" --clip_norm=$CLIP_NORM"
 [ -n "$PREDICTION_FREQUENCY" ] &&    ARGS+=" --prediction_frequency=$PREDICTION_FREQUENCY"
 [ -n "$SAVE_MILESTONES" ] &&         ARGS+=" --keep_milestones $SAVE_MILESTONES"
@@ -108,4 +109,4 @@ ARGS+=" --dump_melmat=$DUMP_MELMAT"
 [ -n "$MAX_SYMBOL_PER_SAMPLE" ] &&   ARGS+=" --max_symbol_per_sample=$MAX_SYMBOL_PER_SAMPLE"
 
 DISTRIBUTED=${DISTRIBUTED:-"torchrun --standalone --nnodes 1 --nproc_per_node=$NUM_GPUS"}
-${DISTRIBUTED} train.py ${ARGS}
+${DISTRIBUTED} ./rnnt_train/train.py ${ARGS}

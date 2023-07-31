@@ -34,6 +34,7 @@ export OMP_NUM_THREADS=1
 : ${RESET_STREAM_STATS:=false}
 : ${DUMP_NTH:=None}
 : ${DUMP_PREDS:=false}
+: ${READ_FROM_TAR:=false}
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -53,5 +54,7 @@ ARGS+=" --alpha=$ALPHA"
 [ "$RESET_STREAM_STATS" = true ] &&  ARGS+=" --reset_stream_stats"
 [ "$DUMP_NTH" != None ] &&           ARGS+=" --dump_nth=$DUMP_NTH"
 [ "$DUMP_PREDS" = true ] &&          ARGS+=" --dump_preds"
+[ "$READ_FROM_TAR" = true ] &&       ARGS+=" --read_from_tar"
+[ -n "$VAL_TAR_FILES" ] &&           ARGS+=" --val_tar_files $VAL_TAR_FILES"
 
-python valCPU.py ${ARGS}
+python ./rnnt_train/valCPU.py ${ARGS}

@@ -31,6 +31,7 @@ export OMP_NUM_THREADS=1
 : ${AMP:=false}
 : ${CUDNN_BENCHMARK:=true}
 : ${NUM_GPUS:=8}
+: ${READ_FROM_TAR:=false}
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -46,6 +47,8 @@ ARGS+=" --max_symbol_per_sample=$MAX_SYMBOL_PER_SAMPLE"
 
 [ "$AMP" = true ] &&                 ARGS+=" --amp"
 [ "$CUDNN_BENCHMARK" = true ] &&     ARGS+=" --cudnn_benchmark"
+[ "$READ_FROM_TAR" = true ] &&       ARGS+=" --read_from_tar"
+[ -n "$VAL_TAR_FILES" ] &&           ARGS+=" --val_tar_files $VAL_TAR_FILES"
 
 DISTRIBUTED=${DISTRIBUTED:-"torchrun --standalone --nnodes 1 --nproc_per_node=$NUM_GPUS"}
-${DISTRIBUTED} val.py ${ARGS}
+${DISTRIBUTED} ./rnnt_train/val.py ${ARGS}
