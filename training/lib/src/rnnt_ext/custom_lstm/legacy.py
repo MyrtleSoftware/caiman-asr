@@ -1,4 +1,3 @@
-# Copyright (c) 2022 Myrtle.ai
 # written by iria [& rob] @ myrtle, Jul 2022
 
 import math
@@ -7,8 +6,15 @@ from typing import Final
 import torch
 from torch import nn
 
-from rnnt_train.common.hard_activation_functions import Hardsigmoid, Hardtanh
-from rnnt_train.common.quantize import BfpQuantizer, BrainFloatQuantizer, NullClass
+
+# The 8 in Hardsigmoid is easier/cheaper in hardware than non-powers-of-2
+def Hardsigmoid(x):
+    return torch.clamp(0.5 + x / 8.0, min=0.0, max=1.0)
+
+
+# Using Hardtanh in a @torch.jit.script was faster than using torch.nn.functional.hardtanh
+def Hardtanh(x):
+    return torch.clamp(x, min=-1.0, max=1.0)
 
 
 class CustomLSTM(nn.Module):
@@ -18,10 +24,11 @@ class CustomLSTM(nn.Module):
     classes and functions rather than calling _VF.  Weight names match those in
     the standard PyTorch LSTM enabling transfer of state_dict and checkpoints.
 
-    CustomLSTM supports multiple layers, dropout, quantization, and the use of hard
-    activation functions.  It always uses bias weights and sequence-first input
-    tensors. It requires batched input tensors (seq_len, batch_size, input_size).
-    It does not support bidirectional LSTMs or projection layers.
+    CustomLSTM supports multiple layers, between-layer dropout, quantization,
+    the use of hard activation functions, and recurrent-weight dropout.  It
+    always uses bias weights and sequence-first input tensors. It requires
+    batched input tensors (seq_len, batch_size, input_size).  It does not
+    support bidirectional LSTMs or projection layers.
     """
 
     def __init__(
@@ -32,17 +39,23 @@ class CustomLSTM(nn.Module):
         dropout=0.0,
         hard=False,
         quantize=False,
+        rw_dropout=0.0,
     ):
         super().__init__()
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
-        self.hard = hard
-        self.quantize = quantize
-        if dropout != 0.0:
-            self.dropout = nn.Dropout(p=dropout)
+        self.input_size = input_size  # parameter name matches PyTorch LSTM
+        self.hidden_size = hidden_size  # parameter name matches PyTorch LSTM
+        self.num_layers = num_layers  # parameter name matches PyTorch LSTM
+        self.bl_dropout = (
+            dropout  # (between layer) dropout parameter name must match PyTorch LSTM
+        )
+        self.hard = hard  # CustomLSTM specific : use hard activation functions
+        self.quantize = quantize  # CustomLSTM specific : quantize values
+        self.rw_dropout = rw_dropout  # CustomLSTM specific : recurrent weight dropout
+        # setup between layer dropout function
+        if self.bl_dropout != 0.0:
+            self.bld_func = nn.Dropout(p=self.bl_dropout)
         else:
-            self.dropout = None
+            self.bld_func = None
         # create and register the weights & biases of the LSTM layer by layer
         for layer in range(num_layers):
             if layer == 0:
@@ -63,17 +76,26 @@ class CustomLSTM(nn.Module):
         rsh = 1.0 / math.sqrt(hidden_size)
         for weight in self.parameters():
             weight.data.uniform_(-rsh, rsh)
-        # Most of the compute takes place inside the CustomLSTMLayer class.
-        # The CustomLSTMLayer class is therefore wrapped in TorchScript for speed.
-        # When using quantization during inference, TorchScript is not used.
-        # This is because TorchScript only supports a limited number of types
-        # (as seen here: https://pytorch.org/docs/stable/jit_language_reference.html)
-        # and doesn't support custom classes, as are defined in the QPyTorch package.
+        # set up the custom layer
         if self.quantize:
-            self.custom_layer = CustomLSTMLayer(hidden_size, hard, quantize)
+            # When using quantization TorchScript is not used.  This is because
+            # TorchScript only supports a limited number of types, which does not
+            # include the custom classes defined in the QPyTorch package, see
+            # https://pytorch.org/docs/stable/jit_language_reference.html
+            self.custom_layer = CustomLSTMLayer(hard, quantize, rw_dropout)
         else:
+            # Most of the compute takes place inside the CustomLSTMLayer class.
+            # This class is therefore wrapped in TorchScript (jit) for speed.
+            # Under PyTorch 1.13 Automatic Mixed Precision (AMP) is not compatible
+            # with TorchScript.  We follow https://pytorch.org/docs/1.13/amp.html
+            # quote "For now, we suggest to disable the Jit Autocast Pass".
+            # Setting autocast to False (below) is 34% faster than the True
+            # default when using the non-quantizing CustomLSTM with AMP on A100s.
+            # However, on A100s it is 5% faster still to simply not use AMP.
+            # Note that the first 3 iterations when using jit are very slow.
+            torch._C._jit_set_autocast_mode(False)
             self.custom_layer = torch.jit.script(
-                CustomLSTMLayer(hidden_size, hard, quantize)
+                CustomLSTMLayer(hard, quantize, rw_dropout)
             )
 
     def forward(self, input_tensor, init_states=None):
@@ -91,8 +113,8 @@ class CustomLSTM(nn.Module):
             if layer == 0:
                 layer_input = input_tensor  # (seq_len, batch, input_size)
             else:
-                if self.dropout:
-                    layer_input = self.dropout(output)  # (seq_len, batch, hidden_size)
+                if self.bld_func:
+                    layer_input = self.bld_func(output)  # (seq_len, batch, hidden_size)
                 else:
                     layer_input = output  # (seq_len, batch, hidden_size)
             # determine layer h_0, c_0
@@ -109,7 +131,7 @@ class CustomLSTM(nn.Module):
             V = getattr(self, f"weight_hh_l{layer}")  # (4*hidden_size, hidden_size)
             bih = getattr(self, f"bias_ih_l{layer}")  # (4*hidden_size, )
             bhh = getattr(self, f"bias_hh_l{layer}")  # (4*hidden_size, )
-            # apply torchscript layer
+            # apply custom layer
             output, (h_f, c_f) = self.custom_layer(
                 layer_input, h_0, c_0, U, V, bih, bhh
             )
@@ -120,29 +142,40 @@ class CustomLSTM(nn.Module):
         # compute the final state tensors
         h_f = torch.stack(h_fl, dim=0)  # (num_layers, batch, hidden_size)
         c_f = torch.stack(c_fl, dim=0)  # (num_layers, batch, hidden_size)
-        # return the final layer output sequence         (seq_len, batch, hidden_size)
-        # and the final hidden and cell state tensors    (num_layers, batch, hidden_size)
+        # return the final layer output sequence          (seq_len, batch, hidden_size)
+        # and the final hidden and cell state tensors     (num_layers, batch, hidden_size)
         return output, (h_f, c_f)
 
 
+# Using an identity function instead of a class simplifies the code from print(custom_layer.code)
+def identity_func(x):
+    return x
+
+
 # Using Torchscript (jit) speeds up execution, see https://pytorch.org/docs/stable/jit.html
-# Using Torchscript on the whole Module, lstm = torch.jit.script(CustomLSTM(arguments)) was
-# not possible under PyTorch 1.7.0 due to a jit/deepcopy/Parameter bug which had not yet
-# been resolved, see https://github.com/pytorch/pytorch/issues/44951.  However, using
-# Torchscript on just a single Parameter-free LSTM layer is possible.
+# Using Torchscript on the whole Module, lstm = torch.jit.script(CustomLSTM(arguments)) is
+# not compatible with the use of deepcopy in train.py (etc), causes problems with non-static
+# variable types in the CustomLSTM code above and is not likely to bring any speedup anyway
+# since all the compute is in the CustomLSTMLayer below.
+
+# I've tried many versions of CustomLSTMLayer, including those which pass model weights to
+# the init() and those which pass layer_input_size and hidden_size (marked Final) to the
+# init() and define and register all weight Parameters locally.  These bring no speedup,
+# and also conflict with the use of deepcopy elsewhere.  I've also tried PyTorch 1.13
+# FuncTorch which also doesn't help.  For now, this is probably as good as it gets - rob.
 
 
 class CustomLSTMLayer(nn.Module):
     # Final declarations help Torchscript optimize the module
-    HS: Final[int]
     hard: Final[bool]
     quantize: Final[bool]
+    rw_dropout: Final[float]
 
-    def __init__(self, hidden_size, hard, quantize):
+    def __init__(self, hard, quantize, rw_dropout):
         super().__init__()
-        self.HS = hidden_size
         self.hard = hard
         self.quantize = quantize
+        self.rw_dropout = rw_dropout
         # setup the activation functions
         if self.hard:
             self.tanh = Hardtanh
@@ -152,6 +185,9 @@ class CustomLSTMLayer(nn.Module):
             self.sigmoid = torch.sigmoid
         # setup the quantization functions
         if self.quantize:
+            # this is a slow import so we do it only when necessary
+            from rnnt_train.common.quantize import BfpQuantizer, BrainFloatQuantizer
+
             self.bf16 = BrainFloatQuantizer(
                 fp_exp=8, fp_man=7, forward_rounding="nearest"
             )
@@ -162,38 +198,46 @@ class CustomLSTMLayer(nn.Module):
                 dim=1, block_size=8, fp_exp=8, fp_man=7, forward_rounding="nearest"
             )
         else:
-            self.bf16 = NullClass()
-            self.bfp_dim0 = NullClass()
-            self.bfp_dim1 = NullClass()
+            self.bf16 = identity_func
+            self.bfp_dim0 = identity_func
+            self.bfp_dim1 = identity_func
+        # setup the recurrent weight dropout function
+        if self.rw_dropout:
+            self.rwd_func = nn.Dropout(p=self.rw_dropout)
+        else:
+            self.rwd_func = identity_func
 
     def forward(self, layer_input, h_t, c_t, U, V, bih, bhh):
         # layer_input is (seq_len, batch, layer_input_size)
+        # hidden_size is HS for brevity
         # h_t is (batch, HS) initial hidden state
         # c_t is (batch, HS) initial cell   state
         # U, V, bih, bhh shapes as above
         seq_len, batch_size, layer_input_size = layer_input.size()
-        #
+
+        # prepare weight tensors
+        V = self.rwd_func(V)  # recurrent weight dropout
+        Ut = U.t()  # transpose of weight tensor U
+        Vt = V.t()  # transpose of weight tensor V
+        Ut = self.bfp_dim0(Ut)  # BF16 & BFP of weight tensor Ut
+        Vt = self.bfp_dim0(Vt)  # BF16 & BFP of weight tensor Vt
+        bih = self.bf16(bih)  # BF16       of bias   tensor bih
+        bhh = self.bf16(bhh)  # BF16       of bias   tensor bhh
+
         output_seq = []
         for t in range(seq_len):
             x_t = layer_input[t]  # (batch, layer_input_size)
-            # @ is matrix multiply
-            # The gates are calculated by the formula below
-            # gates = x_t @ U.t() + h_t @ V.t() + bih + bhh # (batch, 4*HS)
-            # But this is split into parts, so that the appropriate quantization
-            # functions are applied if necessary.
-            Ut = U.t()  # transpose of weight tensor U
-            Vt = V.t()  # transpose of weight tensor V
             x_t = self.bfp_dim1(x_t)  # BF16 & BFP of input tensor
             h_t = self.bfp_dim1(h_t)  # BF16 & BFP of hidden state tensor
-            Ut = self.bfp_dim0(Ut)  # BF16 & BFP of weight tensor Ut
-            Vt = self.bfp_dim0(Vt)  # BF16 & BFP of weight tensor Vt
-            bih = self.bf16(bih)  # BF16       of bias   tensor bih
-            bhh = self.bf16(bhh)  # BF16       of bias   tensor bhh
-            # construct the gates tensor
-            xU = x_t @ Ut
-            hV = h_t @ Vt
-            gates = xU + hV + bih + bhh
-            gates = self.bf16(gates)
+
+            # @ is matrix multiply
+            # The gates are calculated using the formula
+            # gates = x_t @ U.t() + h_t @ V.t() + bih + bhh
+            # But this is split into parts to reflect any quantization used
+            xU = x_t @ Ut  # BFP @ BFP
+            hV = h_t @ Vt  # BFP @ BFP
+            gates = xU + hV + bih + bhh  # (batch, 4*HS)
+            gates = self.bf16(gates)  # (batch, 4*HS)
 
             i_t, f_t, g_t, o_t = gates.chunk(4, 1)  # all (batch, HS)
             i_t = self.sigmoid(i_t)  # (batch, HS) input gate

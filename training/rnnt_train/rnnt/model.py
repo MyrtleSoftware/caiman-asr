@@ -89,6 +89,7 @@ class RNNT(nn.Module):
         joint_enc_lr_factor=1.0,
         joint_pred_lr_factor=1.0,
         joint_net_lr_factor=1.0,
+        gpu_unavailable=False,
     ):
         super(RNNT, self).__init__()
 
@@ -127,6 +128,7 @@ class RNNT(nn.Module):
             weights_init_scale=weights_init_scale,
             dropout=enc_dropout,
             tensor_name="pre_rnn",
+            gpu_unavailable=gpu_unavailable,
         )
 
         enc_mod["stack_time"] = StackTime(enc_stack_time_factor)
@@ -144,6 +146,7 @@ class RNNT(nn.Module):
             weights_init_scale=weights_init_scale,
             dropout=enc_dropout,
             tensor_name="post_rnn",
+            gpu_unavailable=gpu_unavailable,
         )
 
         self.encoder = torch.nn.ModuleDict(enc_mod)
@@ -169,6 +172,7 @@ class RNNT(nn.Module):
                     weights_init_scale=weights_init_scale,
                     dropout=pred_dropout,
                     tensor_name="dec_rnn",
+                    gpu_unavailable=gpu_unavailable,
                 ),
             }
         )

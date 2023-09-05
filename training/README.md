@@ -60,7 +60,7 @@ this may change in the future.
 If your `<DATASETS>` folder contains symlinks to other drives (i.e. if your data is too large to fit on a single drive), they will not be accessible from within the running container. In this case, you can pass the absolute paths to your N drives as the 4th to (N + 3)th arguments to `./scripts/docker/launch.sh`. This will enable the container to follow symlinks to these drives.
 
 ### Requirements
-Currently, the reference uses CUDA-11.8 (see [Dockerfile](Dockerfile#L15)).
+Currently, the reference uses CUDA-12.2 (see [Dockerfile](Dockerfile#L15)).
 Here you can find a table listing compatible drivers: https://docs.nvidia.com/deploy/cuda-compatibility/index.html#binary-compatibility__table-toolkit-driver
 
 # 2. Models <a name="models"></a>
@@ -253,8 +253,7 @@ After running your version of `scripts/preprocess_<your dataset>.sh` you should 
 
 # 4. Training <a name="training"></a>
 
-We recommend the use of PyTorch automatic-mixed-precision on all training runs, enabled by setting
-`AMP=true` as shown below.
+By default we enable PyTorch mixed-precision-training with training arg `AMP=true`. To disable it set `AMP=false`.
 
 RNN-T trains using very large synthetic batches, typically including 1000 to 4000 utterances, specified here
 with the GLOBAL_BATCH_SIZE variable.  These large synthetic batches are split between the NUM_GPUS working
@@ -270,6 +269,9 @@ In order to achieve the highest throughput during training, we recommend that yo
 This means that when choosing the above args, you will have a target GLOBAL_BATCH_SIZE in mind but may settle on a value slightly higher or lower than
 your target depending on your available GPU VRAM and the GRAD_ACCUMULATION_BATCHES needed at a given batch_size. For example, for LibriSpeech
 training, we target a GLOBAL_BATCH_SIZE of 1024, but, as described below, on our 2x 24GB TITAN RTX GPUs we end up using GLOBAL_BATCH_SIZE=1008.
+
+We recommend a GLOBAL_BATCH_SIZE of ~1024 and have observed slower convergence when using a global batch size of 2048.
+Our step control recommendations for the learning rate scheduler assume a global batch size of ~1024.
 
 For discussions of how to select a target GLOBAL_BATCH_SIZE, please refer to the discussions in CommonVoice's 'Training Commands' section below.
 
@@ -292,13 +294,16 @@ support a batch_size of 40.
 The default setup saves an overwriting checkpoint every time dev Word Error Rate (WER) improves and a non-overwriting
 checkpoint at the end of training. You can set `SAVE_AT_THE_END=false` to disable the final checkpoint save.
 
+If you want to fine-tune a checkpoint to run on the FPGA, it is important to save more checkpoints than this.
+Please see the subsection [`Choosing a checkpoint to fine-tune`](#choosing-a-checkpoint-to-fine-tune) for guidelines.
+
 The default number of epochs to train for is 100.
 Set, for example, EPOCHS=150 to make a different choice.
 
 So, on two 24GB TITAN RTX GPUs, training LibriSpeech, run the following inside the container:
 
 ```
-AMP=true NUM_GPUS=2 GLOBAL_BATCH_SIZE=1008 GRAD_ACCUMULATION_BATCHES=21 EPOCHS=150 ./scripts/train.sh
+NUM_GPUS=2 GLOBAL_BATCH_SIZE=1008 GRAD_ACCUMULATION_BATCHES=21 EPOCHS=150 ./scripts/train.sh
 ```
 
 #### CommonVoice
@@ -329,7 +334,7 @@ approximately 3.5 hours of speech per update.
 For CommonVoice training, also on two 24GB TITAN RTX GPUs, we therefore run:
 
 ```
-AMP=true NUM_GPUS=2 GLOBAL_BATCH_SIZE=2160 GRAD_ACCUMULATION_BATCHES=45 EPOCHS=150 DATA_DIR=/datasets/CommonVoice/cv-corpus-10.0-2022-07-04/en TRAIN_MANIFESTS=train.json VAL_MANIFESTS=dev.json ./scripts/train.sh
+NUM_GPUS=2 GLOBAL_BATCH_SIZE=2160 GRAD_ACCUMULATION_BATCHES=45 EPOCHS=150 DATA_DIR=/datasets/CommonVoice/cv-corpus-10.0-2022-07-04/en TRAIN_MANIFESTS=train.json VAL_MANIFESTS=dev.json ./scripts/train.sh
 ```
 
 Fine-tuning CommonVoice models to use hard activation functions (see Section 6) has proven more difficult
@@ -355,7 +360,7 @@ see that for 1-3k hrs of training data `HALF_LIFE_STEPS=2805` works well whereas
 If you are using more than 10k hrs we recommend starting with `10880` and increasing from there. Note that increasing
 `HALF_LIFE_STEPS` increases the probability of diverging late in training.
 
-Alongside the normal training args like `EPOCHS`, `AMP`, etc you will also need to pass the following to `./scripts/train.sh`:
+Alongside the normal training args like `EPOCHS`, etc you will also need to pass the following to `./scripts/train.sh`:
 
 * `DATA_DIR`
 * `TRAIN_MANIFESTS`
@@ -476,37 +481,65 @@ support streaming normalization, and create a hardware checkpoint to enable tran
 
 ### Custom LSTM
 
-We can swap out the standard PyTorch LSTM for our own [CustomLSTM](./rnnt_train/common/custom_lstm.py) by changing the
-config file in directory [configs](configs/) to read
+We can swap out the standard PyTorch LSTM for one of our own [CustomLSTM](./rnnt_train/common/custom_lstm/) by changing the
+config file in directory [configs](configs/) to read:
 
 ```
 custom_lstm: true
 ```
 
 The value of the Custom LSTM is that it exposes the internal LSTM machinery enabling us to experiment with
-hard activation functions, quantization, and to apply dropout to more weights than the standard PyTorch
-version allows.  Hard activation functions can be switched on in the config file using
+hard activation functions, quantization, and to apply more dropout than the standard PyTorch version allows.
+Hard activation functions can be switched on in the config file using:
 
 ```
 custom_lstm: true
 hard_activation_functions: true
 ```
 
-All operations using the Custom LSTM run slower than corresponding operations using the PyTorch LSTM.
+On a server with eight A100s, the PyTorch LSTM had a throughput of 440 utterances/second while training the base model.
+The Custom LSTM had a throughput of 375 utterances/second.
+
+### Choosing a checkpoint to fine-tune
+
+To increase convergence speed, we recommend training with soft activation functions initially and then switching to training with hard activation functions.
+
+As a model is trained from scratch with soft activation functions, its WER *if it were validated with hard activation functions* first decreases as the model learns.
+Then the hard-activation-function WER increases as the model overfits to using soft activation functions.
+
+The ideal checkpoint for a hard-activation-function finetune is the checkpoint just before this overfitting happens.
+If you choose a checkpoint after this, then the risk of diverging increases.
+
+You can find this checkpoint by training with soft activation functions for ~20000 steps (based on our experiments), saving all checkpoints, and then validating on all checkpoints with hard activation functions switched on in the config file as above.
+
+The checkpoint to use for finetuning is the one with the lowest hard-activation-function WER.
+In general, the most recent checkpoint will almost always have the lowest *soft*-activation-function WER, but that doesn't affect which checkpoint to select.
+
+If 20000 steps will take you 10 epochs, the extra options to set in the training command to save the first 10 checkpoints are:
+
+``` bash
+SAVE_FREQUENCY=1 SAVE_MILESTONES=$(seq 10)
+```
+
+We find that a checkpoint that has been trained for 10k to 13k steps is usually a good choice for a finetune.
+
 
 ### Fine Tuning
 
-Since training with hard activation functions is slow we will in general train using the PyTorch LSTM
-as described in Section 3 above, and then fine-tune that model to use hard activation functions.  The
-following command, using a lower peak learning rate, a faster warmup, and a shorter hold is recommended
-for fine-tuning LibriSpeech models on two TITAN RTX GPUs.  The FINE_TUNE=true option ensures that training
+For a finetune of your epoch 4 checkpoint, use your original training command with these new options:
+
+- `WARMUP_STEPS=1700`
+- `FINE_TUNE=true`
+- `CHECKPOINT=/results/RNN-T_epoch4_checkpoint.pt`
+
+You should also decrease `HOLD_STEPS` by the number of hold steps that the checkpoint has already completed.
+This can be viewed on TensorBoard.
+If the checkpoint has finished the hold period, set `HOLD_STEPS=0`.
+
+The FINE_TUNE=true option ensures that training
 starts anew, with the new learning rate schedule, from the specified checkpoint.  The config file should of
 course specify custom_lstm and hard_activation_functions as described above.  You may wish to backup your
-PyTorch LSTM checkpoint under a different name before running this command since it will overwrite:
-
-```
-AMP=true LEARNING_RATE=0.001 WARMUP_STEPS=552 HOLD_STEPS=4416 EPOCHS=36 NUM_GPUS=2 GLOBAL_BATCH_SIZE=1008 GRAD_ACCUMULATION_BATCHES=21 FINE_TUNE=true CHECKPOINT=/results/RNN-T_best_checkpoint.pt ./scripts/train.sh
-```
+PyTorch LSTM checkpoint under a different name before running this command since it will overwrite.
 
 Fine-tuned models should use the Custom LSTM config settings during PyTorch validation and inference.
 

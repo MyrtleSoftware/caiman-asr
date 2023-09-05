@@ -12,18 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# modified by rob@myrtle
-
-ARG FROM_IMAGE_NAME=nvcr.io/nvidia/pytorch:22.11-py3
+ARG FROM_IMAGE_NAME=nvcr.io/nvidia/pytorch:23.03-py3
 FROM ${FROM_IMAGE_NAME}
 
 # pytorch version taken from here:
-# https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-22-11.html#rel-22-11
-ENV PYTORCH_VERSION=1.13.0a0+936e930
+# https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-23-03.html#rel-23-03
+ENV PYTORCH_VERSION=2.0.0a0+1767026
 
 # Added by rob@myrtle May 2022 to fix NVIDIA key rotation problem.
 # See https://forums.developer.nvidia.com/t/notice-cuda-linux-repository-key-rotation/212771 for details.
-RUN apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64/3bf863cc.pub
+RUN apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/3bf863cc.pub
 
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata && \
@@ -33,20 +31,24 @@ RUN apt-get update && \
 
 WORKDIR /workspace/rnnt
 
-# Install torchdata from source.
-# This is necessary because, when running pip install torchdata, the PyTorch
-# version in this nvcr image is not recognized as PYTORCH_VERSION=1.13.0a0+936e930
-# is different to the `1.13.0` expected by pip.
-#
-# We also checkout to torchdata==v0.5.0 as this matches PyTorch 1.13.0
-RUN mkdir deps -p && git clone https://github.com/pytorch/data.git deps/data && \
-    cd deps/data && \
-    git checkout v0.5.0 && \
-    git submodule update --init --recursive --jobs 8 && \
-    python setup.py install
+# Install the latest (beta) version of package torchdata before development paused:
+# https://github.com/pytorch/data/issues/1196
+# This may change when new torchdata releases are available
+RUN pip install --no-dependencies torchdata==0.6.1
 
 COPY requirements.txt .
 RUN pip install --no-cache --disable-pip-version-check -U -r requirements.txt
 
-COPY . .
+COPY lib lib
+# Setuptool requires we are in the working directory of the package
+WORKDIR /workspace/rnnt/lib
+# # Separating the build/install steps gives better stdout/stderr diagnostics
+RUN python setup.py build
+# This is a non-editable install (we need it to put the cuda extensions in the module path which -e does not do)
+RUN python -m pip install --use-feature=in-tree-build .
+# Reset the workspace, needed by following scripts
+WORKDIR /workspace/rnnt
+
+COPY rnnt_train rnnt_train
+COPY setup.py .
 RUN python -m pip install -e .

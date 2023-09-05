@@ -268,6 +268,7 @@ def validate_cpu(args: Namespace, return_dataloader: bool = False) -> None:
 
     # set up the model
     rnnt_config = config.rnnt(cfg)
+    rnnt_config["gpu_unavailable"] = True
     model = RNNT(n_classes=tokenizer.num_labels + 1, **rnnt_config)
     blank_idx = tokenizer.num_labels
     logging.log_event(

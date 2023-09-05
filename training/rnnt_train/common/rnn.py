@@ -30,7 +30,7 @@ def rnn(
     batch_norm,
     forget_gate_bias=1.0,
     dropout=0.0,
-    **kwargs
+    **kwargs,
 ):
     return LSTM(
         input_size=input_size,
@@ -54,7 +54,7 @@ class LSTM(torch.nn.Module):
         forget_gate_bias,
         weights_init_scale=1.0,
         hidden_hidden_bias_scale=0.0,
-        **kwargs
+        **kwargs,
     ):
         """Returns an LSTM with forget gate bias init to `forget_gate_bias`.
 
@@ -76,9 +76,22 @@ class LSTM(torch.nn.Module):
         self.batch_norm = batch_norm
 
         if kwargs["custom_lstm"]:
-            # CustomLSTM import takes O(30s) on startup due to third-party qtorch import
-            # As such, we only do this if we need it
-            from rnnt_train.common.custom_lstm import CustomLSTM
+            if kwargs["quantize"]:
+                print(
+                    f"WARNING : Quantization requires the (slow) legacy TorchScript CustomLSTM\n"
+                )
+                # Legacy CustomLSTM import takes O(30s) on startup due to third-party qtorch import
+                # As such, we only do this if we need it
+                from rnnt_ext.custom_lstm.legacy import CustomLSTM
+            elif kwargs["gpu_unavailable"]:
+                # Necessary if using valCPU with the hardware checkpoint
+                print(
+                    "Using the legacy TorchScript CustomLSTM because GPU unavailable\n"
+                )
+                from rnnt_ext.custom_lstm.legacy import CustomLSTM
+            else:
+                from rnnt_ext.custom_lstm.lstm import CustomLSTM
+
         if batch_norm:
             # if applying batch norm after every LSTM layer, then we'll need separate 1-layer LSTMs
             self.lstms = torch.nn.ModuleList([])

@@ -7,8 +7,19 @@ __pycache__/
 *~
 *#
 
+# Extensions
+build/
+compile_commands.json
+*.so
+
+# IDE/Editor
+.cache/
+.vs/
+.vscode/
+
 # testing
 .hypothesis
+.pytest_cache
 
 # logs
 *.log
