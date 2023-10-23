@@ -123,9 +123,8 @@ def num_weights(module):
 
 
 class Checkpointer(object):
-    def __init__(self, save_dir, model_name, keep_milestones=[100, 200, 300]):
+    def __init__(self, save_dir, model_name):
         self.save_dir = save_dir
-        self.keep_milestones = keep_milestones
         self.model_name = model_name
 
         tracked = [
@@ -156,9 +155,16 @@ class Checkpointer(object):
         if rank != 0:
             return
 
+        if is_best:
+            fpath = os.path.join(self.save_dir, f"{self.model_name}_best_checkpoint.pt")
+        else:
+            fpath = os.path.join(
+                self.save_dir, f"{self.model_name}_epoch{epoch}_checkpoint.pt"
+            )
+
         # Checkpoint already saved
         if not is_best and epoch in self.tracked:
-            return
+            print_once(f"WARNING: Overwriting previous checkpoint {fpath}")
 
         unwrap_ddp = lambda model: getattr(model, "module", model)
         state = {
@@ -172,25 +178,11 @@ class Checkpointer(object):
             "optimizer": optimizer.state_dict(),
         }
 
-        if is_best:
-            fpath = os.path.join(self.save_dir, f"{self.model_name}_best_checkpoint.pt")
-        else:
-            fpath = os.path.join(
-                self.save_dir, f"{self.model_name}_epoch{epoch}_checkpoint.pt"
-            )
-
         print_once(f"Saving {fpath}...")
         torch.save(state, fpath)
 
         if not is_best:
-            # Remove old checkpoints; keep milestones and the last two
             self.tracked[epoch] = fpath
-            for epoch in set(list(self.tracked)[:-2]) - set(self.keep_milestones):
-                try:
-                    os.remove(self.tracked[epoch])
-                except:
-                    pass
-                del self.tracked[epoch]
 
     def last_checkpoint(self):
         tracked = list(self.tracked.values())

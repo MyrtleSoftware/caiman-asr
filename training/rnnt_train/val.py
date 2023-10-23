@@ -31,8 +31,8 @@ from rnnt_train.common.data.build_dataloader import build_dali_loader
 from rnnt_train.common.data.text import Tokenizer
 from rnnt_train.common.evaluate import evaluate
 from rnnt_train.common.helpers import Checkpointer, num_weights, print_once
-from rnnt_train.common.tb_dllogger import flush_log, init_log, log
-from rnnt_train.mlperf import logging
+from rnnt_train.common.seed import set_seed
+from rnnt_train.common.tb_dllogger import flush_log, init_log
 from rnnt_train.rnnt import config
 from rnnt_train.rnnt.decoder import RNNTGreedyDecoder
 from rnnt_train.rnnt.loss import apexTransducerLoss
@@ -66,7 +66,7 @@ def val_arg_parser() -> ArgumentParser:
 
     optim = parser.add_argument_group("optimization setup")
     optim.add_argument(
-        "--val_batch_size", default=2, type=int, help="Evalution time batch size"
+        "--val_batch_size", default=2, type=int, help="Evaluation time batch size"
     )
 
     io = parser.add_argument_group("feature and checkpointing setup")
@@ -134,6 +134,11 @@ def val_arg_parser() -> ArgumentParser:
         default=None,
         help="maximum number of symbols per sample can have during eval",
     )
+    io.add_argument(
+        "--no_loss",
+        action="store_true",
+        help="To use less memory, don't calculate transducer loss",
+    )
     return parser
 
 
@@ -156,19 +161,14 @@ def validate(args: Namespace):
         world_size = 1
 
     if args.seed is not None:
-        logging.log_event(logging.constants.SEED, value=args.seed)
-        torch.manual_seed(args.seed + args.local_rank)
-        np.random.seed(args.seed + args.local_rank)
-        random.seed(args.seed + args.local_rank)
+        set_seed(args.seed, args.local_rank)
 
     init_log(args)
 
     cfg = config.load(args.model_config)
 
-    logging.log_end(logging.constants.INIT_STOP)
     if multi_gpu:
         torch.distributed.barrier()
-    logging.log_start(logging.constants.RUN_START)
     if multi_gpu:
         torch.distributed.barrier()
 
@@ -208,9 +208,6 @@ def validate(args: Namespace):
 
     val_feat_proc.cuda()
 
-    if not args.read_from_tar:
-        logging.log_event(logging.constants.EVAL_SAMPLES, value=val_loader.dataset_size)
-
     # set up the RNNT model
     rnnt_config = config.rnnt(cfg)
     model = RNNT(n_classes=tokenizer.num_labels + 1, **rnnt_config)
@@ -220,9 +217,6 @@ def validate(args: Namespace):
 
     loss_fn = apexTransducerLoss(blank_idx=blank_idx, packed_input=False)
 
-    logging.log_event(
-        logging.constants.EVAL_MAX_PREDICTION_SYMBOLS, value=args.max_symbol_per_sample
-    )
     greedy_decoder = RNNTGreedyDecoder(
         blank_idx=blank_idx, max_symbol_per_sample=args.max_symbol_per_sample
     )
@@ -233,7 +227,7 @@ def validate(args: Namespace):
         model = DistributedDataParallel(model)
 
     # setup checkpointer
-    checkpointer = Checkpointer(args.output_dir, "RNN-T", [])
+    checkpointer = Checkpointer(args.output_dir, "RNN-T")
 
     # load checkpoint (modified to not need optimizer / meta args)
     checkpointer.load(args.ckpt, model, ema_model)
@@ -251,6 +245,7 @@ def validate(args: Namespace):
         loss_fn,
         greedy_decoder,
         args,
+        calculate_loss=not args.no_loss,
     )
 
     flush_log()
@@ -262,9 +257,6 @@ def validate(args: Namespace):
 
 
 if __name__ == "__main__":
-    logging.configure_logger("RNNT")
-    logging.log_start(logging.constants.INIT_START)
-
     parser = val_arg_parser()
     args = parser.parse_args()
     # check data path args

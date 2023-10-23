@@ -22,7 +22,6 @@ from rnnt_train.common import helpers
 from rnnt_train.common.data.webdataset import LengthUnknownError
 from rnnt_train.common.helpers import process_evaluation_epoch
 from rnnt_train.common.tb_dllogger import log
-from rnnt_train.mlperf import logging
 
 
 @torch.no_grad()
@@ -36,12 +35,15 @@ def evaluate(
     loss_fn,
     greedy_decoder,
     args,
+    calculate_loss=True,
 ):
     ema_model.eval()
 
     start_time = time.time()
-    agg = {"losses": [], "preds": [], "txts": [], "idx": []}
-    logging.log_start(logging.constants.EVAL_START, metadata=dict(epoch_num=epoch))
+    if calculate_loss:
+        results = {"losses": [], "preds": [], "txts": [], "idx": []}
+    else:
+        results = {"preds": [], "txts": [], "idx": []}
     try:
         total_loader_len = f"{len(val_loader):<10}"
     except LengthUnknownError:
@@ -66,34 +68,31 @@ def evaluate(
         # now do frame stacking - rob@myrtle
         feats, feat_lens = val_feat_proc([audio, audio_lens])
 
-        # note : more misleading variable names : 'log_prob*' are actually logits - rob@myrtle
-        log_probs, log_prob_lens = ema_model(feats, feat_lens, txt, txt_lens)
-        # batch_offset and max_f_len parameters are required for the apex transducer loss
-        batch_offset = torch.cumsum(feat_lens * (txt_lens + 1), dim=0)
-        max_f_len = max(feat_lens)
-        loss = loss_fn(
-            log_probs[:, : log_prob_lens.max().item()],
-            log_prob_lens,
-            txt,
-            txt_lens,
-            batch_offset=batch_offset,
-            max_f_len=max_f_len,
-        )
+        if calculate_loss:
+            # note : more misleading variable names : 'log_prob*' are actually logits - rob@myrtle
+            log_probs, log_prob_lens = ema_model(feats, feat_lens, txt, txt_lens)
+            # batch_offset and max_f_len parameters are required for the apex transducer loss
+            batch_offset = torch.cumsum(feat_lens * (txt_lens + 1), dim=0)
+            max_f_len = max(feat_lens)
+            loss = loss_fn(
+                log_probs[:, : log_prob_lens.max().item()],
+                log_prob_lens,
+                txt,
+                txt_lens,
+                batch_offset=batch_offset,
+                max_f_len=max_f_len,
+            )
 
         pred = greedy_decoder.decode(ema_model, feats, feat_lens)
+        if calculate_loss:
+            results["losses"] += helpers.gather_losses([loss.cpu()])
 
-        agg["losses"] += helpers.gather_losses([loss.cpu()])
-        agg["preds"] += helpers.gather_predictions([pred], detokenize)
-        agg["txts"] += helpers.gather_transcripts(
+        results["preds"] += helpers.gather_predictions([pred], detokenize)
+        results["txts"] += helpers.gather_transcripts(
             [txt.cpu()], [txt_lens.cpu()], detokenize
         )
 
-    wer, loss = process_evaluation_epoch(agg)
-
-    logging.log_event(
-        logging.constants.EVAL_ACCURACY, value=wer, metadata=dict(epoch_num=epoch)
-    )
-    logging.log_end(logging.constants.EVAL_STOP, metadata=dict(epoch_num=epoch))
+    wer, loss = process_evaluation_epoch(results)
 
     log(
         (epoch,),

@@ -26,7 +26,6 @@ export OMP_NUM_THREADS=1
 : ${VAL_MANIFESTS:="$DATA_DIR/librispeech-dev-clean-wav.json"}
 : ${VAL_BATCH_SIZE:=1}
 : ${SEED=1}
-: ${MAX_SYMBOL_PER_SAMPLE=300}
 : ${ALPHA:=0.001}
 : ${AMP:=false}
 : ${CUDNN_BENCHMARK:=true}
@@ -45,7 +44,6 @@ ARGS+=" --ckpt=$CHECKPOINT"
 ARGS+=" --val_manifests $VAL_MANIFESTS"
 ARGS+=" --val_batch_size=$VAL_BATCH_SIZE"
 ARGS+=" --seed=$SEED"
-ARGS+=" --max_symbol_per_sample=$MAX_SYMBOL_PER_SAMPLE"
 ARGS+=" --alpha=$ALPHA"
 
 [ "$AMP" = true ] &&                 ARGS+=" --amp"
@@ -56,5 +54,6 @@ ARGS+=" --alpha=$ALPHA"
 [ "$DUMP_PREDS" = true ] &&          ARGS+=" --dump_preds"
 [ "$READ_FROM_TAR" = true ] &&       ARGS+=" --read_from_tar"
 [ -n "$VAL_TAR_FILES" ] &&           ARGS+=" --val_tar_files $VAL_TAR_FILES"
+[ -n "$MAX_SYMBOL_PER_SAMPLE" ] &&   ARGS+=" --max_symbol_per_sample=$MAX_SYMBOL_PER_SAMPLE"
 
 python ./rnnt_train/valCPU.py ${ARGS}

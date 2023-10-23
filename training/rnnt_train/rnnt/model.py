@@ -24,7 +24,6 @@ import torch.nn.functional as F
 
 from rnnt_train.common.helpers import print_once
 from rnnt_train.common.rnn import rnn
-from rnnt_train.mlperf import logging
 
 
 class StackTime(nn.Module):
@@ -152,9 +151,6 @@ class RNNT(nn.Module):
         self.encoder = torch.nn.ModuleDict(enc_mod)
 
         pred_embed = torch.nn.Embedding(n_classes - 1, pred_n_hid)
-        logging.log_event(
-            logging.constants.WEIGHTS_INITIALIZATION, metadata=dict(tensor="pred_embed")
-        )
 
         self.prediction = torch.nn.ModuleDict(
             {
@@ -178,21 +174,12 @@ class RNNT(nn.Module):
         )
 
         self.joint_pred = torch.nn.Linear(pred_n_hid, joint_n_hid)
-        logging.log_event(
-            logging.constants.WEIGHTS_INITIALIZATION, metadata=dict(tensor="joint_pred")
-        )
         self.joint_enc = torch.nn.Linear(enc_n_hid, joint_n_hid)
-        logging.log_event(
-            logging.constants.WEIGHTS_INITIALIZATION, metadata=dict(tensor="joint_enc")
-        )
 
         self.joint_net = nn.Sequential(
             torch.nn.ReLU(inplace=True),
             torch.nn.Dropout(p=joint_dropout),
             torch.nn.Linear(joint_n_hid, n_classes),
-        )
-        logging.log_event(
-            logging.constants.WEIGHTS_INITIALIZATION, metadata=dict(tensor="joint_net")
         )
 
     def forward(self, x, x_lens, y, y_lens, state=None):

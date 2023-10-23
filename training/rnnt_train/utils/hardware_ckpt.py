@@ -78,7 +78,7 @@ with open(spmfn, "rb") as f:
 hardcp["sentpiece_model"] = spmb
 
 # add the semantic version number of the hardware checkpoint
-hardcp["version"] = "1.4.0"
+hardcp["version"] = "1.5.0"
 
 # copy in loaded config
 hardcp["rnnt_config"] = config.load(args.config)

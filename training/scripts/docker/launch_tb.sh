@@ -32,4 +32,4 @@ docker run -it --rm \
   -v $PWD:/workspace/rnnt \
   -p 6010:6010 \
   -e TZ=$(cat /etc/timezone) \
-  myrtle/rnnt:v1.4.0 sh -c "./scripts/docker/settimezone.sh && bash"
+  myrtle/rnnt:v1.5.0 sh -c "./scripts/docker/settimezone.sh && bash"

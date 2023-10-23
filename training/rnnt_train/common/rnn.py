@@ -20,8 +20,6 @@ import math
 import torch
 from torch.nn import Parameter
 
-from rnnt_train.mlperf import logging
-
 
 def rnn(
     input_size,
@@ -154,9 +152,6 @@ class LSTM(torch.nn.Module):
                 v.data *= float(weights_init_scale)
 
         tensor_name = kwargs["tensor_name"]
-        logging.log_event(
-            logging.constants.WEIGHTS_INITIALIZATION, metadata=dict(tensor=tensor_name)
-        )
 
     def forward(self, x, h=None):
         # x is (seq_len, batch_size, input_size)

@@ -1,4 +1,4 @@
-https://github.com/mlcommons/logging/archive/d08740cadb4188a5ebeb84ad6c68f98c1e129805.zip
+editdistance==0.6.2
 https://github.com/NVIDIA/dllogger/archive/26a0f8f1958de2c0c460925ff6102a4d2486d6cc.zip
 inflect==4.1.0
 librosa==0.8.0

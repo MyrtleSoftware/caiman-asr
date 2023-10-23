@@ -16,10 +16,13 @@
 
 import argparse
 import copy
+import json
 import os
 import random
+import shutil
 import time
 from argparse import Namespace
+from pathlib import Path
 
 import librosa
 import numpy as np
@@ -35,9 +38,10 @@ from rnnt_train.common.data.dali import sampler as dali_sampler
 from rnnt_train.common.data.text import Tokenizer
 from rnnt_train.common.evaluate import evaluate
 from rnnt_train.common.helpers import Checkpointer, greedy_wer, num_weights, print_once
+from rnnt_train.common.logging_layers import get_logging_entries
 from rnnt_train.common.optimizers import lr_policy
+from rnnt_train.common.seed import set_seed
 from rnnt_train.common.tb_dllogger import flush_log, init_log, log
-from rnnt_train.mlperf import logging
 from rnnt_train.rnnt import config
 from rnnt_train.rnnt.decoder import RNNTGreedyDecoder
 from rnnt_train.rnnt.loss import apexTransducerLoss
@@ -127,10 +131,17 @@ def parse_args() -> Namespace:
 
     optim = parser.add_argument_group("optimization setup")
     optim.add_argument(
-        "--accum_batch_size",
-        default=128,
+        "--num_gpus",
+        default=8,
         type=int,
-        help="Effective batch size per GPU after grad accumulation",
+        help="""Number of GPUs to use for training. There are num_gpus processes,
+        each running a copy of train.py on one GPU.""",
+    )
+    optim.add_argument(
+        "--global_batch_size",
+        default=1024,
+        type=int,
+        help="Effective batch size across all GPUs after grad accumulation",
     )
     optim.add_argument(
         "--val_batch_size", default=2, type=int, help="Evalution time batch size"
@@ -196,14 +207,11 @@ def parse_args() -> Namespace:
         "--save_frequency",
         default=None,
         type=int,
-        help="Checkpoint saving frequency in epochs",
-    )
-    io.add_argument(
-        "--keep_milestones",
-        default=[],
-        type=int,
-        nargs="+",
-        help="Milestone checkpoints to keep from removing",
+        help=(
+            "Checkpoint saving frequency in epochs. If 0 (or None), we only possibly save "
+            "best and last checkpoints depending on values of --save_best_from and "
+            "--save_at_the_end respectively."
+        ),
     )
     io.add_argument(
         "--save_best_from",
@@ -241,7 +249,7 @@ def parse_args() -> Namespace:
         type=int,
         default=6,
         help="If provided, samples will be grouped by audio duration, "
-        "to this number of backets, for each bucket, "
+        "to this number of buckets, for each bucket, "
         "random samples are batched, and finally "
         "all batches are randomly shuffled",
     )
@@ -310,6 +318,12 @@ def parse_args() -> Namespace:
         default=None,
         help="maximum number of symbols per sample can have during eval",
     )
+    io.add_argument(
+        "--timestamp",
+        default=time.strftime("%Y_%m_%d_%H_%M_%S"),
+        type=str,
+        help="Timestamp to use for logging",
+    )
     args = parser.parse_args()
 
     # check data path args
@@ -345,9 +359,6 @@ def apply_ema(model, ema_model, decay):
 
 
 def main():
-    logging.configure_logger("RNNT")
-    logging.log_start(logging.constants.INIT_START)
-
     args = parse_args()
 
     assert torch.cuda.is_available()
@@ -369,44 +380,60 @@ def main():
         world_size = 1
 
     if args.seed is not None:
-        logging.log_event(logging.constants.SEED, value=args.seed)
-        torch.manual_seed(args.seed + args.local_rank)
-        np.random.seed(args.seed + args.local_rank)
-        random.seed(args.seed + args.local_rank)
+        np_rng = set_seed(args.seed, args.local_rank)
         # np_rng is used for buckets generation, and needs the same seed on every worker
-        np_rng = np.random.default_rng(seed=args.seed)
-
-    init_log(args)
 
     cfg = config.load(args.model_config)
     config.apply_duration_flags(cfg, args.max_duration)
 
     assert args.grad_accumulation_batches >= 1
+
+    # Effective batch size per GPU after grad accumulation
+    accum_batch_size = int(args.global_batch_size / args.num_gpus)
+
     assert (
-        args.accum_batch_size % args.grad_accumulation_batches == 0
-    ), f"{args.accum_batch_size} % {args.grad_accumulation_batches} != 0"
-    logging.log_event(
-        logging.constants.GRADIENT_ACCUMULATION_STEPS,
-        value=args.grad_accumulation_batches,
-    )
-    batch_size = args.accum_batch_size // args.grad_accumulation_batches
+        accum_batch_size % args.grad_accumulation_batches == 0
+    ), f"{accum_batch_size=} % {args.grad_accumulation_batches=} != 0"
+    batch_size = accum_batch_size // args.grad_accumulation_batches
 
-    logging.log_event(
-        logging.constants.SUBMISSION_BENCHMARK, value=logging.constants.RNNT
-    )
-    logging.log_event(logging.constants.SUBMISSION_ORG, value="my-organization")
-    logging.log_event(
-        logging.constants.SUBMISSION_DIVISION, value=logging.constants.CLOSED
-    )  # closed or open
-    logging.log_event(
-        logging.constants.SUBMISSION_STATUS, value=logging.constants.ONPREM
-    )  # on-prem/cloud/research
-    logging.log_event(logging.constants.SUBMISSION_PLATFORM, value="my platform")
+    out_dir = Path(args.output_dir)
+    # fail if output dir already contains checkpoints and not resuming or dumping mel stats
+    if (
+        not args.resume
+        and out_dir.exists()
+        and any(out_dir.glob("*checkpoint*.pt"))
+        and not args.dump_mel_stats
+    ):
+        error_msg = (
+            f"{out_dir=} already contains checkpoints which would be overwritten by this "
+            "command. Running training using the same output_dir as a previous command "
+            "is only permitted when args.resume=True."
+        )
+        if args.fine_tune:
+            error_msg += (
+                " In the args.fine_tune=True case it is recommended to pass args.ckpt "
+                "of the form /checkpoints/<ckpt_path> instead of /results/<ckpt_path> in "
+                "order to avoid this error."
+            )
+        raise ValueError(error_msg)
+    if args.dump_mel_stats:
+        assert (
+            not args.num_gpus > 1
+        ), "dumping mel stats not supported in multi-gpu mode. Set NUM_GPU=1 to continue"
 
-    logging.log_end(logging.constants.INIT_STOP)
-    if multi_gpu:
-        torch.distributed.barrier()
-    logging.log_start(logging.constants.RUN_START)
+    if world_size == 1 or dist.get_rank() == 0:
+        # save configuration to file
+        path_to_saved_args = out_dir / f"training_args_{args.timestamp}.json"
+        nicely_formatted_args = json.dumps(vars(args), indent=2)
+        path_to_saved_args.write_text(nicely_formatted_args)
+
+        saved_config_path = (
+            out_dir / f"{Path(args.model_config).stem}_{args.timestamp}.yaml"
+        )
+        shutil.copy(args.model_config, saved_config_path)
+
+    init_log(args)
+
     if multi_gpu:
         torch.distributed.barrier()
 
@@ -423,47 +450,6 @@ def main():
         val_splicing_kw,
         val_specaugm_kw,
     ) = config.input(cfg, "val")
-
-    logging.log_event(
-        logging.constants.DATA_TRAIN_MAX_DURATION,
-        value=train_dataset_kw["max_duration"],
-    )
-    logging.log_event(
-        logging.constants.DATA_SPEED_PERTURBATON_MAX,
-        value=train_dataset_kw["speed_perturbation"]["max_rate"],
-    )
-    logging.log_event(
-        logging.constants.DATA_SPEED_PERTURBATON_MIN,
-        value=train_dataset_kw["speed_perturbation"]["min_rate"],
-    )
-    logging.log_event(
-        logging.constants.DATA_SPEC_AUGMENT_FREQ_N,
-        value=train_specaugm_kw["freq_masks"],
-    )
-    logging.log_event(
-        logging.constants.DATA_SPEC_AUGMENT_FREQ_MIN,
-        value=train_specaugm_kw["min_freq"],
-    )
-    logging.log_event(
-        logging.constants.DATA_SPEC_AUGMENT_FREQ_MAX,
-        value=train_specaugm_kw["max_freq"],
-    )
-    logging.log_event(
-        logging.constants.DATA_SPEC_AUGMENT_TIME_N,
-        value=train_specaugm_kw["time_masks"],
-    )
-    logging.log_event(
-        logging.constants.DATA_SPEC_AUGMENT_TIME_MIN,
-        value=train_specaugm_kw["min_time"],
-    )
-    logging.log_event(
-        logging.constants.DATA_SPEC_AUGMENT_TIME_MAX,
-        value=train_specaugm_kw["max_time"],
-    )
-    logging.log_event(
-        logging.constants.GLOBAL_BATCH_SIZE,
-        value=batch_size * world_size * args.grad_accumulation_batches,
-    )
 
     # if mel stats are being collected these are for use in inference streaming normalization
     # the stats should therefore reflect the processing that will be used in inference
@@ -488,8 +474,6 @@ def main():
         features.FrameSplicing(optim_level=args.amp, **val_splicing_kw),
         features.PermuteAudio(),
     )
-
-    logging.log_event(logging.constants.DATA_TRAIN_NUM_BUCKETS, value=args.num_buckets)
 
     if args.read_from_tar is None:
         train_sampler = None
@@ -530,17 +514,8 @@ def main():
         # steps per epoch is unknown for tarred data
         steps_per_epoch = len(train_loader) // args.grad_accumulation_batches
 
-        logging.log_event(
-            logging.constants.TRAIN_SAMPLES, value=train_loader.dataset_size
-        )
-        logging.log_event(logging.constants.EVAL_SAMPLES, value=val_loader.dataset_size)
-
-    # set up the model
+    # set up the RNNT model
     rnnt_config = config.rnnt(cfg)
-    logging.log_event(
-        logging.constants.MODEL_WEIGHTS_INITIALIZATION_SCALE,
-        value=args.weights_init_scale,
-    )
     if args.weights_init_scale is not None:
         rnnt_config["weights_init_scale"] = args.weights_init_scale
     if args.hidden_hidden_bias_scale is not None:
@@ -549,9 +524,6 @@ def main():
     model.cuda()
     blank_idx = tokenizer.num_labels
     loss_fn = apexTransducerLoss(blank_idx=blank_idx, packed_input=False)
-    logging.log_event(
-        logging.constants.EVAL_MAX_PREDICTION_SYMBOLS, value=args.max_symbol_per_sample
-    )
     greedy_decoder = RNNTGreedyDecoder(
         blank_idx=blank_idx, max_symbol_per_sample=args.max_symbol_per_sample
     )
@@ -559,16 +531,6 @@ def main():
     print_once(f"Model size: {num_weights(model) / 10**6:.1f}M params\n")
 
     opt_eps = 1e-9
-    logging.log_event(logging.constants.OPT_NAME, value="lamb")
-    logging.log_event(logging.constants.OPT_BASE_LR, value=args.lr)
-    logging.log_event(logging.constants.OPT_LAMB_EPSILON, value=opt_eps)
-    logging.log_event(logging.constants.OPT_LAMB_BETA_1, value=args.beta1)
-    logging.log_event(logging.constants.OPT_LAMB_BETA_2, value=args.beta2)
-    logging.log_event(logging.constants.OPT_GRADIENT_CLIP_NORM, value=args.clip_norm)
-    logging.log_event(logging.constants.OPT_LR_ALT_DECAY_FUNC, value=True)
-    logging.log_event(logging.constants.OPT_LR_ALT_WARMUP_FUNC, value=True)
-    logging.log_event(logging.constants.OPT_LAMB_LR_MIN, value=args.min_lr)
-    logging.log_event(logging.constants.OPT_WEIGHT_DECAY, value=args.weight_decay)
 
     # optimization
     kw = {
@@ -593,7 +555,7 @@ def main():
         args.hold_steps,
         args.half_life_steps,
     )
-
+    scaler = None
     if args.amp:
         scaler = torch.cuda.amp.GradScaler()
 
@@ -601,14 +563,13 @@ def main():
         ema_model = copy.deepcopy(model).cuda()
     else:
         ema_model = None
-    logging.log_event(logging.constants.MODEL_EVAL_EMA_FACTOR, value=args.ema)
 
     if multi_gpu:
         model = DistributedDataParallel(model)
 
     # load checkpoint
     meta = {"best_wer": 10**6, "start_epoch": 0, "step": 1}
-    checkpointer = Checkpointer(args.output_dir, "RNN-T", args.keep_milestones)
+    checkpointer = Checkpointer(args.output_dir, "RNN-T")
 
     # we cannot both resume and fine_tune
     if args.resume or args.fine_tune:
@@ -679,12 +640,6 @@ def main():
     # training loop
     model.train()
     for epoch in range(start_epoch + 1, args.epochs + 1):
-        logging.log_start(
-            logging.constants.BLOCK_START,
-            metadata=dict(first_epoch_num=epoch, epoch_count=1),
-        )
-        logging.log_start(logging.constants.EPOCH_START, metadata=dict(epoch_num=epoch))
-
         epoch_utts = 0
         accumulated_batches = 0
         epoch_start_time = time.time()
@@ -779,20 +734,7 @@ def main():
                 accumulated_batches > 0
                 and accumulated_batches % args.grad_accumulation_batches == 0
             ):
-                total_norm = 0.0
-
-                try:
-                    for n, p in getattr(model, "module", model).named_parameters():
-                        # in case of pytorch AMP compute the unscaled norm
-                        if args.amp:
-                            param_norm = (p.grad.data / scaler.get_scale()).norm(2)
-                        else:
-                            param_norm = p.grad.data.norm(2)
-                        total_norm += param_norm.item() ** 2
-                    total_norm = total_norm ** (1.0 / 2)
-                except AttributeError as e:
-                    print_once(f"Exception happened: {e}")
-                    total_norm = 0.0
+                total_norm, tb_per_layer_logs = get_logging_entries(model, scaler)
 
                 if args.amp:
                     # pyTorch AMP step function unscales the gradients
@@ -838,7 +780,7 @@ def main():
                         step,
                         "train",
                         {
-                            "loss": sum(losses) / len(losses),
+                            "loss": sum(losses),
                             **wer,  # optional entry
                             "throughput": step_utts / step_time,
                             "took": step_time,
@@ -849,6 +791,7 @@ def main():
                                 sum(all_feat_lens) / len(all_feat_lens)
                             ).item(),
                             "lrate": optimizer.param_groups[0]["lr"],
+                            **dict(tb_per_layer_logs),
                         },
                     )
 
@@ -881,8 +824,6 @@ def main():
             np.save("/results/meln.npy", meln.numpy())
             exit()
 
-        logging.log_end(logging.constants.EPOCH_STOP, metadata=dict(epoch_num=epoch))
-
         epoch_time = time.time() - epoch_start_time
         log(
             (epoch,),
@@ -913,15 +854,9 @@ def main():
                 )
                 best_wer = wer
 
-        save_this_epoch = (
-            args.save_frequency is not None and epoch % args.save_frequency == 0
-        ) or (epoch in args.keep_milestones)
+        save_this_epoch = bool(args.save_frequency) and epoch % args.save_frequency == 0
         if save_this_epoch:
             checkpointer.save(model, ema_model, optimizer, epoch, step, best_wer)
-
-        logging.log_end(
-            logging.constants.BLOCK_STOP, metadata=dict(first_epoch_num=epoch)
-        )
 
         if 0 < args.epochs_this_job <= epoch - start_epoch:
             print_once(f"Finished after {args.epochs_this_job} epochs.")

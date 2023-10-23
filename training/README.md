@@ -293,8 +293,9 @@ support a batch_size of 40.
 
 The default setup saves an overwriting checkpoint every time dev Word Error Rate (WER) improves and a non-overwriting
 checkpoint at the end of training. You can set `SAVE_AT_THE_END=false` to disable the final checkpoint save.
+Additionally, if you would like to save a checkpoint every Nth epoch, set `SAVE_FREQUENCY=N`.
 
-If you want to fine-tune a checkpoint to run on the FPGA, it is important to save more checkpoints than this.
+If you want to fine-tune a checkpoint to run on the FPGA you should use `SAVE_FREQUENCY=N`.
 Please see the subsection [`Choosing a checkpoint to fine-tune`](#choosing-a-checkpoint-to-fine-tune) for guidelines.
 
 The default number of epochs to train for is 100.
@@ -305,6 +306,10 @@ So, on two 24GB TITAN RTX GPUs, training LibriSpeech, run the following inside t
 ```
 NUM_GPUS=2 GLOBAL_BATCH_SIZE=1008 GRAD_ACCUMULATION_BATCHES=21 EPOCHS=150 ./scripts/train.sh
 ```
+
+The output of the training command is logged to `/results/training_log_[a timestamp].txt`.
+Arguments are logged to `/results/training_args_[a timestamp].json`.
+The config file is saved to `/results/[config file name]_[a timestamp].txt`.
 
 #### CommonVoice
 
@@ -339,9 +344,8 @@ NUM_GPUS=2 GLOBAL_BATCH_SIZE=2160 GRAD_ACCUMULATION_BATCHES=45 EPOCHS=150 DATA_D
 
 Fine-tuning CommonVoice models to use hard activation functions (see Section 6) has proven more difficult
 than fine-tuning LibriSpeech models, with highly trained checkpoints being the most problematic.  For this
-reason it can be useful to save intermediate checkpoints during training by specifying `SAVE_FREQUENCY=10`,
-together with `SAVE_MILESTONES="10 20 30 40"` etc to prevent their deletion, and to fine-tune from one of
-these rather than the final checkpoint.
+reason it can be useful to save intermediate checkpoints during training by specifying `SAVE_FREQUENCY=10`
+and to fine-tune from one of these rather than the final checkpoint.
 
 The rest of this README defaults to LibriSpeech but all commands can be adapted to work with CommonVoice by
 setting the appropriate variables from the training command just shown.
@@ -409,10 +413,9 @@ loss and word-error-rate curves for a successful mixed-precision train on the Co
 In [examples/failure](examples/failure/) we include grad-norm, loss and word-error-rate
 curves for a pathalogical CommonVoice training case in which grad-norm blew up to infinity and then went
 to NaN.  This pathology is caused by exploding gradients in the RNN-T model encoder.  This pathology
-affected roughly 1 in 10 LibriSpeech trains; we do not yet have enough data to estimate its prevalence
-with CommonVoice.  Training with larger GLOBAL_BATCH_SIZE values and smaller max/mean duration ratios
-both appear to make this pathology less likely to occur.  If this pathology does occur, resuming training
-from the last-saved good checkpoint is sometimes successful.
+affected roughly 1 in 10 LibriSpeech trains.  Training with larger GLOBAL_BATCH_SIZE values and smaller
+max/mean duration ratios both appear to make this pathology less likely to occur.  If this pathology does
+occur, resuming training from the last-saved good checkpoint is sometimes successful.
 
 Another pathology we see is training runs freezing, with one GPU going to 0% utilization and the other to
 100% utilization, with one Python process dying, but no error messages.  In this case reducing the batch
@@ -435,8 +438,13 @@ Note that this is already set for the 85M parameter model with tokenizer size 87
 
 # 5. Validation Sets <a name="validation"></a>
 
-Validation is performed throughout training.  However, we can also validate models after training.  The
-default validates the best `testing-1023sp_run` model checkpoint saved during training (to be found in
+Validation is performed throughout training.  However, we can also validate models after training.
+During training the maximum number of tokens that can be decoded per utterance is capped by the `MAX_SYMBOL_PER_SAMPLE` arg
+which defaults to 300 (about a minute of speech). This is necessary since untrained models may ramble on indefinitely during decoding.
+However, during validation `MAX_SYMBOL_PER_SAMPLE` is not set so no maximum decoding length is applied. It is
+therefore possible that the same dev set may yield different word error rates in training vs after training.
+
+The default evaluation command validates the best `testing-1023sp_run` model checkpoint saved during training (to be found in
 /results/RNN-T_best_checkpoint.pt) against the LibriSpeech dev-clean partition.  Inside the container run
 
 ```
@@ -458,12 +466,20 @@ NUM_GPUS=2 DATA_DIR=/datasets/CommonVoice/cv-corpus-10.0-2022-07-04/en VAL_MANIF
 Validation can be performed using other checkpoints by specifying the CHECKPOINT variable.
 Validation can be performed using other model config files by specifying the MODEL_CONFIG variable.
 
+## 5.1 Long utterances <a name="long_utterances"></a>
+
+Besides the WER, `val.sh` also calculates the transducer loss on the dev set.
+This calculation may cause the GPU to run out of memory on
+very long utterances. To skip the loss calculation and only
+calculate WER, run
+```
+NO_LOSS=true NUM_GPUS=2 ./scripts/val.sh
+```
 
 # 6. Validation on CPU <a name="valcpu"></a>
 
 It is also possible to validate models using CPU only.  The CPU version has additional functionality not found
-in the GPU version, some of which is described in the Sections below.  You can also increase
-MAX_SYMBOL_PER_SAMPLE to validate or infer over much longer utterances than may be possible on GPU.
+in the GPU version, some of which is described in the Sections below.
 
 To validate the `testing-1023sp_run` model against the LibriSpeech dev-clean partition, run:
 
@@ -510,16 +526,10 @@ Then the hard-activation-function WER increases as the model overfits to using s
 The ideal checkpoint for a hard-activation-function finetune is the checkpoint just before this overfitting happens.
 If you choose a checkpoint after this, then the risk of diverging increases.
 
-You can find this checkpoint by training with soft activation functions for ~20000 steps (based on our experiments), saving all checkpoints, and then validating on all checkpoints with hard activation functions switched on in the config file as above.
+You can find this checkpoint by training with soft activation functions for ~20000 steps (based on our experiments), saving all checkpoints, and then validating on all checkpoints with hard activation functions switched on in the config file as above. To save all checkpoints set `SAVE_FREQUENCY=1` in your training command.
 
 The checkpoint to use for finetuning is the one with the lowest hard-activation-function WER.
 In general, the most recent checkpoint will almost always have the lowest *soft*-activation-function WER, but that doesn't affect which checkpoint to select.
-
-If 20000 steps will take you 10 epochs, the extra options to set in the training command to save the first 10 checkpoints are:
-
-``` bash
-SAVE_FREQUENCY=1 SAVE_MILESTONES=$(seq 10)
-```
 
 We find that a checkpoint that has been trained for 10k to 13k steps is usually a good choice for a finetune.
 
@@ -530,7 +540,11 @@ For a finetune of your epoch 4 checkpoint, use your original training command wi
 
 - `WARMUP_STEPS=1700`
 - `FINE_TUNE=true`
-- `CHECKPOINT=/results/RNN-T_epoch4_checkpoint.pt`
+- `CHECKPOINT=/checkpoints/RNN-T_epoch4_checkpoint.pt`
+
+The training script will prevent you from using the same `OUTPUT_DIR` as the original training run to avoid
+overwriting the original checkpoints. Instead, it is recommended that you move the checkpoint you wish to load into
+the `/checkpoints/` directory and/or point your `OUTPUT_DIR` at a different location on your host.
 
 You should also decrease `HOLD_STEPS` by the number of hold steps that the checkpoint has already completed.
 This can be viewed on TensorBoard.
@@ -558,10 +572,10 @@ server.
 The adaptive streaming normalization algorithm uses exponentially weighted moving averages and variances to
 perform normalization of each new frame of mel-bin values.  The algorithm requires an initial set of mel-bin
 mean and variance values as a starting point and these can be obtained by running the training script with
-DUMP_MEL_STATS set to true
+DUMP_MEL_STATS set to true with NUM_GPUS=1:
 
 ```
-DUMP_MEL_STATS=true NUM_GPUS=2 GLOBAL_BATCH_SIZE=1008 GRAD_ACCUMULATION_BATCHES=21 EPOCHS=1 ./scripts/train.sh
+DUMP_MEL_STATS=true NUM_GPUS=1 GLOBAL_BATCH_SIZE=1008 GRAD_ACCUMULATION_BATCHES=21 EPOCHS=1 ./scripts/train.sh
 ```
 
 The training data statistics are written to `<RESULTS>` as melmeans.\* and melvars.\* as both PyTorch
@@ -611,7 +625,7 @@ Inside the container run:
 ```
 python ./rnnt_train/utils/hardware_ckpt.py \
     --fine_tuned_ckpt /results/RNN-T_best_checkpoint.pt \
-    --config configs/testing-1023sp_run.yaml \
+    --config <path/to/finetune/config.yaml> \
     --melmeans /results/melmeans.pt \
     --melvars /results/melvars.pt \
     --melalpha 0.001 \

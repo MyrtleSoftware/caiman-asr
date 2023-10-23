@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 from typing import List, Optional
 
 import librosa
@@ -39,6 +40,11 @@ class WebDatasetReader:
         └── clip2.txt
     where the flac files are the audio samples and the text files are the corresponding
     transcripts.
+    NOTE: if filenames contain more than one period then webdataset considers filename
+    until first period as the key and remaining part as extension. It is generally not
+    recommended to use multiple periods in a filename as mentioned here
+    https://github.com/webdataset/webdataset/issues/237. As a workaround we replace the
+    `.` with `_` of filename except the extension part.
 
     For more information on the format there is a good description in this third-party
     library: https://webdataset.github.io/webdataset/ but note that we don't use this
@@ -182,11 +188,27 @@ class WebDatasetReader:
             dist_rs = DistributedReadingService()
         self.dataloader = DataLoader2(self._webdataset_pipe, reading_service=dist_rs)
 
+    @staticmethod
+    def _manipulate_key(key):
+        """
+        This will replace the periods in the last part of the key except the file extension.
+        E.g., The key `/datasets/XYZdata.tar/jobid1234.wav_aligned.attributeABC.<ext>` is changed to
+        `/datasets/XYZdata.tar/jobid1234_wav_aligned_attributeABC.<ext>`.
+        """
+        key_path = Path(key)
+        new_key = str(
+            (key_path.parent / key_path.stem.replace(".", "_")).with_suffix(
+                key_path.suffix
+            )
+        )
+        return new_key
+
     def _decode(self, item):
         """
         Apply decoding to the webdataset item.
         """
         key, value = item
+        key = self._manipulate_key(key)
         if any(key.endswith(audio_suff) for audio_suff in self.audio_suffixes):
             if self.skip_audio:
                 return key, None
@@ -231,7 +253,7 @@ class WebDatasetReader:
                 "sequentially with its .txt transcript. You can check the file order "
                 "for a given tar file in a bash shell with `$ tar tf <tarfile path>.tar"
             )
-        return transcript_not_none is not None and (
+        return transcript_not_none and (
             self.skip_audio or self._get_audio(item) is not None
         )
 

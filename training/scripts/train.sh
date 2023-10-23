@@ -58,7 +58,7 @@ export OMP_NUM_THREADS=1
 : ${WEIGHTS_INIT_SCALE=0.5}
 : ${CLIP_NORM:=1}
 
-ACCUM_BATCH_SIZE=$(( $GLOBAL_BATCH_SIZE / $NUM_GPUS ))
+TIMESTAMP=$(date '+%Y_%m_%d_%H_%M_%S')
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -69,7 +69,8 @@ ARGS+=" --model_config=$MODEL_CONFIG"
 ARGS+=" --output_dir=$OUTPUT_DIR"
 ARGS+=" --lr=$LEARNING_RATE"
 ARGS+=" --min_lr=$MIN_LEARNING_RATE"
-ARGS+=" --accum_batch_size=$ACCUM_BATCH_SIZE"
+ARGS+=" --global_batch_size=$GLOBAL_BATCH_SIZE"
+ARGS+=" --num_gpus=$NUM_GPUS"
 ARGS+=" --val_batch_size=$VAL_BATCH_SIZE"
 ARGS+=" --epochs=$EPOCHS"
 ARGS+=" --warmup_steps=$WARMUP_STEPS"
@@ -86,6 +87,7 @@ ARGS+=" --dali_device=$DALI_DEVICE"
 ARGS+=" --beta1=$BETA1"
 ARGS+=" --beta2=$BETA2"
 ARGS+=" --dump_melmat=$DUMP_MELMAT"
+ARGS+=" --timestamp=$TIMESTAMP"
 
 [ "$AMP" = true ] &&                 ARGS+=" --amp"
 [ "$RESUME" = true ] &&              ARGS+=" --resume"
@@ -100,7 +102,6 @@ ARGS+=" --dump_melmat=$DUMP_MELMAT"
 [ -n "$NUM_BUCKETS" ] &&             ARGS+=" --num_buckets=$NUM_BUCKETS"
 [ -n "$CLIP_NORM" ] &&               ARGS+=" --clip_norm=$CLIP_NORM"
 [ -n "$PREDICTION_FREQUENCY" ] &&    ARGS+=" --prediction_frequency=$PREDICTION_FREQUENCY"
-[ -n "$SAVE_MILESTONES" ] &&         ARGS+=" --keep_milestones $SAVE_MILESTONES"
 [ -n "$SAVE_BEST" ] &&               ARGS+=" --save_best_from=$SAVE_BEST"
 [ -n "$SAVE_FREQUENCY" ] &&          ARGS+=" --save_frequency=$SAVE_FREQUENCY"
 [ -n "$START_CLIP" ] &&              ARGS+=" --start_clip=$START_CLIP"
@@ -109,4 +110,4 @@ ARGS+=" --dump_melmat=$DUMP_MELMAT"
 [ -n "$MAX_SYMBOL_PER_SAMPLE" ] &&   ARGS+=" --max_symbol_per_sample=$MAX_SYMBOL_PER_SAMPLE"
 
 DISTRIBUTED=${DISTRIBUTED:-"torchrun --standalone --nnodes 1 --nproc_per_node=$NUM_GPUS"}
-${DISTRIBUTED} ./rnnt_train/train.py ${ARGS}
+${DISTRIBUTED} ./rnnt_train/train.py ${ARGS} 2>&1 | tee $OUTPUT_DIR/training_log_$TIMESTAMP.txt

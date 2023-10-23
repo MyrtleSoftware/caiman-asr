@@ -157,7 +157,10 @@ def log(step, tb_total_steps=None, subset="train", data={}):
         tb_loggers[subset].log(tb_total_steps, data)
 
     if subset != "":
-        data = {f"{subset}_{key}": v for key, v in data.items()}
+        # We don't print the per-layer info to stdout because there are a lot of entries
+        data = {
+            f"{subset}_{key}": v for key, v in data.items() if "per-layer" not in key
+        }
     dllogger.log(step, data=data)
 
 

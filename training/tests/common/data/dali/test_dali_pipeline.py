@@ -32,7 +32,7 @@ def dataload_args(test_data_dir) -> Namespace:
 def dataload_args_webdataset(dataload_args) -> Namespace:
     dataload_args = copy.deepcopy(dataload_args)
     # use all tar files in test_data_dir
-    dataload_args.train_tar_files = dataload_args.val_tar_files = ["*.tar"]
+    dataload_args.train_tar_files = dataload_args.val_tar_files = ["webdataset-eg.tar"]
     dataload_args.read_from_tar = True
     return dataload_args
 
@@ -44,11 +44,13 @@ def build_dataloader_util(
     config_fp,
     tokenizer,
     deterministic_ex_noise: bool = False,
+    max_transcript_len: int = 450,
 ) -> DaliDataLoader:
     """
     Build dali dataloader helper function for testing.
     """
     cfg = config.load(config_fp)
+    cfg["input_train"]["audio_dataset"]["max_transcript_len"] = max_transcript_len
     dataset_kw, features_kw, _, _ = config.input(cfg, pipeline_type)
 
     if deterministic_ex_noise:
@@ -156,6 +158,30 @@ def test_shuffle_train_webdataset(
                 continue
             # we have shuffled
             break
+
+
+# One transcript is 33 chars long; the other is 34 chars long.
+@pytest.mark.parametrize("max_transcript_len,expected_size", [(33, 1), (450, 2)])
+def test_webdataset_size(
+    dataload_args_webdataset,
+    config_fp,
+    tokenizer,
+    max_transcript_len,
+    expected_size,
+):
+    batch_size = 1
+    dataloader = build_dataloader_util(
+        dataload_args_webdataset,
+        "train",
+        batch_size,
+        config_fp,
+        tokenizer,
+        max_transcript_len=max_transcript_len,
+    )
+    size = 0
+    for _ in dataloader:
+        size += 1
+    assert size == expected_size
 
 
 def test_no_shuffle_val_webdataset(

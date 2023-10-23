@@ -7,6 +7,8 @@ __pycache__
 _legacy/
 lightning_logs/
 
+# testing
+.hypothesis
 
 # logs
 *.log

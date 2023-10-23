@@ -36,9 +36,9 @@ from rnnt_train.common.helpers import (
     print_once,
     process_evaluation_epoch,
 )
+from rnnt_train.common.seed import set_seed
 from rnnt_train.common.stream_norm import StreamNorm
 from rnnt_train.common.tb_dllogger import flush_log, init_log, log
-from rnnt_train.mlperf import logging
 from rnnt_train.rnnt import config
 from rnnt_train.rnnt.decoder import RNNTGreedyDecoder
 from rnnt_train.rnnt.model import RNNT
@@ -110,7 +110,6 @@ def evaluate(
 
     start_time = time.time()
     agg = {"preds": [], "txts": [], "idx": []}
-    logging.log_start(logging.constants.EVAL_START, metadata=dict(epoch_num=epoch))
 
     try:
         total_loader_len = f"{len(val_loader):<10}"
@@ -176,10 +175,6 @@ def evaluate(
 
     wer, loss = process_evaluation_epoch(agg)
 
-    logging.log_event(
-        logging.constants.EVAL_ACCURACY, value=wer, metadata=dict(epoch_num=epoch)
-    )
-    logging.log_end(logging.constants.EVAL_STOP, metadata=dict(epoch_num=epoch))
     log(
         (epoch,),
         step,
@@ -217,17 +212,11 @@ def validate_cpu(args: Namespace, return_dataloader: bool = False) -> None:
     torch.backends.cudnn.benchmark = args.cudnn_benchmark
 
     if args.seed is not None:
-        logging.log_event(logging.constants.SEED, value=args.seed)
-        torch.manual_seed(args.seed + args.local_rank)
-        np.random.seed(args.seed + args.local_rank)
-        random.seed(args.seed + args.local_rank)
+        set_seed(args.seed, args.local_rank)
 
     init_log(args)
 
     cfg = config.load(args.model_config)
-
-    logging.log_end(logging.constants.INIT_STOP)
-    logging.log_start(logging.constants.RUN_START)
 
     print_once("Setting up datasets...")
     (
@@ -263,17 +252,11 @@ def validate_cpu(args: Namespace, return_dataloader: bool = False) -> None:
 
     val_feat_proc = val_augmentations
 
-    if not args.read_from_tar:
-        logging.log_event(logging.constants.EVAL_SAMPLES, value=val_loader.dataset_size)
-
     # set up the model
     rnnt_config = config.rnnt(cfg)
     rnnt_config["gpu_unavailable"] = True
     model = RNNT(n_classes=tokenizer.num_labels + 1, **rnnt_config)
     blank_idx = tokenizer.num_labels
-    logging.log_event(
-        logging.constants.EVAL_MAX_PREDICTION_SYMBOLS, value=args.max_symbol_per_sample
-    )
     greedy_decoder = RNNTGreedyDecoder(
         blank_idx=blank_idx, max_symbol_per_sample=args.max_symbol_per_sample
     )
@@ -286,7 +269,7 @@ def validate_cpu(args: Namespace, return_dataloader: bool = False) -> None:
     assert args.ckpt is not None
 
     # setup checkpointer
-    checkpointer = Checkpointer(args.output_dir, "RNN-T", [])
+    checkpointer = Checkpointer(args.output_dir, "RNN-T")
 
     # load checkpoint (modified to not need optimizer / meta args)
     checkpointer.load(args.ckpt, model, ema_model)
@@ -327,9 +310,6 @@ def validate_cpu(args: Namespace, return_dataloader: bool = False) -> None:
 
 
 if __name__ == "__main__":
-    logging.configure_logger("RNNT")
-    logging.log_start(logging.constants.INIT_START)
-
     parser = val_cpu_arg_parser()
     args = parser.parse_args()
     # check data path args

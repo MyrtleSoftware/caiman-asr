@@ -27,7 +27,6 @@ export OMP_NUM_THREADS=1
 : ${VAL_BATCH_SIZE:=2}
 : ${SEED=1}
 : ${DALI_DEVICE:="cpu"}
-: ${MAX_SYMBOL_PER_SAMPLE=300}
 : ${AMP:=false}
 : ${CUDNN_BENCHMARK:=true}
 : ${NUM_GPUS:=8}
@@ -43,12 +42,13 @@ ARGS+=" --val_manifests $VAL_MANIFESTS"
 ARGS+=" --val_batch_size=$VAL_BATCH_SIZE"
 ARGS+=" --seed=$SEED"
 ARGS+=" --dali_device=$DALI_DEVICE"
-ARGS+=" --max_symbol_per_sample=$MAX_SYMBOL_PER_SAMPLE"
 
 [ "$AMP" = true ] &&                 ARGS+=" --amp"
 [ "$CUDNN_BENCHMARK" = true ] &&     ARGS+=" --cudnn_benchmark"
+[ "$NO_LOSS" = true ] &&             ARGS+=" --no_loss"
 [ "$READ_FROM_TAR" = true ] &&       ARGS+=" --read_from_tar"
 [ -n "$VAL_TAR_FILES" ] &&           ARGS+=" --val_tar_files $VAL_TAR_FILES"
+[ -n "$MAX_SYMBOL_PER_SAMPLE" ] &&   ARGS+=" --max_symbol_per_sample=$MAX_SYMBOL_PER_SAMPLE"
 
 DISTRIBUTED=${DISTRIBUTED:-"torchrun --standalone --nnodes 1 --nproc_per_node=$NUM_GPUS"}
 ${DISTRIBUTED} ./rnnt_train/val.py ${ARGS}
