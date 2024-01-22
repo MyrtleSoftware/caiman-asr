@@ -21,6 +21,7 @@ from collections import OrderedDict
 
 import torch
 import torch.distributed as dist
+from beartype.typing import Optional, Tuple
 
 from .metrics import word_error_rate
 
@@ -82,7 +83,7 @@ def gather_transcripts(transcript_list, transcript_len_list, detokenize):
     ]
 
 
-def process_evaluation_epoch(aggregates):
+def process_evaluation_epoch(aggregates) -> Tuple[float, Optional[float]]:
     """
     Processes results from each worker at the end of evaluation and combine to final result
     Args:
@@ -122,6 +123,9 @@ def num_weights(module):
     return sum(p.numel() for p in module.parameters() if p.requires_grad)
 
 
+unwrap_ddp = lambda model: getattr(model, "module", model)
+
+
 class Checkpointer(object):
     def __init__(self, save_dir, model_name):
         self.save_dir = save_dir
@@ -134,7 +138,17 @@ class Checkpointer(object):
         tracked = sorted(tracked, key=lambda t: t[0])
         self.tracked = OrderedDict(tracked)
 
-    def save(self, model, ema_model, optimizer, epoch, step, best_wer, is_best=False):
+    def save(
+        self,
+        model,
+        ema_model,
+        optimizer,
+        epoch,
+        step,
+        best_wer,
+        tokenizer_kw,
+        is_best=False,
+    ):
         """Saves model checkpoint for inference/resuming training.
 
         Args:
@@ -144,6 +158,10 @@ class Checkpointer(object):
             epoch (int): epoch during which the model is saved
             step (int): number of steps since beginning of training
             best_wer (float): lowest recorded WER on the dev set
+            tokenizer_kw: Dictionary of details about the tokenizer,
+                          including the list of characters (key "labels"),
+                          and (if we're using one) the path to the sentencepiece model
+                          (key "sentpiece_model")
             is_best (bool, optional): set name of checkpoint to 'best'
                 and overwrite the previous one
         """
@@ -166,7 +184,6 @@ class Checkpointer(object):
         if not is_best and epoch in self.tracked:
             print_once(f"WARNING: Overwriting previous checkpoint {fpath}")
 
-        unwrap_ddp = lambda model: getattr(model, "module", model)
         state = {
             "epoch": epoch,
             "step": step,
@@ -176,6 +193,7 @@ class Checkpointer(object):
             if ema_model is not None
             else None,
             "optimizer": optimizer.state_dict(),
+            "tokenizer_kw": tokenizer_kw,
         }
 
         print_once(f"Saving {fpath}...")
@@ -205,9 +223,8 @@ class Checkpointer(object):
         print_once(f"Loading model from {fpath}")
         checkpoint = torch.load(fpath, map_location="cpu")
 
-        unwrap_ddp = lambda model: getattr(model, "module", model)
         state_dict = checkpoint["state_dict"]
-        unwrap_ddp(model).load_state_dict(state_dict, strict=False)
+        unwrap_ddp(model).load_state_dict(state_dict, strict=True)
 
         if ema_model is not None:
             if checkpoint.get("ema_state_dict") is not None:
@@ -217,7 +234,7 @@ class Checkpointer(object):
                 print_once("WARNING: EMA weights not found in the checkpoint.")
                 print_once("WARNING: Initializing EMA model with regular params.")
             state_dict = checkpoint[key]
-            unwrap_ddp(ema_model).load_state_dict(state_dict, strict=False)
+            unwrap_ddp(ema_model).load_state_dict(state_dict, strict=True)
 
         if optimizer != None:
             optimizer.load_state_dict(checkpoint["optimizer"])

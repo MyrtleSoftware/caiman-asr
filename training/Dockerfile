@@ -23,13 +23,14 @@ ENV PYTORCH_VERSION=2.0.0a0+1767026
 # See https://forums.developer.nvidia.com/t/notice-cuda-linux-repository-key-rotation/212771 for details.
 RUN apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/3bf863cc.pub
 
+# need to set the tzdata time noninteractively
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata && \
     apt-get install -y libsndfile1 sox git cmake jq ffmpeg && \
     apt-get install -y --no-install-recommends numactl && \
     rm -rf /var/lib/apt/lists/*
 
-WORKDIR /workspace/rnnt
+WORKDIR /workspace/training
 
 # Install the latest (beta) version of package torchdata before development paused:
 # https://github.com/pytorch/data/issues/1196
@@ -41,13 +42,13 @@ RUN pip install --no-cache --disable-pip-version-check -U -r requirements.txt
 
 COPY lib lib
 # Setuptool requires we are in the working directory of the package
-WORKDIR /workspace/rnnt/lib
+WORKDIR /workspace/training/lib
 # # Separating the build/install steps gives better stdout/stderr diagnostics
 RUN python setup.py build
 # This is a non-editable install (we need it to put the cuda extensions in the module path which -e does not do)
 RUN python -m pip install --use-feature=in-tree-build .
 # Reset the workspace, needed by following scripts
-WORKDIR /workspace/rnnt
+WORKDIR /workspace/training
 
 COPY rnnt_train rnnt_train
 COPY setup.py .

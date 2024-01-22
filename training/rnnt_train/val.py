@@ -16,27 +16,17 @@
 # val.py is mostly just train.py with most of the training code removed.
 # rob@myrtle, May 2022
 
-import copy
 import os
-import random
 from argparse import ArgumentParser, Namespace
 
-import numpy as np
 import torch
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel
+from beartype.typing import Any, Dict
 
-from rnnt_train.common.data import features
-from rnnt_train.common.data.build_dataloader import build_dali_loader
-from rnnt_train.common.data.text import Tokenizer
 from rnnt_train.common.evaluate import evaluate
-from rnnt_train.common.helpers import Checkpointer, num_weights, print_once
-from rnnt_train.common.seed import set_seed
-from rnnt_train.common.tb_dllogger import flush_log, init_log
-from rnnt_train.rnnt import config
-from rnnt_train.rnnt.decoder import RNNTGreedyDecoder
-from rnnt_train.rnnt.loss import apexTransducerLoss
-from rnnt_train.rnnt.model import RNNT
+from rnnt_train.common.helpers import print_once
+from rnnt_train.common.tb_dllogger import flush_log
+from rnnt_train.setup.base import VAL, BuiltObjects
+from rnnt_train.setup.val import ValSetup
 
 
 def val_arg_parser() -> ArgumentParser:
@@ -113,8 +103,7 @@ def val_arg_parser() -> ArgumentParser:
         default=None,
         nargs="+",
         help="Paths of the evaluation dataset tar files. "
-        "Ignored if --read_from_tar=False. If not provided,"
-        "we use all tar files in the directory specified by --dataset_dir.",
+        "Ignored if --read_from_tar=False.",
     )
     io.add_argument(
         "--dataset_dir", required=True, type=str, help="Root dir of dataset"
@@ -127,6 +116,12 @@ def val_arg_parser() -> ArgumentParser:
     )
     io.add_argument(
         "--log_file", type=str, default=None, help="Path to save the logfile."
+    )
+    io.add_argument(
+        "--skip_init",
+        action="store_true",
+        default=False,
+        help="If true do not re-initialise things that should only be intialised once",
     )
     io.add_argument(
         "--max_symbol_per_sample",
@@ -142,112 +137,37 @@ def val_arg_parser() -> ArgumentParser:
     return parser
 
 
-def validate(args: Namespace):
+def validate(
+    args: Namespace, val_objects: BuiltObjects, return_dataloader: bool = False
+) -> Dict[str, Any]:
     """
     Validates model on dataset in args.val_manifests or args.val_tar_files.
+
+    If return_dataloader=True, return dataloader in results dict.
     """
-    assert torch.cuda.is_available()
-
-    torch.backends.cudnn.benchmark = args.cudnn_benchmark
-
-    # set up distributed processing
-    multi_gpu = int(os.environ.get("WORLD_SIZE", 1)) > 1
-    if multi_gpu:
-        torch.cuda.set_device(args.local_rank)
-        dist.init_process_group(backend="nccl", init_method="env://")
-        world_size = dist.get_world_size()
-        print_once(f"Distributed processing with {world_size} GPUs\n")
-    else:
-        world_size = 1
-
-    if args.seed is not None:
-        set_seed(args.seed, args.local_rank)
-
-    init_log(args)
-
-    cfg = config.load(args.model_config)
-
-    if multi_gpu:
+    if val_objects.multi_gpu:
         torch.distributed.barrier()
-    if multi_gpu:
-        torch.distributed.barrier()
-
-    print_once("Setting up datasets...")
-    (
-        val_dataset_kw,
-        val_features_kw,
-        val_splicing_kw,
-        val_specaugm_kw,
-    ) = config.input(cfg, "val")
 
     # A checkpoint should always be specified
     assert args.ckpt is not None
 
-    tokenizer_kw = config.tokenizer(cfg)
-    tokenizer = Tokenizer(**tokenizer_kw)
-    blank_idx = tokenizer.num_labels
-
-    val_augmentations = torch.nn.Sequential(
-        val_specaugm_kw
-        and features.SpecAugment(optim_level=args.amp, **val_specaugm_kw)
-        or torch.nn.Identity(),
-        features.FrameSplicing(optim_level=args.amp, **val_splicing_kw),
-        features.PermuteAudio(),
-    )
-
-    val_loader = build_dali_loader(
-        args,
-        "val",
-        batch_size=args.val_batch_size,
-        dataset_kw=val_dataset_kw,
-        features_kw=val_features_kw,
-        tokenizer=tokenizer,
-    )
-
-    val_feat_proc = val_augmentations
-
-    val_feat_proc.cuda()
-
-    # set up the RNNT model
-    rnnt_config = config.rnnt(cfg)
-    model = RNNT(n_classes=tokenizer.num_labels + 1, **rnnt_config)
-    model.cuda()
-
-    print_once(f"Model size: {num_weights(model) / 10**6:.1f}M params\n")
-
-    loss_fn = apexTransducerLoss(blank_idx=blank_idx, packed_input=False)
-
-    greedy_decoder = RNNTGreedyDecoder(
-        blank_idx=blank_idx, max_symbol_per_sample=args.max_symbol_per_sample
-    )
-
-    ema_model = copy.deepcopy(model).cuda()
-
-    if multi_gpu:
-        model = DistributedDataParallel(model)
-
-    # setup checkpointer
-    checkpointer = Checkpointer(args.output_dir, "RNN-T")
-
-    # load checkpoint (modified to not need optimizer / meta args)
-    checkpointer.load(args.ckpt, model, ema_model)
-
     epoch = 1
     step = None  # Switches off logging of val data results to TensorBoard
 
-    wer = evaluate(
+    val_loader = val_objects.data_objects[VAL].loader
+    results = evaluate(
         epoch,
         step,
         val_loader,
-        val_feat_proc,
-        tokenizer.detokenize,
-        ema_model,
-        loss_fn,
-        greedy_decoder,
+        val_objects.feat_procs[VAL],
+        val_objects.tokenizers[VAL].detokenize,
+        val_objects.ema_model,
+        val_objects.loss_fn,
+        val_objects.decoder,
         args,
         calculate_loss=not args.no_loss,
     )
-
+    wer = results["wer"]
     flush_log()
     val_files = args.val_manifests if not args.read_from_tar else args.val_tar_files
     val_files_str = " ".join(val_files)
@@ -255,14 +175,24 @@ def validate(args: Namespace):
         val_files_str = val_files_str[:100] + "..."
     print_once(f'\nWord Error Rate: {wer*100.0:5.3f}% on "{val_files_str}"\n')
 
+    if return_dataloader:
+        results["dataloader"] = val_loader
 
-if __name__ == "__main__":
-    parser = val_arg_parser()
-    args = parser.parse_args()
+    return results
+
+
+def main(args, val_objects):
     # check data path args
     if not args.read_from_tar:
         assert (
             args.val_manifests is not None
         ), "Must provide val_manifests if not reading from tar"
 
-    validate(args)
+    validate(args, val_objects=val_objects)
+
+
+if __name__ == "__main__":
+    parser = val_arg_parser()
+    args = parser.parse_args()
+    val_objects = ValSetup().run(args)
+    main(args, val_objects)

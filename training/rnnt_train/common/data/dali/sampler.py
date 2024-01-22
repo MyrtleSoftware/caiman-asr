@@ -30,6 +30,15 @@ class SimpleSampler:
         with open(self.file_list_path, "w") as f:
             f.writelines(f"{name} {label}\n" for name, label in files)
 
+    def read_file_list(self):
+        assert self.file_list_path
+        files = []
+        with open(self.file_list_path, "r") as f:
+            for line in f:
+                file, idx = line.split()
+                files.append(file)
+        return files
+
     def get_file_list_path(self):
         assert (
             self.file_list_path

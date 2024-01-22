@@ -1,5 +1,4 @@
-from typing import List, Optional, Tuple
-
+from beartype.typing import List, Optional, Tuple
 from torch.cuda.amp import GradScaler
 
 from rnnt_train.common.helpers import print_once

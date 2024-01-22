@@ -1,10 +1,7 @@
 #! /usr/bin/env python
 
 import unittest
-from unittest.mock import Mock, patch
-
-import pytest
-import sentencepiece
+from unittest.mock import patch
 
 from rnnt_train.common.data.text import Tokenizer
 

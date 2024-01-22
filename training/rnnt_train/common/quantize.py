@@ -1,17 +1,8 @@
 # Copyright (c) 2022 Myrtle.ai
-# iria
 
 import torch
 from qtorch import BlockFloatingPoint, FloatingPoint
 from qtorch.quant import Quantizer  # this import is _very_ slow when it is first run
-
-
-class NullClass(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, in_tensor):
-        return in_tensor
 
 
 class BrainFloatQuantizer(torch.nn.Module):

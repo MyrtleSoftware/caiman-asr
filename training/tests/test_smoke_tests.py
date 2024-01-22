@@ -1,5 +1,5 @@
 def test_all_submodule_imports():
-    from rnnt_train import common, rnnt, utils
+    from rnnt_train import common, rnnt, setup, utils
 
 
 def test_train_import():

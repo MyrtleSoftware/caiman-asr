@@ -14,8 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# modified by rob@myrtle
-
 export OMP_NUM_THREADS=1
 
 : ${DATA_DIR:=${1:-"/datasets/LibriSpeech"}}
@@ -35,17 +33,16 @@ export OMP_NUM_THREADS=1
 : ${SEED=1}
 : ${EPOCHS:=100}
 : ${WARMUP_STEPS:=1632}
-: ${HOLD_STEPS:=10880}
+: ${HOLD_STEPS:=18000}
 : ${HALF_LIFE_STEPS:=2805}
 : ${SAVE_AT_THE_END:=true}
-: ${DUMP_MELMAT:="none"}
 : ${DUMP_MEL_STATS:=false}
-: ${EPOCHS_THIS_JOB:=0}
 : ${RESUME:=false}
 : ${FINE_TUNE:=false}
 : ${DALI_DEVICE:="cpu"}
 : ${VAL_FREQUENCY:=1}
 : ${PREDICTION_FREQUENCY:=1000}
+: ${WEIGHT_DECAY:=0.01}
 : ${BETA1:=0.9}
 : ${BETA2:=0.999}
 : ${LOG_FREQUENCY:=1}
@@ -57,6 +54,9 @@ export OMP_NUM_THREADS=1
 : ${MAX_SYMBOL_PER_SAMPLE=300}
 : ${WEIGHTS_INIT_SCALE=0.5}
 : ${CLIP_NORM:=1}
+: ${SKIP_STATE_DICT_CHECK:=false}
+: ${PYTHON_COMMAND:="./rnnt_train/train.py"}
+: ${EXTRA_ARGS:=""}
 
 TIMESTAMP=$(date '+%Y_%m_%d_%H_%M_%S')
 
@@ -76,17 +76,15 @@ ARGS+=" --epochs=$EPOCHS"
 ARGS+=" --warmup_steps=$WARMUP_STEPS"
 ARGS+=" --hold_steps=$HOLD_STEPS"
 ARGS+=" --half_life_steps=$HALF_LIFE_STEPS"
-ARGS+=" --epochs_this_job=$EPOCHS_THIS_JOB"
 ARGS+=" --ema=$EMA"
 ARGS+=" --seed=$SEED"
-ARGS+=" --weight_decay=1e-3"
+ARGS+=" --weight_decay=$WEIGHT_DECAY"
 ARGS+=" --log_frequency=$LOG_FREQUENCY"
 ARGS+=" --val_frequency=$VAL_FREQUENCY"
 ARGS+=" --grad_accumulation_batches=$GRAD_ACCUMULATION_BATCHES"
 ARGS+=" --dali_device=$DALI_DEVICE"
 ARGS+=" --beta1=$BETA1"
 ARGS+=" --beta2=$BETA2"
-ARGS+=" --dump_melmat=$DUMP_MELMAT"
 ARGS+=" --timestamp=$TIMESTAMP"
 
 [ "$AMP" = true ] &&                 ARGS+=" --amp"
@@ -96,6 +94,7 @@ ARGS+=" --timestamp=$TIMESTAMP"
 [ "$SAVE_AT_THE_END" = true ] &&     ARGS+=" --save_at_the_end"
 [ "$DUMP_MEL_STATS" = true ] &&      ARGS+=" --dump_mel_stats"
 [ "$READ_FROM_TAR" = true ] &&       ARGS+=" --read_from_tar"
+[ "$SKIP_STATE_DICT_CHECK" = true ] && ARGS+=" --skip_state_dict_check"
 [ -n "$TRAIN_TAR_FILES" ] &&         ARGS+=" --train_tar_files $TRAIN_TAR_FILES"
 [ -n "$VAL_TAR_FILES" ] &&           ARGS+=" --val_tar_files $VAL_TAR_FILES"
 [ -n "$CHECKPOINT" ] &&              ARGS+=" --ckpt=$CHECKPOINT"
@@ -108,6 +107,8 @@ ARGS+=" --timestamp=$TIMESTAMP"
 [ -n "$HIDDEN_HIDDEN_BIAS_SCALED" ] && ARGS+=" --hidden_hidden_bias_scale=$HIDDEN_HIDDEN_BIAS_SCALED"
 [ -n "$WEIGHTS_INIT_SCALE" ] &&      ARGS+=" --weights_init_scale=$WEIGHTS_INIT_SCALE"
 [ -n "$MAX_SYMBOL_PER_SAMPLE" ] &&   ARGS+=" --max_symbol_per_sample=$MAX_SYMBOL_PER_SAMPLE"
+[ -n "$RSP_SEQ_LEN_FREQ" ] &&        ARGS+=" --rsp_seq_len_freq $RSP_SEQ_LEN_FREQ"
+[ -n "$RSP_DELAY" ] &&               ARGS+=" --rsp_delay=$RSP_DELAY"
 
 DISTRIBUTED=${DISTRIBUTED:-"torchrun --standalone --nnodes 1 --nproc_per_node=$NUM_GPUS"}
-${DISTRIBUTED} ./rnnt_train/train.py ${ARGS} 2>&1 | tee $OUTPUT_DIR/training_log_$TIMESTAMP.txt
+${DISTRIBUTED} ${PYTHON_COMMAND} ${ARGS} ${EXTRA_ARGS} 2>&1 | tee $OUTPUT_DIR/training_log_$TIMESTAMP.txt

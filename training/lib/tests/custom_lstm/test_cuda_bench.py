@@ -19,11 +19,11 @@ def time(rnn, X, h0, c0, target, amp, runs):
     def forward():
         if amp:
             with torch.autocast(device_type="cuda"):
-                output, _ = rnn(X, (h0, c0))
+                output, *_ = rnn(X, (h0, c0))
                 loss = cross(output, target)
                 return loss
         else:
-            output, _ = rnn(X, (h0, c0))
+            output, *_ = rnn(X, (h0, c0))
             loss = cross(output, target)
             return loss
 

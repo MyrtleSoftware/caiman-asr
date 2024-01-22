@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Modified by Myrtle
-
 #!/bin/bash
 
 DATASETS=$1
@@ -30,16 +28,23 @@ do
   volumes=$volumes"-v $i:$i "
 done
 
-docker run -it --rm \
-  --gpus='all' \
-  --shm-size=4g \
-  --ulimit memlock=-1 \
-  --ulimit stack=67108864 \
-  -v "$DATASETS":/datasets \
-  -v "$CHECKPOINTS":/checkpoints/ \
-  -v "$RESULTS":/results/ \
-  -v $PWD:/code \
-  -v $PWD:/workspace/rnnt \
-  $volumes \
-  -e TZ=$(cat /etc/timezone) \
-  myrtle/rnnt:v1.5.0 sh -c "./scripts/docker/settimezone.sh && bash"
+: ${DOCKER_NAME:=$(cat docker_name)}
+: ${EXTRA_VOLUMES:="-v $PWD:/workspace/training"}
+: ${COMMAND:="bash"}
+: ${TTY=true}
+
+DOCKER_ARGS=""
+
+if [ "$TTY" = true ] ; then
+  DOCKER_ARGS+="-t "
+fi
+
+DOCKER_ARGS+="-i --rm --gpus=all --shm-size=4g --ulimit memlock=-1 --ulimit stack=67108864 "
+DOCKER_ARGS+="-v $DATASETS:/datasets "
+DOCKER_ARGS+="-v $CHECKPOINTS:/checkpoints/ "
+DOCKER_ARGS+="-v $RESULTS:/results/ "
+DOCKER_ARGS+="-v $PWD:/code "
+DOCKER_ARGS+="$EXTRA_VOLUMES $volumes "
+DOCKER_ARGS+="-e TZ=$(cat /etc/timezone)"
+
+docker run ${DOCKER_ARGS} ${DOCKER_NAME} sh -c "/workspace/training/scripts/docker/settimezone.sh && $COMMAND"

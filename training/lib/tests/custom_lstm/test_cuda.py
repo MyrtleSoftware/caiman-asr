@@ -1,5 +1,3 @@
-from random import choice, sample
-
 import pytest
 import torch
 
@@ -15,7 +13,7 @@ from rnnt_ext.custom_lstm.legacy import CustomLSTM as Legacy
 @pytest.mark.parametrize("batch_size", [1, 3])
 @pytest.mark.parametrize("input_size", [1, 2])
 @pytest.mark.parametrize("hidden_size", [1, 5])
-@pytest.mark.parametrize("layer_function", [CUDA.soft_layer_fun, CUDA.soft_layer_fun])
+@pytest.mark.parametrize("layer_function", [CUDA.soft_layer_fun, CUDA.hard_layer_fun])
 def test_derivatives(seq_length, batch_size, input_size, hidden_size, layer_function):
     #
     kwargs = {
@@ -38,7 +36,7 @@ def test_derivatives(seq_length, batch_size, input_size, hidden_size, layer_func
     variables = [X, W, R, BW, BR]
 
     def stub(X, W, R, BW, BR):
-        out, _ = layer_function.apply(h0, c0, X, W, R, BW, BR)
+        out, _, _ = layer_function.apply(h0, c0, X, W, R, BW, BR)
         return out
 
     assert torch.autograd.gradcheck(stub, variables)
@@ -96,7 +94,7 @@ def check_values(
     def forward(rnn, X):
         if amp:
             with torch.autocast(device_type="cuda"):
-                output, (hn, cn) = rnn(X, (h0, c0))
+                output, (hn, cn), *_ = rnn(X, (h0, c0))
 
                 # One hot target
                 target = torch.zeros_like(output)
@@ -107,7 +105,7 @@ def check_values(
 
                 return output, (hn, cn), loss
         else:
-            output, (hn, cn) = rnn(X, (h0, c0))
+            output, (hn, cn), *_ = rnn(X, (h0, c0))
 
             # One hot target
             target = torch.zeros_like(output)

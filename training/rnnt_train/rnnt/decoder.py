@@ -13,34 +13,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from abc import ABC, abstractmethod
+
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
-from .model import label_collate
+from rnnt_train.rnnt.model import label_collate
 
 
-class RNNTGreedyDecoder:
-    """A greedy transducer decoder.
-
-    Args:
-        blank_symbol: See `Decoder`.
-        model: Model to use for prediction.
-        max_symbols_per_step: The maximum number of symbols that can be added
-            to a sequence in a single time step; if set to None then there is
-            no limit.
-        cutoff_prob: Skip to next step in search if current highest character
-            probability is less than this.
-    """
-
-    def __init__(self, blank_idx, max_symbols_per_step=30, max_symbol_per_sample=None):
+class RNNTDecoder(ABC):
+    def __init__(self, blank_idx, max_symbol_per_sample, max_symbols_per_step, lm_info):
         self.blank_idx = blank_idx
         assert max_symbols_per_step is None or max_symbols_per_step > 0
         self.max_symbols = max_symbols_per_step
         assert max_symbol_per_sample is None or max_symbol_per_sample > 0
         self.max_symbol_per_sample = max_symbol_per_sample
-        self._SOS = -1  # start of sequence
+        self._SOS = -1  # start of sequence token
+        self.lm_info = lm_info
 
     def _pred_step(self, model, label, hidden, device):
         if label == self._SOS:
@@ -53,85 +43,43 @@ class RNNTGreedyDecoder:
         logits = model.joint(enc, pred)[:, 0, 0, :]
 
         if log_normalize:
-            probs = F.log_softmax(logits, dim=len(logits.shape) - 1)
-            return probs
+            logprobs = F.log_softmax(logits, dim=len(logits.shape) - 1)
+            return logprobs
         else:
             return logits
 
-    def decode(self, model, x, out_lens, dumptype=None, dumpidx=None):
+    def decode(self, model, feats, feat_lens, dumptype=None, dumpidx=None):
         """Returns a list of sentences given an input batch.
 
         Args:
-            x: A tensor of size (batch, channels, features, seq_len)
-            out_lens: list of int representing the length of each sequence
-                output sequence.
+            model     : RNN-T model to use for decoding
+            feats     : a tensor of logmels, shape (seq_len, batch, feat_dim)
+            feat_lens : list of int representing the length of each sequence of features, shape (batch,)
 
         Returns:
-            list containing batch number of sentences (strings).
+            list of lists of decoded tokens, one sequence for each member of the batch
         """
         model = getattr(model, "module", model)
         with torch.no_grad():
-            # Apply optional preprocessing
-
-            logits, out_lens = model.encode(x, out_lens)
+            # encs     is shape (batch, time, enc_dim)
+            # enc_lens is shape (batch,)
+            encs, enc_lens, _ = model.encode(feats, feat_lens)
 
             if dumptype:
-                np.save(f"/results/{dumptype}enc{dumpidx}.npy", logits.numpy())
+                np.save(f"/results/{dumptype}enc{dumpidx}.npy", encs.numpy())
 
             output = []
-            for batch_idx in range(logits.size(0)):
-                inseq = logits[batch_idx, :, :].unsqueeze(1)
-                logitlen = out_lens[batch_idx]
-                sentence = self._greedy_decode(
-                    model, inseq, logitlen, dumptype, dumpidx
+            for batch_idx in range(encs.size(0)):
+                # this_enc is shape (time, 1, enc_dim)
+                this_enc = encs[batch_idx, :, :].unsqueeze(1)
+                this_len = enc_lens[batch_idx]
+                sentence = self._inner_decode(
+                    model, this_enc, this_len, dumptype, dumpidx
                 )
                 output.append(sentence)
 
         return output
 
-    def _greedy_decode(self, model, x, out_len, dumptype, dumpidx):
-        training_state = model.training
-        model.eval()
-
-        device = x.device
-
-        hidden = None
-        label = []
-        for time_idx in range(out_len):
-            if (
-                self.max_symbol_per_sample is not None
-                and len(label) > self.max_symbol_per_sample
-            ):
-                break
-            f = x[time_idx, :, :].unsqueeze(0)
-
-            not_blank = True
-            symbols_added = 0
-
-            while not_blank and (
-                self.max_symbols is None or symbols_added < self.max_symbols
-            ):
-                g, hidden_prime = self._pred_step(
-                    model, self._SOS if label == [] else label[-1], hidden, device
-                )
-                logp = self._joint_step(model, f, g, log_normalize=False)[0, :]
-
-                if dumptype:
-                    np.save(
-                        f"/results/{dumptype}logp{dumpidx}.{time_idx}.{symbols_added}.npy",
-                        logp.numpy(),
-                    )
-
-                # get index k, of max prob
-                v, k = logp.max(0)
-                k = k.item()
-
-                if k == self.blank_idx:
-                    not_blank = False
-                else:
-                    label.append(k)
-                    hidden = hidden_prime
-                symbols_added += 1
-
-        model.train(training_state)
-        return label
+    @abstractmethod
+    def _inner_decode(self, model, x, x_len, dumptype, dumpidx):
+        pass

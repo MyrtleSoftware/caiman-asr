@@ -15,13 +15,13 @@
 # modified by rob@myrtle
 
 import math
-from typing import Optional
 
 import numpy as np
 import nvidia.dali
 import nvidia.dali.ops as ops
 import nvidia.dali.types as types
 import torch
+from beartype.typing import Optional
 
 from rnnt_train.common.data.webdataset import WebDatasetReader
 
@@ -70,11 +70,17 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
         preemph_coeff,
         max_duration,
         normalize,
+        seed: int,
         preprocessing_device="gpu",
         webdataset_reader: Optional[WebDatasetReader] = None,
         no_logging: bool = False,
     ):
-        super().__init__(batch_size, num_threads, device_id)
+        super().__init__(
+            batch_size,
+            num_threads,
+            device_id,
+            seed=seed,
+        )
 
         if not no_logging:
             self._dali_init_log(locals())
@@ -199,6 +205,7 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
         config_features: dict,
         normalize: bool,
         num_cpu_threads: int,
+        seed: int,
         device_type: str = "gpu",
         do_resampling: bool = True,
         *args,
@@ -242,6 +249,7 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
             preemph_coeff=preemph_coeff,
             max_duration=max_duration,
             normalize=normalize,
+            seed=seed,
             *args,
             **kwargs,
         )
@@ -293,8 +301,6 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
 
         if self.do_remove_silence:
             audio = self._remove_silence(audio)
-
-        # Max duration drop is performed at DataLayer stage
 
         if self.preprocessing_device == "gpu":
             audio = audio.gpu()

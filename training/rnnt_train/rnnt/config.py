@@ -16,21 +16,21 @@ import copy
 import inspect
 
 import yaml
+from beartype.typing import Dict
 
 from rnnt_train.common.data import features
 from rnnt_train.common.data.dali.pipeline import PipelineParams, SpeedPerturbationParams
+from rnnt_train.common.data.grad_noise_scheduler import GradNoiseScheduler
 from rnnt_train.common.data.text import Tokenizer
-from rnnt_train.common.helpers import print_once
-
-from .model import RNNT
+from rnnt_train.rnnt.model import RNNT
 
 
-def default_args(klass):
+def default_args(klass) -> Dict:
     sig = inspect.signature(klass.__init__)
     return {k: v.default for k, v in sig.parameters.items() if k != "self"}
 
 
-def load(fpath, max_duration=None):
+def load(fpath, max_duration=None) -> Dict:
     if fpath.endswith(".toml"):
         raise ValueError(".toml config format has been changed to .yaml")
 
@@ -48,11 +48,14 @@ def load(fpath, max_duration=None):
     return cfg
 
 
-def validate_and_fill(klass, user_conf, ignore=[], optional=[]):
+def validate_and_fill(klass, user_conf, ignore=[], optional=[], deprecated=[]):
     conf = default_args(klass)
 
+    to_ignore = set(ignore).union(deprecated)
     for k, v in user_conf.items():
-        assert k in conf or k in ignore, f"Unknown parameter {k} for {klass}"
+        assert k in conf or k in to_ignore, f"Unknown parameter {k} for {klass}"
+        if k in deprecated:
+            continue
         conf[k] = v
 
     # Keep only mandatory or optional-nonempty
@@ -110,15 +113,19 @@ def input(conf_yaml, split="train"):
     return conf_dataset, conf_features, conf_splicing, conf_specaugm
 
 
-def rnnt(conf):
-    return validate_and_fill(RNNT, conf["rnnt"], optional=["n_classes"])
+def grad_noise_scheduler(conf) -> Dict:
+    """ """
+    return validate_and_fill(GradNoiseScheduler, conf["grad_noise_scheduler"])
 
 
-def tokenizer(conf):
+def rnnt(conf) -> Dict:
+    return validate_and_fill(
+        RNNT,
+        conf["rnnt"],
+        optional=["n_classes"],
+        deprecated=["hard_activation_functions"],
+    )
+
+
+def tokenizer(conf) -> Dict:
     return validate_and_fill(Tokenizer, conf["tokenizer"], optional=["sentpiece_model"])
-
-
-def apply_duration_flags(cfg, max_duration):
-    if max_duration is not None:
-        cfg["input_train"]["audio_dataset"]["max_duration"] = max_duration
-        cfg["input_train"]["filterbank_features"]["max_duration"] = max_duration

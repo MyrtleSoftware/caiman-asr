@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-# Copyright (c) 2022 Myrtle.ai
 # iria [& rob]
 
 path="/datasets/CommonVoice/cv-corpus-10.0-2022-07-04/en"

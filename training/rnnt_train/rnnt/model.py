@@ -1,5 +1,6 @@
 # Copyright (c) 2019, Myrtle Software Limited. All rights reserved.
-# Copyright (c) 2019, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2019-2021, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2022-2023, Myrtle Software Limited. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,10 +21,15 @@ from itertools import chain
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from apex.contrib.transducer import TransducerJoint
+from beartype import beartype
+from beartype.typing import Optional
+from jaxtyping import Int, jaxtyped
 
 from rnnt_train.common.helpers import print_once
 from rnnt_train.common.rnn import rnn
+from rnnt_train.common.rsp import get_pred_net_state, maybe_get_last_nonpadded
+from rnnt_train.rnnt.state import EncoderState, PredNetState, RNNTState
 
 
 class StackTime(nn.Module):
@@ -59,6 +65,15 @@ class RNNT(nn.Module):
         pred_rnn_layers: Prediction network number of layers.
         joint_n_hid: Internal hidden unit size of the joint network.
         *lr_factor: network or layer-specific learning rate factor.
+        joint_apex_transducer: If not None, use the TransducerJoint implementation.
+            There are two valid non-None values of
+            joint_apex_transducer={'pack', 'not_pack'}. 'pack' means that the output
+            from the joint, and hence the RNNT model, will have padded elements removed.
+            This is ignored at inference time as we always use the torch version.
+        joint_apex_relu_dropout: If True, this requires bool(joint_apex_transducer)=True,
+            the joint network's relu and dropout calculations take place in the
+            TransducerJoint implementation rather than native PyTorch. This is ignored
+            at inference time as we always use the torch version.
     """
 
     def __init__(
@@ -79,8 +94,9 @@ class RNNT(nn.Module):
         joint_n_hid,
         forget_gate_bias,
         custom_lstm=False,
-        hard_activation_functions=False,
         quantize=False,
+        enc_rw_dropout=0.0,
+        pred_rw_dropout=0.0,
         hidden_hidden_bias_scale=0.0,
         weights_init_scale=1.0,
         enc_lr_factor=1.0,
@@ -88,28 +104,44 @@ class RNNT(nn.Module):
         joint_enc_lr_factor=1.0,
         joint_pred_lr_factor=1.0,
         joint_net_lr_factor=1.0,
+        joint_apex_transducer=None,
+        joint_apex_relu_dropout=False,
+        enc_freeze=False,
         gpu_unavailable=False,
     ):
         super(RNNT, self).__init__()
+        if joint_apex_relu_dropout and not joint_apex_transducer:
+            raise ValueError(
+                "Can't have joint_apex_relu_dropout=True without bool(joint_apex_transducer)==True"
+            )
+        if joint_apex_transducer is not None:
+            assert joint_apex_transducer in {"pack", "not_pack"}
 
-        self.enc_lr_factor = enc_lr_factor
-        self.pred_lr_factor = pred_lr_factor
-        self.joint_enc_lr_factor = joint_enc_lr_factor
-        self.joint_pred_lr_factor = joint_pred_lr_factor
-        self.joint_net_lr_factor = joint_net_lr_factor
+        self._module_to_lr_factor = {
+            "encoder": enc_lr_factor,
+            "prediction": pred_lr_factor,
+            "joint_enc": joint_enc_lr_factor,
+            "joint_pred": joint_pred_lr_factor,
+            "joint_net": joint_net_lr_factor,
+        }
 
         self.pred_n_hid = pred_n_hid
 
         pre_rnn_input_size = in_feats
 
-        post_rnn_input_size = enc_stack_time_factor * enc_n_hid
+        self.enc_stack_time_factor = enc_stack_time_factor
+        post_rnn_input_size = self.enc_stack_time_factor * enc_n_hid
 
         if custom_lstm:
             print_once("Using Custom LSTM")
-            if hard_activation_functions:
-                print_once("Using hard activation functions")
             if quantize:
                 print_once("Using Quantization")
+            if enc_rw_dropout:
+                print_once(f"Using encoder recurrent weight dropout {enc_rw_dropout}")
+            if pred_rw_dropout:
+                print_once(
+                    f"Using prediction recurrent weight dropout {pred_rw_dropout}"
+                )
         else:
             print_once("Using PyTorch LSTM")
 
@@ -121,8 +153,8 @@ class RNNT(nn.Module):
             batch_norm=enc_batch_norm,
             forget_gate_bias=forget_gate_bias,
             custom_lstm=custom_lstm,
-            hard_activation_functions=hard_activation_functions,
             quantize=quantize,
+            rw_dropout=enc_rw_dropout,
             hidden_hidden_bias_scale=hidden_hidden_bias_scale,
             weights_init_scale=weights_init_scale,
             dropout=enc_dropout,
@@ -130,7 +162,7 @@ class RNNT(nn.Module):
             gpu_unavailable=gpu_unavailable,
         )
 
-        enc_mod["stack_time"] = StackTime(enc_stack_time_factor)
+        enc_mod["stack_time"] = StackTime(self.enc_stack_time_factor)
 
         enc_mod["post_rnn"] = rnn(
             input_size=post_rnn_input_size,
@@ -139,8 +171,8 @@ class RNNT(nn.Module):
             batch_norm=enc_batch_norm,
             forget_gate_bias=forget_gate_bias,
             custom_lstm=custom_lstm,
-            hard_activation_functions=hard_activation_functions,
             quantize=quantize,
+            rw_dropout=enc_rw_dropout,
             hidden_hidden_bias_scale=hidden_hidden_bias_scale,
             weights_init_scale=weights_init_scale,
             dropout=enc_dropout,
@@ -149,6 +181,9 @@ class RNNT(nn.Module):
         )
 
         self.encoder = torch.nn.ModuleDict(enc_mod)
+
+        # Turn off encoder gradients if enc_freeze == True
+        self.encoder.requires_grad_(not enc_freeze)
 
         pred_embed = torch.nn.Embedding(n_classes - 1, pred_n_hid)
 
@@ -162,8 +197,8 @@ class RNNT(nn.Module):
                     batch_norm=pred_batch_norm,
                     forget_gate_bias=forget_gate_bias,
                     custom_lstm=custom_lstm,
-                    hard_activation_functions=hard_activation_functions,
                     quantize=quantize,
+                    rw_dropout=pred_rw_dropout,
                     hidden_hidden_bias_scale=hidden_hidden_bias_scale,
                     weights_init_scale=weights_init_scale,
                     dropout=pred_dropout,
@@ -182,17 +217,78 @@ class RNNT(nn.Module):
             torch.nn.Linear(joint_n_hid, n_classes),
         )
 
-    def forward(self, x, x_lens, y, y_lens, state=None):
+        # ReLU & Dropout will be applied in TransducerJoint during training if
+        # joint_apex_transducer=joint_apex_relu_dropout=True. However, during
+        # inference we don't use TransducerJoint so we need:
+        self.relu_drop = self.joint_net[:2]
+        self.joint_fc = self.joint_net[-1]
+
+        self.joint_apex_transducer = joint_apex_transducer
+        if joint_apex_transducer is not None:
+            pack_output = self.joint_apex_transducer == "pack"
+            if joint_apex_relu_dropout:
+                self.apex_joint = TransducerJoint(
+                    pack_output=pack_output,
+                    relu=True,
+                    dropout=True,
+                    dropout_prob=joint_dropout,
+                )
+            else:
+                self.apex_joint = TransducerJoint(pack_output=pack_output)
+
+    def enc_pred(
+        self,
+        x,
+        x_lens,
+        y,
+        y_lens,
+        pred_net_state: Optional[PredNetState] = None,
+        enc_state: Optional[EncoderState] = None,
+    ):
+        """
+        Returns tuple of tuples of encoder and pred net outputs and their lengths.
+        """
         y = label_collate(y)
 
-        f, x_lens = self.encode(x, x_lens)
+        f, x_lens, new_enc_state = self.encode(x, x_lens, enc_state=enc_state)
 
-        g, _ = self.predict(y, state)
-        out = self.joint(f, g)
+        g, _, all_pred_hid = self.predict(
+            y,
+            pred_state=pred_net_state.next_to_last_pred_state
+            if pred_net_state
+            else None,
+            add_sos=True,
+            special_sos=pred_net_state.last_token if pred_net_state else None,
+        )
+        # predict adds +1 to y_lens
+        g_lens = y_lens + 1
+        pred_net_state = get_pred_net_state(y, all_pred_hid, y_lens, g_lens)
+        if new_enc_state is not None and pred_net_state is not None:
+            rnnt_state = RNNTState(
+                enc_state=new_enc_state, pred_net_state=pred_net_state
+            )
+        else:
+            rnnt_state = None
+        return (f, x_lens), (g, g_lens), rnnt_state
 
-        return out, x_lens
+    def forward(
+        self,
+        x,
+        x_lens,
+        y,
+        y_lens,
+        pred_net_state: Optional[PredNetState] = None,
+        batch_offset=None,
+        enc_state: Optional[EncoderState] = None,
+    ):
+        (f, x_lens), (g, g_lens), new_rnnt_state = self.enc_pred(
+            x, x_lens, y, y_lens, pred_net_state=pred_net_state, enc_state=enc_state
+        )
+        out = self.joint(f, g, x_lens, g_lens, batch_offset)
 
-    def encode(self, x, x_lens):
+        return out, x_lens, new_rnnt_state
+
+    def encode(self, x, x_lens, enc_state: Optional[EncoderState] = None):
         """
         Args:
             x: tuple of ``(input, input_lens)``. ``input`` has shape (T, B, I),
@@ -202,13 +298,35 @@ class RNNT(nn.Module):
             f: tuple of ``(output, output_lens)``. ``output`` has shape
                 (B, T, H), ``output_lens``
         """
-        x, _ = self.encoder["pre_rnn"](x, None)
+        x, _, all_pre_rnn_hid = self.encoder["pre_rnn"](
+            x, enc_state.pre_rnn if enc_state else None
+        )
+        staggered_pre_rnn_hid = maybe_get_last_nonpadded(all_pre_rnn_hid, x_lens)
         x, x_lens = self.encoder["stack_time"](x, x_lens)
-        x, _ = self.encoder["post_rnn"](x, None)
+        x, _, all_post_rnn_hid = self.encoder["post_rnn"](
+            x, enc_state.post_rnn if enc_state else None
+        )
+        staggered_post_rnn_hid = maybe_get_last_nonpadded(all_post_rnn_hid, x_lens)
+        x = x.transpose(0, 1)
+        x = self.joint_enc(x)
+        if all_pre_rnn_hid is not None and all_post_rnn_hid is not None:
+            new_enc_state = EncoderState(
+                pre_rnn=staggered_pre_rnn_hid,
+                post_rnn=staggered_post_rnn_hid,
+            )
+        else:
+            new_enc_state = None
+        return x, x_lens, new_enc_state
 
-        return x.transpose(0, 1), x_lens
-
-    def predict(self, y, state=None, add_sos=True):
+    @jaxtyped
+    @beartype
+    def predict(
+        self,
+        y,
+        pred_state=None,
+        add_sos: bool = True,
+        special_sos: Optional[Int[torch.Tensor, "B 1"]] = None,
+    ):
         """
         B - batch size
         U - label length
@@ -217,6 +335,8 @@ class RNNT(nn.Module):
 
         Args:
             y: (B, U)
+            special_sos: If not None, use this as the "start of sequence" symbol and then embed it.
+                         If None, use a zero vector as the "start of sequence" embedding.
 
         Returns:
             Tuple (g, hid) where:
@@ -230,7 +350,7 @@ class RNNT(nn.Module):
             # (B, U) -> (B, U, H)
             y = self.prediction["embed"](y)
         else:
-            B = 1 if state is None else state[0].size(1)
+            B = 1 if pred_state is None else pred_state[0].size(1)
             y = torch.zeros((B, 1, self.pred_n_hid)).to(
                 device=self.joint_enc.weight.device, dtype=self.joint_enc.weight.dtype
             )
@@ -238,55 +358,94 @@ class RNNT(nn.Module):
         # preprend blank "start of sequence" symbol
         if add_sos:
             B, U, H = y.shape
-            start = torch.zeros((B, 1, H)).to(device=y.device, dtype=y.dtype)
+            sos_embedding = (
+                torch.zeros((B, 1, H))
+                if special_sos is None
+                else self.prediction["embed"](special_sos)
+            )
+            start = sos_embedding.to(device=y.device, dtype=y.dtype)
             y = torch.cat([start, y], dim=1).contiguous()  # (B, U + 1, H)
         else:
             start = None  # makes del call later easier
 
         y = y.transpose(0, 1)  # .contiguous()   # (U + 1, B, H)
-        g, hid = self.prediction["dec_rnn"](y, state)
+        g, hid, all_hid = self.prediction["dec_rnn"](y, pred_state)
         g = g.transpose(0, 1)  # .contiguous()   # (B, U + 1, H)
-        del y, start, state
-        return g, hid
+        del y, start, pred_state
+        g = self.joint_pred(g)
+        return g, hid, all_hid
 
-    def joint(self, f, g):
+    def joint(self, f, g, f_len=None, g_len=None, batch_offset=None):
         """
         f should be shape (B, T, H)
         g should be shape (B, U + 1, H)
 
         returns:
-            logits of shape (B, T, U, K + 1)
+            logits of shape (B, T, U + 1, K + 1) if not self.apex_joint.pack_output. If
+            pack_output=True, all padded logits are removed from the output and the
+            returned tensor is of the shape (<number non-padded logits>, K + 1). The number
+            of these non-padded logits ('packed_batch' in call to TransducerJoint) is
+            strictly <= (B * T * (U + 1)).
         """
-        # Combine the input states and the output states
-        f = self.joint_enc(f)
-        g = self.joint_pred(g)
+        if self.joint_apex_transducer is None or f_len is None or g_len is None:
+            h = self.relu_drop(self.torch_transducer_joint(f, g, f_len, g_len))
+        else:
+            assert batch_offset is not None
+            h = self.apex_joint(
+                f,
+                g,
+                f_len,
+                g_len,
+                batch_offset=batch_offset,
+                packed_batch=batch_offset[-1].item(),
+            )
+            if not self.apex_joint.relu:
+                h = self.relu_drop(h)
 
-        f = f.unsqueeze(dim=2)  # (B, T, 1, H)
-        g = g.unsqueeze(dim=1)  # (B, 1, U + 1, H)
+        res = self.joint_fc(h)
 
-        res = self.joint_net(f + g)
-
-        del f, g
+        del f, g, h
         return res
 
-    def param_groups(self, lr):
+    @staticmethod
+    def torch_transducer_joint(f, g, f_len=None, g_len=None):
+        f = f.unsqueeze(dim=2)  # (B, T, 1, H)
+        g = g.unsqueeze(dim=1)  # (B, 1, U + 1, H)
+        h = f + g  # (B, T, U + 1, H)
+        del f, g
+        return h
+
+    def param_groups(self, lr, return_module_name=False):
         chain_params = lambda *layers: chain(*[l.parameters() for l in layers])
-        return [
-            {"params": chain_params(self.encoder), "lr": lr * self.enc_lr_factor},
-            {"params": chain_params(self.prediction), "lr": lr * self.pred_lr_factor},
-            {
-                "params": chain_params(self.joint_enc),
-                "lr": lr * self.joint_enc_lr_factor,
-            },
-            {
-                "params": chain_params(self.joint_pred),
-                "lr": lr * self.joint_pred_lr_factor,
-            },
-            {
-                "params": chain_params(self.joint_net),
-                "lr": lr * self.joint_net_lr_factor,
-            },
-        ]
+
+        out = []
+        for name, lr_factor in self._module_to_lr_factor.items():
+            res = {"params": chain_params(getattr(self, name)), "lr": lr * lr_factor}
+            if return_module_name:
+                res["module_name"] = name
+            out.append(res)
+        return out
+
+    def state_dict(self):
+        """
+        Return model state dict with joint_fc.weight and joint_fc.bias keys removed,
+        as they are exact duplicates of joint_net.2.weight and joint_net.2.bias, respectively.
+        """
+        sd = super().state_dict()
+        sd.pop("joint_fc.weight")
+        sd.pop("joint_fc.bias")
+        return sd
+
+    def load_state_dict(self, state_dict, strict=True):
+        """
+        Add joint_fc keys back to loaded state dict,
+        by duplicating joint_net.2 parameters.
+        """
+        state_dict["joint_fc.weight"] = (
+            state_dict["joint_net.2.weight"].detach().clone()
+        )
+        state_dict["joint_fc.bias"] = state_dict["joint_net.2.bias"].detach().clone()
+        super().load_state_dict(state_dict, strict=strict)
 
 
 def label_collate(labels):

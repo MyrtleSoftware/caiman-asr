@@ -12,24 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# modified from launch.sh by rob@myrtle
 
 #!/bin/bash
 
-DATASETS=$1
-CHECKPOINTS=$2
-RESULTS=$3
+RESULTS=$1
+: ${PORT:=${2:-6010}}
+
+DOCKER_NAME=$(cat docker_name)
 
 docker run -it --rm \
   --gpus='all' \
   --shm-size=4g \
   --ulimit memlock=-1 \
   --ulimit stack=67108864 \
-  -v "$DATASETS":/datasets \
-  -v "$CHECKPOINTS":/checkpoints/ \
   -v "$RESULTS":/results/ \
   -v $PWD:/code \
-  -v $PWD:/workspace/rnnt \
-  -p 6010:6010 \
+  -v $PWD:/workspace/training \
+  -p $PORT:$PORT \
   -e TZ=$(cat /etc/timezone) \
-  myrtle/rnnt:v1.5.0 sh -c "./scripts/docker/settimezone.sh && bash"
+  "$DOCKER_NAME" sh -c "./scripts/docker/settimezone.sh && tensorboard --logdir /results --host 0.0.0.0 --port $PORT"

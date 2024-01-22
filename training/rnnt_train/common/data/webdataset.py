@@ -1,15 +1,16 @@
 import io
 from pathlib import Path
-from typing import List, Optional
 
 import librosa
 import numpy as np
 import soundfile as sf
 import torch.distributed as dist
+from beartype.typing import List, Optional
 from torchdata.dataloader2 import (
     DataLoader2,
     DistributedReadingService,
     MultiProcessingReadingService,
+    SequentialReadingService,
 )
 from torchdata.datapipes.iter import BucketBatcher, FileLister, FileOpener
 
@@ -159,11 +160,16 @@ class WebDatasetReader:
             file_lister = file_lister.shuffle()
 
         world_size = dist.get_world_size() if dist.is_initialized() else 1
-        assert len(list(file_lister)) >= world_size, (
-            f"Number of tar files ({len(list(file_lister))}) must be greater than or "
+        num_tar_files = len(list(file_lister))
+        assert num_tar_files >= world_size, (
+            f"Number of tar files ({num_tar_files}) must be greater than or "
             f"equal to the number of nodes ({world_size}) otherwise we can't shard data "
             "across nodes"
         )
+        # We need num_workers * world_size to be at most the number of tar files
+        # so that each worker has a tar file to read. We also want as many
+        # workers per process as possible, up to a maximum of 4.
+        num_workers = min(num_tar_files // world_size, 4)
         # apply sharding across nodes here
         file_lister = file_lister.sharding_filter()
 
@@ -183,10 +189,12 @@ class WebDatasetReader:
 
         # finally, create the reading service and dataloader
         if world_size == 1:
-            dist_rs = None
+            rs = None
         else:
+            mp_rs = MultiProcessingReadingService(num_workers=num_workers)
             dist_rs = DistributedReadingService()
-        self.dataloader = DataLoader2(self._webdataset_pipe, reading_service=dist_rs)
+            rs = SequentialReadingService(dist_rs, mp_rs)
+        self.dataloader = DataLoader2(self._webdataset_pipe, reading_service=rs)
 
     @staticmethod
     def _manipulate_key(key):

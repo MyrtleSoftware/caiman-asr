@@ -18,7 +18,6 @@ import multiprocessing
 #!/usr/bin/env python
 import os
 
-import librosa
 import sox
 from tqdm import tqdm
 

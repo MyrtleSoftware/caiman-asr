@@ -5,7 +5,7 @@
 1.  [Installation](#installation)
 2.  [Models](#models)
 3.  [Data](#data)
-4.  [Training](#training)
+4.  [Training Commands](#training)
 5.  [Validation Sets](#validation)
 6.  [Validation on CPU](#valcpu)
 7.  [Hardware Inference Server Support](#server)
@@ -43,38 +43,43 @@ newgrp docker
 cd training
 ./scripts/docker/build.sh
 ```
+
+### Requirements
+
+Currently, the reference uses CUDA-12.2 (see [Dockerfile](Dockerfile#L15)).
+Here you can find a table listing compatible drivers: https://docs.nvidia.com/deploy/cuda-compatibility/index.html#binary-compatibility__table-toolkit-driver
+
+### Contributing
+
+If you are planning to contribute to this repository, please follow the install steps in [CONTRIBUTING.md](./docs/CONTRIBUTING.md#dev_install).
+
 ### Start an interactive session in the Docker container to run data download, training and inference <a name="run-container"></a>
 
 ```
 ./scripts/docker/launch.sh <DATASETS> <CHECKPOINTS> <RESULTS>
 ```
 
-Within the container, the contents of this repository will be copied to the `/workspace/rnnt` directory.
+Within the container, the contents of the `training` directory will be copied to the `/workspace/training` directory.
 The container directories `/datasets`, `/checkpoints`, and `/results` are mounted as volumes
 and mapped to the corresponding directories `<DATASETS>`, `<CHECKPOINTS>`, `<RESULTS>` on the host.
 
-Note that the host directories passed to docker/launch.sh must have absolute paths.  Note also that, at
-present, /checkpoints is not actually used; checkpoints are written to and read from /results;
-this may change in the future.
+Note that the host directories passed to `./scripts/docker/launch.sh` must have absolute paths.  Checkpoints are saved to the  `/results` folder during training so it is sometimes convenient to load checkpoints from `/results` rather than from `/checkpoints`.
 
-If your `<DATASETS>` folder contains symlinks to other drives (i.e. if your data is too large to fit on a single drive), they will not be accessible from within the running container. In this case, you can pass the absolute paths to your N drives as the 4th to (N + 3)th arguments to `./scripts/docker/launch.sh`. This will enable the container to follow symlinks to these drives.
+If your `<DATASETS>` folder contains symlinks to other drives (i.e. if your data is too large to fit on a single drive), they will not be accessible from within the running container. In this case, you can pass the absolute paths to your drives as the 4th, 5th, 6th, ... arguments to `./scripts/docker/launch.sh`. This will enable the container to follow symlinks to these drives.
 
-### Requirements
-Currently, the reference uses CUDA-12.2 (see [Dockerfile](Dockerfile#L15)).
-Here you can find a table listing compatible drivers: https://docs.nvidia.com/deploy/cuda-compatibility/index.html#binary-compatibility__table-toolkit-driver
 
 # 2. Models <a name="models"></a>
 
-We support the following RNN-T model configurations:
+Before training, you must select the model configuration you wish to train. Please refer to the [top-level README.md](../README.md#model-configs) for a description of the options available. Having selected a configuration it is necessary to note the config path and sentencepiece vocab size ("spm size") of your chosen config from the following table as these will be needed in the data preprocessing steps below:
 
-| **Name**    | **Parameters** | **spm size** | **config**                                           |
-|-------------|----------------|--------------|------------------------------------------------------|
-| `testing` | 49M            | 1023         | [testing-1023sp.yaml](./configs/testing-1023sp.yaml) |
-| `base`   | 85M            | 8703         | [base-8703sp.yaml](./configs/base-8703sp.yaml)       |
 
-where 'spm size' is the size of the sentencepiece model used for tokenization.
+|    Name   | Parameters | spm size |                        config                        | Acceleration supported?  |
+|:---------:|:----------:|:--------:|:----------------------------------------------------:|--------------------------|
+| `testing` | 49M        |     1023 | [testing-1023sp.yaml](./configs/testing-1023sp.yaml) | :heavy_multiplication_x: |
+| `base`    | 85M        |     8703 | [base-8703sp.yaml](./configs/base-8703sp.yaml)       | :white_check_mark:       |
+| `large`   | 196M       |    17407 | [large-17407sp.yaml](./configs/large-17407sp.yaml)   | :white_check_mark:       |
 
-The `testing` model is quicker to train and is used in the LibriSpeech and CommonVoice examples below. However, we recommend using the `base` model for training on proprietary data as this model (unlike `testing`) has been optimised for inference on FPGA with Myrtle's IP to achieve high-utilisation of the available resources. This `base` config was chosen after a hyperparameter search on 10k hrs of training data.
+The `testing` config is not described in the [top-level README.md](../README.md#model-configs) as it is not supported on the accelerator. This configuration is included because it is quicker to train than either `base` or `large`. It is recommended to train the `testing` model on either LibriSpeech or CommonVoice as described below before training `base` or `large` on your own data.
 
 The configs referenced above are not intended to be edited directly.  Instead, they are used as templates to create `<config-name>_run.yaml` files in the preprocessing section below.
 
@@ -85,29 +90,27 @@ This repository supports reading data from two formats. These are:
 1. `json`: All audio as wav (or flac) files in a single directory hierarchy with transcripts in [json file(s)](examples/example.json) referencing these audio files.
 2. `webdataset`: Audio `<key>.{flac,wav}` files stored with associated `<key>.txt` transcripts in tar file shards. Format described [here](https://github.com/webdataset/webdataset#the-webdataset-format).
 
-In this README we will describe how to download and preprocess data in the `json` format. If you want to use the `webdataset` format you should go to the [WebDataset README](./examples/WebDataset.md). We provide `json` examples for the following datasets:
+In this README there are instructions for how to download and preprocess data in the `json` format. To use the `webdataset` format see the [WebDataset README](./docs/WebDataset.md). `json` examples are provided for the following datasets:
 
 * LibriSpeech [http://www.openslr.org/12](http://www.openslr.org/12)
 * CommonVoice [https://commonvoice.mozilla.org/en/datasets](https://commonvoice.mozilla.org/en/datasets)
 
 To train on your own proprietary dataset you will need to arrange for it to be in the same format produced
-by the data download and preprocessing scripts below. We recommend reading through both examples below and suggest working through
-at least the LibriSpeech example before trying to train on your own data.
+by the data download and preprocessing scripts below.
 
 ## 3.1 Data Download
 
 No GPU is required for data download and preprocessing. Therefore, if GPU usage is a limited resource, launch
 the container for this section on a CPU-only machine via `./scripts/docker/launch.sh` as described above.
 
-Note: Downloading and preprocessing the dataset requires up to 1TB of free disk space and can take several
+Note: Downloading and preprocessing LibriSpeech and CommonVoice requires up to 1TB of free disk space and can take several
 hours to complete.
 
 #### LibriSpeech
 
 LibriSpeech contains 1000 hours of 16kHz read English speech derived from public domain audiobooks from
 LibriVox project and has been carefully segmented and aligned. For more information, see the [LIBRISPEECH: AN
-ASR CORPUS BASED ON PUBLIC DOMAIN AUDIO BOOKS](http://www.danielpovey.com/files/2015_icassp_librispeech.pdf)
-paper.
+ASR CORPUS BASED ON PUBLIC DOMAIN AUDIO BOOKS](http://www.danielpovey.com/files/2015_icassp_librispeech.pdf) paper.
 
 Inside the container, download and extract the datasets into the required format for later training and
 inference:
@@ -153,9 +156,9 @@ After downloading and untarring the following files and folders should exist on 
 Since `/datasets/` is mounted to `<DATASETS>` on the host, once the dataset is downloaded it will be accessible
 from inside the container at `/datasets/CommonVoice`.
 
-## 3.2 Data Preprocessing
+## 3.2 Data Preprocessing <a name="data_preprocess"></a>
 
-Note that while the scripts below prepare wav files the NVIDIA DALI code that loads the speech can also
+Note that while the scripts below prepare wav files, the NVIDIA DALI code that loads the speech can also
 load flac and ogg files.  In our experiments we have found training on flac files to be just as fast as
 training on wav files (both read from SSD) and we will be using flac files in the future to save space.
 
@@ -237,10 +240,11 @@ The above script also creates the sentencepiece model in /datasets/sentencepiece
 
 To train on your own data, you should adapt the steps in the LibriSpeech preprocessing pipeline
 [`scripts/preprocess_librispeech.sh`](scripts/preprocess_librispeech.sh). As mentioned above, we
-recommend you train the 85M parameter `base` model defined in `configs/base-8703sp.yaml` rather than the
-smaller `testing` model defined in `configs/testing-1023sp.yaml`. This means that in your version
-of [`create_sentencepieces.sh`](scripts/create_sentencepieces.sh) you will need to set `SPM_SIZE=8703`
-and `CONFIG_NAME=base-8703sp`. It is advised that you use all of your training data transcripts to build
+recommend you train the `base` or `large` model rather than the `testing` model.
+This means that in your version of [`create_sentencepieces.sh`](scripts/create_sentencepieces.sh) you will need to set `SPM_SIZE=8703`
+and `CONFIG_NAME=base-8703sp` for the `base` configuration and `SPM_SIZE=17407` and `CONFIG_NAME=large-17407sp` for the `large` configuration.
+
+It is advised that you use all of your training data transcripts to build
 the sentencepiece tokenizer.
 
 Depending on the maximum length of your utterances you may also need to edit the `MAX_DURATION_SECS` variable.
@@ -251,31 +255,24 @@ After running your version of `scripts/preprocess_<your dataset>.sh` you should 
 * sentencepiece `.model` and `.vocab` files in `/datasets/sentencepieces/`
 * a newly created config file in `configs` with the suffix `_run.yaml` that is populated with your sentencepiece model path
 
-# 4. Training <a name="training"></a>
+# 4. Training Commands <a name="training"></a>
 
-By default we enable PyTorch mixed-precision-training with training arg `AMP=true`. To disable it set `AMP=false`.
 
-RNN-T trains using very large synthetic batches, typically including 1000 to 4000 utterances, specified here
-with the GLOBAL_BATCH_SIZE variable.  These large synthetic batches are split between the NUM_GPUS working
-on the problem, and nibbled away at over GRAD_ACCUMULATION_BATCHES computations per gpu over which
-gradients are accumulated until a single update is applied to the model (one "step").  The actual batch_size
-fed to each GPU for each computation is not directly under our control but can be calculated using the formula
+RNN-T trains use large synthetic batches specified with the GLOBAL_BATCH_SIZE variable.  These large synthetic batches are split between the NUM_GPUS where each gpu accumulates gradients over GRAD_ACCUMULATION_BATCHES until a single update is applied to the model (one "step").  The actual `batch_size`
+fed to each GPU for each computation is not controlled directly but can be calculated using the formula
 
 ```
 batch_size * GRAD_ACCUMULATION_BATCHES * NUM_GPUS = GLOBAL_BATCH_SIZE
 ```
 
-In order to achieve the highest throughput during training, we recommend that you use the highest batch_size possible without incurring an OOM error.
-This means that when choosing the above args, you will have a target GLOBAL_BATCH_SIZE in mind but may settle on a value slightly higher or lower than
-your target depending on your available GPU VRAM and the GRAD_ACCUMULATION_BATCHES needed at a given batch_size. For example, for LibriSpeech
-training, we target a GLOBAL_BATCH_SIZE of 1024, but, as described below, on our 2x 24GB TITAN RTX GPUs we end up using GLOBAL_BATCH_SIZE=1008.
+In order to achieve the highest throughput during training, we recommend that you use the highest `batch_size` possible without incurring an OOM error. Please see [../README.md#train-times](../README.md#train-times) for the recommended batch size hyperparameters on `8 x A100 (80GB)` and `8 x A5000 (24GB)` machines.
 
-We recommend a GLOBAL_BATCH_SIZE of ~1024 and have observed slower convergence when using a global batch size of 2048.
+The recommended target is a GLOBAL_BATCH_SIZE of 1024 when your data has a length distribution similar to LibriSpeech. For discussions of how to select a target GLOBAL_BATCH_SIZE, please refer to the discussions in CommonVoice's 'Training Commands' section below.
+It is not always possible to achieve your target GLOBAL_BATCH_SIZE due to the memory constraints of the GPU and the GRAD_ACCUMULATION_BATCHES needed at a given batch_size. In this case, you may settle on a value slightly higher or lower than your target. For example, when training the `testing` model on LibriSpeech using a 2x 24GB TITAN RTX as described below, we use GLOBAL_BATCH_SIZE=1008.
+
 Our step control recommendations for the learning rate scheduler assume a global batch size of ~1024.
 
-For discussions of how to select a target GLOBAL_BATCH_SIZE, please refer to the discussions in CommonVoice's 'Training Commands' section below.
-
-## 4.1 Training Commands
+## 4.1 Example Training Commands
 
 #### LibriSpeech
 
@@ -286,17 +283,14 @@ If you did not run the scripts above this can be achieved by running:
 cat configs/testing-1023sp.yaml | sed s/SENTENCEPIECE/librispeech1023/g | sed s/MAX_DURATION/16.7/g > configs/testing-1023sp_run.yaml
 ```
 
-On LibriSpeech our 24GB TITAN RTX GPUs can be run with a batch_size of 24 without incurring an out-of-memory
-error.  This is selected by setting GLOBAL_BATCH_SIZE=1008 and GRAD_ACCUMULATION_BATCHES=21 together with
-NUM_GPUS=2.  On the cloud we have found that 16GB V100s can support a batch_size of 16, and 40GB A100s can
+The `testing` model can be run on LibriSpeech at batch_size of 24 without incurring an out-of-memory
+error.  On a x2 TITAN RTX system we select this by setting GLOBAL_BATCH_SIZE=1008, GRAD_ACCUMULATION_BATCHES=21 and
+NUM_GPUS=2.  16GB V100s can support a batch_size of 16, and 40GB A100s can
 support a batch_size of 40.
 
 The default setup saves an overwriting checkpoint every time dev Word Error Rate (WER) improves and a non-overwriting
 checkpoint at the end of training. You can set `SAVE_AT_THE_END=false` to disable the final checkpoint save.
 Additionally, if you would like to save a checkpoint every Nth epoch, set `SAVE_FREQUENCY=N`.
-
-If you want to fine-tune a checkpoint to run on the FPGA you should use `SAVE_FREQUENCY=N`.
-Please see the subsection [`Choosing a checkpoint to fine-tune`](#choosing-a-checkpoint-to-fine-tune) for guidelines.
 
 The default number of epochs to train for is 100.
 Set, for example, EPOCHS=150 to make a different choice.
@@ -310,6 +304,8 @@ NUM_GPUS=2 GLOBAL_BATCH_SIZE=1008 GRAD_ACCUMULATION_BATCHES=21 EPOCHS=150 ./scri
 The output of the training command is logged to `/results/training_log_[a timestamp].txt`.
 Arguments are logged to `/results/training_args_[a timestamp].json`.
 The config file is saved to `/results/[config file name]_[a timestamp].txt`.
+
+To resume training see the [`RESUME=true` docs.](docs/resume_finetune.md).
 
 #### CommonVoice
 
@@ -330,7 +326,7 @@ the amount of speech per model update implicit in the above LibriSpeech command,
 In principle the shorter max_duration means we ought to be able to increase batch_size with CommonVoice to
 take advantage of all available GPU memory and maximize throughput.  In our experiments we have found
 this triggers the freezing pathology described in the Training Examples section below, and so thus far
-we have used batch_size 24 as in the LibriSpeech case.
+on a 24GB RTX we have used batch_size 24 as in the LibriSpeech case.
 
 We therefore currently scale GRAD_ACCUMULATION_BATCHES by a factor of 12.3/5.7 to 45, and set
 GLOBAL_BATCH_SIZE to GRAD_ACCUMULATION_BATCHES * NUM_GPUS * batch_size, which is 2160, to get
@@ -342,13 +338,8 @@ For CommonVoice training, also on two 24GB TITAN RTX GPUs, we therefore run:
 NUM_GPUS=2 GLOBAL_BATCH_SIZE=2160 GRAD_ACCUMULATION_BATCHES=45 EPOCHS=150 DATA_DIR=/datasets/CommonVoice/cv-corpus-10.0-2022-07-04/en TRAIN_MANIFESTS=train.json VAL_MANIFESTS=dev.json ./scripts/train.sh
 ```
 
-Fine-tuning CommonVoice models to use hard activation functions (see Section 6) has proven more difficult
-than fine-tuning LibriSpeech models, with highly trained checkpoints being the most problematic.  For this
-reason it can be useful to save intermediate checkpoints during training by specifying `SAVE_FREQUENCY=10`
-and to fine-tune from one of these rather than the final checkpoint.
+The max duration of 7.75s means this model is trained on approximately 1208 hrs of data.
 
-The rest of this README defaults to LibriSpeech but all commands can be adapted to work with CommonVoice by
-setting the appropriate variables from the training command just shown.
 
 #### Other Datasets
 
@@ -379,26 +370,19 @@ The training scripts write TensorBoard logs to /results during training.
 To monitor training using TensorBoard, launch the port-forwarding TensorBoard container in another terminal:
 
 ```
-./scripts/docker/launch_tb.sh <DATASETS> <CHECKPOINTS> <RESULTS>
+./scripts/docker/launch_tb.sh <RESULTS> <OPTIONAL PORT NUMBER>
 ```
 
-Inside this container run
+If `<OPTIONAL PORT NUMBER>` isn't passed then we default to port 6010.
 
-```
-tensorboard --logdir /results --host 0.0.0.0 --port 6010
-```
+Then navigate to `http://traininghostname:<OPTIONAL PORT NUMBER>` in a web browser.
 
-Then navigate to http://traininghostname:6010 in a web browser.
-
-If a connection dies and you can't reconnect to port 6010 because it's already allocated, run:
+If a connection dies and you can't reconnect to your port because it's already allocated, run:
 
 ```
 docker ps
 docker stop <name of docker container with port forwarding>
 ```
-
-Note that TensorBoard datapoint timestamps are given in your local timezone while training script terminal
-logs and nvlog.json logs use UTC.
 
 ## 4.3 Training Examples
 
@@ -411,7 +395,7 @@ In [examples/success/CommonVoice](examples/success/CommonVoice) we present learn
 loss and word-error-rate curves for a successful mixed-precision train on the CommonVoice dataset.
 
 In [examples/failure](examples/failure/) we include grad-norm, loss and word-error-rate
-curves for a pathalogical CommonVoice training case in which grad-norm blew up to infinity and then went
+curves for a pathological CommonVoice training case in which grad-norm blew up to infinity and then went
 to NaN.  This pathology is caused by exploding gradients in the RNN-T model encoder.  This pathology
 affected roughly 1 in 10 LibriSpeech trains.  Training with larger GLOBAL_BATCH_SIZE values and smaller
 max/mean duration ratios both appear to make this pathology less likely to occur.  If this pathology does
@@ -421,7 +405,16 @@ Another pathology we see is training runs freezing, with one GPU going to 0% uti
 100% utilization, with one Python process dying, but no error messages.  In this case reducing the batch
 size usually avoids the problem.  We hope to investigate this pathology further in the future.
 
-## 4.4 Large Tokenizer Training
+## 4.4 Mixed Precision Training <a name="tr_amp"></a>
+
+By default we enable PyTorch mixed-precision-training with training arg `AMP=true`. To disable it set `AMP=false`.
+We previously benchmarked NVIDIAs Apex mixed-precision-training as approximately 1.85x faster on the
+TITAN RTXs, 1.61x faster on V100s, but only about 1.1x faster on A100s (which operate at 19 bits by
+default); we expect the PyTorch version results to be similar.  We switched to the PyTorch
+version after noting that models trained with the Apex version took longer to perform inference.
+This problem does not occur with PyTorch mixed-precision trained models.
+
+## 4.5 Large Tokenizer Training <a name="large_tokenizers"></a>
 
 Training the RNN-T system with a large tokenizer (i.e. bigger than 1023 tokens) often results in exploding gradients
 at 20-30k training steps.  This appears to be caused by the output matrix weights learning to be very small over time,
@@ -434,7 +427,49 @@ good value is `1/sqrt(tokenizer_size/1024)`.  For example, to train a model with
 joint_net_lr_factor: 0.343
 ```
 
-Note that this is already set for the 85M parameter model with tokenizer size 8703 in `configs/base-8703sp.yaml`.
+Note that this is already set for the 85M parameter model with tokenizer size 8703 in `configs/base-8703sp.yaml`, as well as for the 196M parameter model with tokenizer size 17407 in `configs/large-17407sp.yaml`.
+
+## 4.6 Random State Passing
+
+RNN-Ts can find it difficult to generalise to sequences longer than those seen during training, as described in [Chiu et al, 2020](https://arxiv.org/abs/2005.03271).
+
+To fix this, we implemented Random State Passing (RSP) as in [Narayanan et al., 2019](https://arxiv.org/abs/1910.11455).
+
+On our in-house validation data, RSP reduces WERs on long (~1 hour) utterances by roughly 40% relative.
+
+Experiments indicated:
+- It was better to apply RSP 1% of the time, instead of 50% as in the paper.
+- Applying RSP from the beginning of training raised WERs, so RSP is only applied after `RSP_DELAY` steps
+  - `RSP_DELAY` can be set on the command line but, by default, is set to the step at which the learning rate has decayed to 1/8 of its initial value (i.e. after x3 `HALF_LIFE_STEPS` have elapsed). To see the benefits from RSP we find that we need >=5k updates after this point so this heuristic will not be appropriate if you intend to cancel training much sooner than this. See [docstring of `set_rsp_delay_default` function](rnnt_train/common/rsp.py) for more details.
+
+RSP is on by default, and can be modified via the `RSP_SEQ_LEN_FREQ` argument, e.g. `RSP_SEQ_LEN_FREQ="99 0 1"`.
+This parameter controls RSP's frequency and amount; see the `--rsp_seq_len_freq` docstring in [`train.py`](./rnnt_train/train.py).
+
+
+RSP requires Myrtle.ai's [CustomLSTM](./docs/custom_lstm.md) which is why `custom_lstm: true` is set by default in the yaml configs.
+
+## 4.7 Gradient Noise <a name="grad_noise"></a>
+
+Adding Gaussian noise to the gradients of the network is a way of assisting the model generalize on out-of-domain datasets
+by not over-fitting on the datasets it is trained on. Inspired by the research paper by
+[Neelakantan et. al.](https://openreview.net/pdf?id=rkjZ2Pcxe),
+we are sampling the noise level from a Gaussian distribution with $mean=0.0$ and
+standard deviation that is time-dependent. The standard deviation is decaying with time following the
+formula:
+
+$\sigma(t)=\frac{noise\textunderscore level}{{(1+t-start\textunderscore step)}^{decay\textunderscore const}}$,
+
+where $noise\textunderscore level$ is the level of noise when the gradient noise is switched on,
+$decay\textunderscore const=0.55$ is the time decaying constant, $t$ is the step, and
+$start\textunderscore step$ is the step when the gradient noise is switched on.
+
+Training with noise is switched off by default.
+It can be switched on by setting the noise level $noise\textunderscore level$ to be a positive value in the config file.
+
+According to our experiments, the best time to switch on the gradient noise is after the warm-up period
+(i.e. after the `WARMUP_STEPS` in the `scripts/train.sh` file). Moreover, the noise is only added in the gradients of
+the encoder components, hence if during training the user chooses to freeze the encoder, adding grad noise will be off
+by default.
 
 # 5. Validation Sets <a name="validation"></a>
 
@@ -491,72 +526,8 @@ As above, the MODEL_CONFIG, VAL_MANIFESTS, DATA_DIR and CHECKPOINT variables all
 
 # 7. Hardware Inference Server Support <a name="server"></a>
 
-To run your model on Myrtle's hardware-accelerated inference server you will need to fine-tune your model
-weights using the custom LSTM with hard activation functions, dump mel statistics from your dataset to
-support streaming normalization, and create a hardware checkpoint to enable transfer of this and other data.
-
-### Custom LSTM
-
-We can swap out the standard PyTorch LSTM for one of our own [CustomLSTM](./rnnt_train/common/custom_lstm/) by changing the
-config file in directory [configs](configs/) to read:
-
-```
-custom_lstm: true
-```
-
-The value of the Custom LSTM is that it exposes the internal LSTM machinery enabling us to experiment with
-hard activation functions, quantization, and to apply more dropout than the standard PyTorch version allows.
-Hard activation functions can be switched on in the config file using:
-
-```
-custom_lstm: true
-hard_activation_functions: true
-```
-
-On a server with eight A100s, the PyTorch LSTM had a throughput of 440 utterances/second while training the base model.
-The Custom LSTM had a throughput of 375 utterances/second.
-
-### Choosing a checkpoint to fine-tune
-
-To increase convergence speed, we recommend training with soft activation functions initially and then switching to training with hard activation functions.
-
-As a model is trained from scratch with soft activation functions, its WER *if it were validated with hard activation functions* first decreases as the model learns.
-Then the hard-activation-function WER increases as the model overfits to using soft activation functions.
-
-The ideal checkpoint for a hard-activation-function finetune is the checkpoint just before this overfitting happens.
-If you choose a checkpoint after this, then the risk of diverging increases.
-
-You can find this checkpoint by training with soft activation functions for ~20000 steps (based on our experiments), saving all checkpoints, and then validating on all checkpoints with hard activation functions switched on in the config file as above. To save all checkpoints set `SAVE_FREQUENCY=1` in your training command.
-
-The checkpoint to use for finetuning is the one with the lowest hard-activation-function WER.
-In general, the most recent checkpoint will almost always have the lowest *soft*-activation-function WER, but that doesn't affect which checkpoint to select.
-
-We find that a checkpoint that has been trained for 10k to 13k steps is usually a good choice for a finetune.
-
-
-### Fine Tuning
-
-For a finetune of your epoch 4 checkpoint, use your original training command with these new options:
-
-- `WARMUP_STEPS=1700`
-- `FINE_TUNE=true`
-- `CHECKPOINT=/checkpoints/RNN-T_epoch4_checkpoint.pt`
-
-The training script will prevent you from using the same `OUTPUT_DIR` as the original training run to avoid
-overwriting the original checkpoints. Instead, it is recommended that you move the checkpoint you wish to load into
-the `/checkpoints/` directory and/or point your `OUTPUT_DIR` at a different location on your host.
-
-You should also decrease `HOLD_STEPS` by the number of hold steps that the checkpoint has already completed.
-This can be viewed on TensorBoard.
-If the checkpoint has finished the hold period, set `HOLD_STEPS=0`.
-
-The FINE_TUNE=true option ensures that training
-starts anew, with the new learning rate schedule, from the specified checkpoint.  The config file should of
-course specify custom_lstm and hard_activation_functions as described above.  You may wish to backup your
-PyTorch LSTM checkpoint under a different name before running this command since it will overwrite.
-
-Fine-tuned models should use the Custom LSTM config settings during PyTorch validation and inference.
-
+To run your model on Myrtle's hardware-accelerated inference server you will need to dump mel statistics from your dataset to
+support streaming normalization and create a hardware checkpoint to enable transfer of this and other data.
 
 ### Streaming Normalization
 
@@ -566,12 +537,11 @@ hardware-accelerated inference server Myrtle has implemented most of the same al
 Feature normalization is an exception since the DALI algorithm computes the mean and standard deviation used
 to normalize each mel-bin over the full length of each utterance, which is incompatible with streaming.  An
 adaptive streaming normalization algorithm is implemented in [./rnnt_train/common/stream_norm.py](./rnnt_train/common/stream_norm.py)
-which can be run using valCPU.\* as shown below.  The same algorithm is implemented in Rust in the inference
-server.
+which can be run using valCPU.\* as shown below.
 
 The adaptive streaming normalization algorithm uses exponentially weighted moving averages and variances to
-perform normalization of each new frame of mel-bin values.  The algorithm requires an initial set of mel-bin
-mean and variance values as a starting point and these can be obtained by running the training script with
+perform normalization of each new frame of mel-bin values.  This requires an initial set of mel-bin
+mean and variance values which can be obtained by running the training script with
 DUMP_MEL_STATS set to true with NUM_GPUS=1:
 
 ```
@@ -579,7 +549,7 @@ DUMP_MEL_STATS=true NUM_GPUS=1 GLOBAL_BATCH_SIZE=1008 GRAD_ACCUMULATION_BATCHES=
 ```
 
 The training data statistics are written to `<RESULTS>` as melmeans.\* and melvars.\* as both PyTorch
-tensors and Numpy arrays.  These arrays can be transfered to the Rust inference server code and read by
+tensors and Numpy arrays.  These arrays can be transferred to the Rust inference server code and read by
 valCPU.py for use by the adaptive streaming normalization algorithm written in Python:
 
 ```
@@ -624,15 +594,15 @@ Inside the container run:
 
 ```
 python ./rnnt_train/utils/hardware_ckpt.py \
-    --fine_tuned_ckpt /results/RNN-T_best_checkpoint.pt \
-    --config <path/to/finetune/config.yaml> \
+    --ckpt /results/RNN-T_best_checkpoint.pt \
+    --config <path/to/config.yaml> \
     --melmeans /results/melmeans.pt \
     --melvars /results/melvars.pt \
     --melalpha 0.001 \
     --output_ckpt /results/hardware_ckpt.pt
 ```
 
-where `/results/RNN-T_best_checkpoint.pt` is your best fine-tuned hard-activation-function checkpoint.
+where `/results/RNN-T_best_checkpoint.pt` is your best checkpoint.
 The hardware checkpoint also contains the sentencepiece model specified in the config file, the dataset mel
 means and variances as dumped above, and the specified alpha value for mel statistics decay in streaming
 normalization.
@@ -682,15 +652,6 @@ where the filenames are relative to the $DATA_DIR variable fed to (or defaulted 
 the original_duration values are effectively ignored (compared to infinity) but must be present.
 Predictions can be generated using other checkpoints by specifying the CHECKPOINT variable.
 
-To get predictions for one or more wav files without manually creating a json file, run:
-
-```
-python ./rnnt_train/utils/get_predictions.py /results/path/to/file1.wav /results/path/to/file2.wav ...
-```
-
-This script internally sets `$DATA_DIR=/`, so it takes absolute paths as input.  The paths must be visible
-from inside the container, so it's recommended to place the wav files under /results or /datasets.
-You can specify which model checkpoint to use with `--checkpoint /results/custom_checkpoint.pt`.
 
 
 # 9. Acknowledgement <a name="ack"></a>

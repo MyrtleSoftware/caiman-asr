@@ -31,6 +31,8 @@ export OMP_NUM_THREADS=1
 : ${CUDNN_BENCHMARK:=true}
 : ${NUM_GPUS:=8}
 : ${READ_FROM_TAR:=false}
+: ${PYTHON_COMMAND:="./rnnt_train/val.py"}
+: ${EXTRA_ARGS:=""}
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -51,4 +53,4 @@ ARGS+=" --dali_device=$DALI_DEVICE"
 [ -n "$MAX_SYMBOL_PER_SAMPLE" ] &&   ARGS+=" --max_symbol_per_sample=$MAX_SYMBOL_PER_SAMPLE"
 
 DISTRIBUTED=${DISTRIBUTED:-"torchrun --standalone --nnodes 1 --nproc_per_node=$NUM_GPUS"}
-${DISTRIBUTED} ./rnnt_train/val.py ${ARGS}
+${DISTRIBUTED} ${PYTHON_COMMAND} ${ARGS} ${EXTRA_ARGS}

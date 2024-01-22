@@ -1,8 +1,9 @@
 import math
-from typing import Optional, Tuple
 
 import lstm_cu
 import torch
+from beartype.typing import Optional, Tuple
+from einops import rearrange
 from torch import Tensor as Ten
 
 
@@ -16,7 +17,7 @@ def make_layer_function(lstm_fused_fwd, lstm_fused_bwd):
         @torch.cuda.amp.custom_fwd
         def forward(
             ctx, y0: Ten, c0: Ten, x: Ten, W: Ten, R: Ten, bW: Ten, bR: Ten
-        ) -> Tuple[Ten, Tuple[Ten, Ten]]:
+        ) -> Tuple[Ten, Tuple[Ten, Ten], Tuple[Ten, Ten]]:
             """
             Compute the forward pass of an LSTM layer.
 
@@ -33,7 +34,8 @@ def make_layer_function(lstm_fused_fwd, lstm_fused_bwd):
                 bR: Recurrent bias vector.
 
             Returns:
-                Tuple of (output, (yn, cn))) where output is a stack of the hidden states y1...yn.
+                Tuple of (output, (yn, cn), (y_all, c_all))) where output is a stack of the hidden states y1...yn.
+                y_all and c_all contain all the hidden and cell states
             """
 
             # This stacks the sequences along the batch dimension (and makes that dimension contiguous).
@@ -77,12 +79,15 @@ def make_layer_function(lstm_fused_fwd, lstm_fused_bwd):
 
             # y[-1] and c[-1] are the final hidden/cell states, y[1:] is a stack of hidden states 1...n.
 
-            return y[1:], (y[-1], c[-1])
+            return y[1:], (y[-1], c[-1]), (y[1:], c[1:])
 
         @staticmethod
         @torch.cuda.amp.custom_bwd
         def backward(
-            ctx, delta: Ten, _ignore: None
+            ctx,
+            delta: Ten,
+            _ignore: None,
+            _ignore2: None,
         ) -> Tuple[None, None, Optional[Ten], Ten, Ten, Ten, Ten]:
             """
             Compute the backwards pass of an LSTM layer.
@@ -92,6 +97,7 @@ def make_layer_function(lstm_fused_fwd, lstm_fused_bwd):
             Arguments:
                 delta: Gradient of the loss with respect to the output of the layer.
                 _ignore: Ignored argument to match the return signature of the forward function.
+                _ignore2: As above
 
             Returns:
                 A gradient for each of the inputs to the forward function.
@@ -100,6 +106,7 @@ def make_layer_function(lstm_fused_fwd, lstm_fused_bwd):
             W, Rp, x, y, c, gates = ctx.saved_variables
 
             assert _ignore is None and delta.dtype == Rp.dtype
+            assert _ignore2 is None
 
             dG: Ten = torch.empty_like(gates, memory_format=torch.contiguous_format)
 
@@ -204,7 +211,8 @@ class Layer(torch.nn.Module):
             state: Tuple of (y0, c0) where y0 is the initial hidden state and c0 is the initial cell state.
 
         Returns:
-            Tuple of (output, (yn, cn))) where output is a stack of the hidden states y1...yn .
+            Tuple of (output, (yn, cn), (y_all, c_all))) where output is a stack of the hidden states y1...yn.
+            y_all and c_all contain all the hidden and cell states
         """
 
         # Tensor float is enabled by default for cudnn, we mirror that here.
@@ -212,7 +220,7 @@ class Layer(torch.nn.Module):
 
         torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32
 
-        output, (hn, cn) = self.layer_fun.apply(
+        output, (hn, cn), (all_hn, all_cn) = self.layer_fun.apply(
             *state,
             x,
             self.weight_ih,
@@ -223,7 +231,7 @@ class Layer(torch.nn.Module):
 
         torch.backends.cuda.matmul.allow_tf32 = cache_tf32
 
-        return output, (hn, cn)
+        return output, (hn, cn), (all_hn, all_cn)
 
     def extra_repr(self):
         return f"input_size={self.input_size:.>4}, hidden_size={self.hidden_size:.>4}, hard={self.hard}, rw_dropout={self.rw_dropout}"
@@ -289,7 +297,6 @@ class CustomLSTM(torch.nn.Module):
 
         self.layers = [Layer(input_size, **kwargs)]
         self.layers.extend(Layer(hidden_size, **kwargs) for _ in range(num_layers - 1))
-        self.layers = torch.nn.ModuleList(self.layers)
 
         # Register the weights & biases of the LSTM layer by layer
         for i, layer in enumerate(self.layers):
@@ -310,12 +317,21 @@ class CustomLSTM(torch.nn.Module):
                 If set to None, then h_0 and c_0 default to zero.
 
         Returns:
-            Tuple of (output, (h_n, c_n))) where output is a stack of the final layer's hidden states y1...yn and h_n and
-                c_n are the final hidden and cell states for each layer.
+            Tuple of (output, (h_n, c_n), all_hidden). output is a stack
+                of the final layer's hidden states y1...yn. h_n and c_n are the
+                final hidden and cell states for each layer. During validation,
+                all_hidden is None. During training, all_hidden is a tuple
+                (h_all, c_all), where h_all and c_all contain all the hidden and
+                cell states for each layer.
         """
 
         h_fl = []
         c_fl = []
+        if self.training:
+            # Element i of this list will be a tensor of all hidden states from layer i
+            all_h_fl = []
+            # Same, but for cell states
+            all_c_fl = []
 
         for i, layer in enumerate(self.layers):
             # Determine layer input.
@@ -343,13 +359,33 @@ class CustomLSTM(torch.nn.Module):
                 c_0 = init_states[1][i]
 
             # Apply custom layer
-            output, (h_f, c_f) = layer(layer_input, (h_0, c_0))
+            # Get the output, final states, and all the states
+            output, (h_f, c_f), (all_h_f, all_c_f) = layer(layer_input, (h_0, c_0))
 
             # Accumulate the layer final states
             h_fl.append(h_f)
             c_fl.append(c_f)
 
+            if self.training:
+                # Accumulate all states from the layer
+                all_h_fl.append(all_h_f)
+                all_c_fl.append(all_c_f)
+
         h_f = torch.stack(h_fl, dim=0)
         c_f = torch.stack(c_fl, dim=0)
 
-        return output, (h_f, c_f)
+        if self.training:
+            # Turn list of tensors into just tensors
+            all_h_f = rearrange(
+                all_h_fl,
+                "num_layers seq_len batch hidden_size -> num_layers seq_len batch hidden_size",
+            )
+            all_c_f = rearrange(
+                all_c_fl,
+                "num_layers seq_len batch hidden_size -> num_layers seq_len batch hidden_size",
+            )
+            all_hidden = (all_h_f, all_c_f)
+        else:
+            all_hidden = None
+
+        return output, (h_f, c_f), all_hidden

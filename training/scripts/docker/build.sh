@@ -1,3 +1,5 @@
 #!/bin/bash
 
-docker build . --rm -t myrtle/rnnt:v1.5.0
+DOCKER_NAME=$(cat docker_name)
+
+docker build . --rm -t "$DOCKER_NAME"

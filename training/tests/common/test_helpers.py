@@ -7,11 +7,6 @@ import torch
 from rnnt_train.common.helpers import num_weights
 
 
-@pytest.fixture()
-def saved_tokenizer_num_labels(tokenizer) -> int:
-    return tokenizer.num_labels
-
-
 def compare_models(model1, model2, equal=True, epsilon=1e-6):
     """
     Compare parameters of two models.
@@ -30,7 +25,7 @@ def compare_models(model1, model2, equal=True, epsilon=1e-6):
 
 
 def test_model_size(mini_model_factory):
-    model = mini_model_factory()
+    model, _ = mini_model_factory()
     assert num_weights(model) == 1538
 
 
@@ -40,6 +35,7 @@ def test_save_load_model(
     checkpointer_tmp_dir,
     mini_model_factory,
     optimizer_factory,
+    tokenizer_kw,
     tmp_path,
     epoch,
     seed,
@@ -50,8 +46,8 @@ def test_save_load_model(
     meta2 = {"best_wer": 10000, "start_epoch": 10000, "step": 10000}
 
     # Generate two models with different seeds
-    model = mini_model_factory(seed=seed)
-    model_2 = mini_model_factory(seed=3)
+    model, _ = mini_model_factory(seed=seed)
+    model_2, _ = mini_model_factory(seed=3)
     optimizer = optimizer_factory(model)
 
     # Assert model weights are different before loading weights
@@ -66,6 +62,7 @@ def test_save_load_model(
         epoch,
         step,
         best_wer,
+        tokenizer_kw,
     )
 
     # Load weights
@@ -81,14 +78,15 @@ def test_checkpointer_structure(
     checkpointer_tmp_dir,
     mini_model_factory,
     optimizer_factory,
+    tokenizer_kw,
 ):
     epoch = 5
     step = 100
     best_wer = 3.05
 
     # Generate two models
-    model = mini_model_factory()
-    ema_model = mini_model_factory()
+    model, _ = mini_model_factory()
+    ema_model, _ = mini_model_factory()
     optimizer = optimizer_factory(model)
 
     # Save model state (temporarily)
@@ -99,6 +97,7 @@ def test_checkpointer_structure(
         epoch,
         step,
         best_wer,
+        tokenizer_kw,
     )
 
     # Load checkpoint
@@ -113,6 +112,7 @@ def test_checkpointer_structure(
         "state_dict",
         "ema_state_dict",
         "optimizer",
+        "tokenizer_kw",
     ]
     assert set(state.keys()) == set(
         expected_keys
@@ -125,3 +125,4 @@ def test_checkpointer_structure(
     assert isinstance(state["state_dict"], collections.OrderedDict)
     assert isinstance(state["ema_state_dict"], collections.OrderedDict)
     assert isinstance(state["optimizer"], dict)
+    assert isinstance(state["tokenizer_kw"], dict)

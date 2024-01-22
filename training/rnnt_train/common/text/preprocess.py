@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List, Optional, Union
+from beartype.typing import List, Optional, Union
 
 from rnnt_train.common.data.text import Tokenizer
 from rnnt_train.common.text.normalize_file import normalize

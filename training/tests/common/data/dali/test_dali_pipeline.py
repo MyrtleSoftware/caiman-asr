@@ -25,6 +25,7 @@ def dataload_args(test_data_dir) -> Namespace:
         train_tar_files=None,
         val_tar_files=None,
         read_from_tar=False,
+        seed=1,
     )
 
 

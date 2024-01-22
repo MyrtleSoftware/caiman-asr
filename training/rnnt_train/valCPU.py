@@ -16,32 +16,20 @@
 # valCPU.py is derived from val.py
 # rob@myrtle, May 2022
 
-import copy
-import os
-import random
 import time
 from argparse import ArgumentParser, Namespace
 
 import numpy as np
 import torch
+from beartype.typing import Any, Dict
 
 from rnnt_train.common import helpers
-from rnnt_train.common.data import features
-from rnnt_train.common.data.build_dataloader import build_dali_loader
-from rnnt_train.common.data.text import Tokenizer
 from rnnt_train.common.data.webdataset import LengthUnknownError
-from rnnt_train.common.helpers import (
-    Checkpointer,
-    num_weights,
-    print_once,
-    process_evaluation_epoch,
-)
-from rnnt_train.common.seed import set_seed
+from rnnt_train.common.helpers import print_once, process_evaluation_epoch
 from rnnt_train.common.stream_norm import StreamNorm
-from rnnt_train.common.tb_dllogger import flush_log, init_log, log
-from rnnt_train.rnnt import config
-from rnnt_train.rnnt.decoder import RNNTGreedyDecoder
-from rnnt_train.rnnt.model import RNNT
+from rnnt_train.common.tb_dllogger import flush_log, log
+from rnnt_train.setup.base import VAL, BuiltObjects
+from rnnt_train.setup.val_cpu import ValCPUSetup
 from rnnt_train.val import val_arg_parser
 
 
@@ -91,10 +79,13 @@ def evaluate(
     val_feat_proc,
     detokenize,
     ema_model,
-    greedy_decoder,
+    decoder,
     stream_norm,
     args,
-):
+) -> Dict[str, Any]:
+    """
+    Perform on-CPU evaluation.
+    """
     ema_model.eval()
 
     dumptype = None
@@ -109,7 +100,7 @@ def evaluate(
         training_vars = torch.load("/results/melvars.pt")
 
     start_time = time.time()
-    agg = {"preds": [], "txts": [], "idx": []}
+    results = {"preds": [], "txts": [], "idx": []}
 
     try:
         total_loader_len = f"{len(val_loader):<10}"
@@ -155,25 +146,26 @@ def evaluate(
         if args.dump_nth != None:
             np.save(f"/results/{dumptype}stack{i}.npy", feats.numpy())
 
-        pred = greedy_decoder.decode(ema_model, feats, feat_lens, dumptype, i)
+        pred = decoder.decode(ema_model, feats, feat_lens, dumptype, i)
 
-        agg["preds"] += helpers.gather_predictions([pred], detokenize)
-        agg["txts"] += helpers.gather_transcripts(
+        results["preds"] += helpers.gather_predictions([pred], detokenize)
+        results["txts"] += helpers.gather_transcripts(
             [txt.cpu()], [txt_lens.cpu()], detokenize
         )
 
         if args.dump_nth != None:
             with open(f"/results/{dumptype}preds{i}.txt", "w") as f:
-                for line in agg["preds"]:
+                for line in results["preds"]:
                     f.write(str(line))
                     f.write("\n")
             with open(f"/results/txts{i}.txt", "w") as f:
-                for line in agg["txts"]:
+                for line in results["txts"]:
                     f.write(str(line))
                     f.write("\n")
             exit()
 
-    wer, loss = process_evaluation_epoch(agg)
+    wer, loss = process_evaluation_epoch(results)
+    results["wer"] = wer
 
     log(
         (epoch,),
@@ -183,17 +175,21 @@ def evaluate(
     )
 
     if args.dump_preds:
-        with open(f"/results/preds.txt", "w") as f:
-            for line in agg["preds"]:
+        with open(f"{args.output_dir}/preds.txt", "w") as f:
+            for line in results["preds"]:
                 f.write(str(line))
                 f.write("\n")
 
-    return wer
+    return results
 
 
-def validate_cpu(args: Namespace, return_dataloader: bool = False) -> None:
+def validate_cpu(
+    args: Namespace, val_objects: BuiltObjects, return_dataloader: bool = False
+) -> Dict[str, Any]:
     """
     Validates model on CPU on dataset in args.val_manifests or args.val_tar_files.
+
+    If return_dataloader=True, return dataloader in results dict.
     """
     if args.streaming_normalization:
         if args.val_batch_size != 1:
@@ -205,74 +201,8 @@ def validate_cpu(args: Namespace, return_dataloader: bool = False) -> None:
             print("dump_nth requires val_batch_size of 1 (to prevent logp overwrites)")
             exit()
 
-    # Set PyTorch to run on one CPU thread to ensure deterministic PyTorch output.
-    torch.set_num_threads(1)
-    torch.set_num_interop_threads(1)
-
-    torch.backends.cudnn.benchmark = args.cudnn_benchmark
-
-    if args.seed is not None:
-        set_seed(args.seed, args.local_rank)
-
-    init_log(args)
-
-    cfg = config.load(args.model_config)
-
-    print_once("Setting up datasets...")
-    (
-        val_dataset_kw,
-        val_features_kw,
-        val_splicing_kw,
-        val_specaugm_kw,
-    ) = config.input(cfg, "val")
-
-    if args.dump_nth != None:
-        val_features_kw["dither"] = 0.0
-
-    tokenizer_kw = config.tokenizer(cfg)
-    tokenizer = Tokenizer(**tokenizer_kw)
-
-    val_augmentations = torch.nn.Sequential(
-        val_specaugm_kw
-        and features.SpecAugment(optim_level=args.amp, **val_specaugm_kw)
-        or torch.nn.Identity(),
-        features.FrameSplicing(optim_level=args.amp, **val_splicing_kw),
-        features.PermuteAudio(),
-    )
-
-    val_loader = build_dali_loader(
-        args,
-        "val",
-        batch_size=args.val_batch_size,
-        dataset_kw=val_dataset_kw,
-        features_kw=val_features_kw,
-        tokenizer=tokenizer,
-        cpu=True,
-    )
-
-    val_feat_proc = val_augmentations
-
-    # set up the model
-    rnnt_config = config.rnnt(cfg)
-    rnnt_config["gpu_unavailable"] = True
-    model = RNNT(n_classes=tokenizer.num_labels + 1, **rnnt_config)
-    blank_idx = tokenizer.num_labels
-    greedy_decoder = RNNTGreedyDecoder(
-        blank_idx=blank_idx, max_symbol_per_sample=args.max_symbol_per_sample
-    )
-
-    print_once(f"Model size: {num_weights(model) / 10**6:.1f}M params\n")
-
-    ema_model = copy.deepcopy(model)
-
     # A checkpoint should always be specified
     assert args.ckpt is not None
-
-    # setup checkpointer
-    checkpointer = Checkpointer(args.output_dir, "RNN-T")
-
-    # load checkpoint (modified to not need optimizer / meta args)
-    checkpointer.load(args.ckpt, model, ema_model)
 
     # setup streaming normalizer
     if args.streaming_normalization:
@@ -289,18 +219,19 @@ def validate_cpu(args: Namespace, return_dataloader: bool = False) -> None:
     epoch = 1
     step = None  # Switches off logging of val data results to TensorBoard
 
-    wer = evaluate(
+    val_loader = val_objects.data_objects[VAL].loader
+    results = evaluate(
         epoch,
         step,
         val_loader,
-        val_feat_proc,
-        tokenizer.detokenize,
-        ema_model,
-        greedy_decoder,
+        val_objects.feat_procs[VAL],
+        val_objects.tokenizers[VAL].detokenize,
+        val_objects.ema_model,
+        val_objects.decoder,
         stream_norm,
         args,
     )
-
+    wer = results["wer"]
     flush_log()
     val_files = args.val_manifests if not args.read_from_tar else args.val_tar_files
     val_files_str = " ".join(val_files)
@@ -308,14 +239,24 @@ def validate_cpu(args: Namespace, return_dataloader: bool = False) -> None:
         val_files_str = val_files_str[:100] + "..."
     print_once(f'\nWord Error Rate: {wer*100.0:5.3f}% on "{val_files_str}"\n')
 
+    if return_dataloader:
+        results["dataloader"] = val_loader
 
-if __name__ == "__main__":
-    parser = val_cpu_arg_parser()
-    args = parser.parse_args()
+    return results
+
+
+def main(args, val_objects):
     # check data path args
     if not args.read_from_tar:
         assert (
             args.val_manifests is not None
         ), "Must provide val_manifests if not reading from tar"
 
-    validate_cpu(args)
+    validate_cpu(args, val_objects)
+
+
+if __name__ == "__main__":
+    parser = val_cpu_arg_parser()
+    args = parser.parse_args()
+    val_objects = ValCPUSetup().run(args)
+    main(args, val_objects)

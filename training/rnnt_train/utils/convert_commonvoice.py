@@ -1,8 +1,5 @@
 #!/usr/bin/env python
 
-# Copyright (c) 2022 Myrtle.ai
-# rob
-
 import argparse
 import json
 import re

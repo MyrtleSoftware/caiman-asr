@@ -13,12 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# modified by rob@myrtle
-
-import math
-
 import torch
-from torch.nn import Parameter
+
+from rnnt_train.common.helpers import print_once
 
 
 def rnn(
@@ -73,9 +70,14 @@ class LSTM(torch.nn.Module):
         self.num_layers = num_layers
         self.batch_norm = batch_norm
 
+        if kwargs["quantize"] and not kwargs["custom_lstm"]:
+            raise ValueError(
+                "Quantization `quantize: true` is not supported PyTorch's LSTM. Set "
+                "`custom_lstm: true` to run quantized LSTM."
+            )
         if kwargs["custom_lstm"]:
             if kwargs["quantize"]:
-                print(
+                print_once(
                     f"WARNING : Quantization requires the (slow) legacy TorchScript CustomLSTM\n"
                 )
                 # Legacy CustomLSTM import takes O(30s) on startup due to third-party qtorch import
@@ -83,7 +85,7 @@ class LSTM(torch.nn.Module):
                 from rnnt_ext.custom_lstm.legacy import CustomLSTM
             elif kwargs["gpu_unavailable"]:
                 # Necessary if using valCPU with the hardware checkpoint
-                print(
+                print_once(
                     "Using the legacy TorchScript CustomLSTM because GPU unavailable\n"
                 )
                 from rnnt_ext.custom_lstm.legacy import CustomLSTM
@@ -105,8 +107,8 @@ class LSTM(torch.nn.Module):
                         CustomLSTM(
                             input_size=layer_input_size,
                             hidden_size=hidden_size,
-                            hard=kwargs["hard_activation_functions"],
                             quantize=kwargs["quantize"],
+                            rw_dropout=kwargs["rw_dropout"],
                         )
                     )
                 else:
@@ -126,8 +128,8 @@ class LSTM(torch.nn.Module):
                     hidden_size=hidden_size,
                     num_layers=num_layers,
                     dropout=dropout,
-                    hard=kwargs["hard_activation_functions"],
                     quantize=kwargs["quantize"],
+                    rw_dropout=kwargs["rw_dropout"],
                 )
             else:
                 self.lstm = torch.nn.LSTM(
@@ -138,6 +140,10 @@ class LSTM(torch.nn.Module):
                 )
             self.dropout = torch.nn.Dropout(dropout) if dropout else None
 
+        for name, v in self.named_parameters():
+            if "weight" in name or "bias" in name:
+                v.data *= float(weights_init_scale)
+
         if forget_gate_bias is not None:
             for name, v in self.named_parameters():
                 if "bias_ih" in name:
@@ -147,11 +153,7 @@ class LSTM(torch.nn.Module):
                         hidden_hidden_bias_scale
                     )
 
-        for name, v in self.named_parameters():
-            if "weight" in name or "bias" in name:
-                v.data *= float(weights_init_scale)
-
-        tensor_name = kwargs["tensor_name"]
+        self.using_custom_lstm = kwargs["custom_lstm"]
 
     def forward(self, x, h=None):
         # x is (seq_len, batch_size, input_size)
@@ -167,7 +169,7 @@ class LSTM(torch.nn.Module):
                     h_0, c_0 = h[0][layer].unsqueeze(0), h[1][layer].unsqueeze(0)
                     # both h_0 and c_0 are (1, batch, hidden_size)
                     layer_hidden_states = (h_0, c_0)
-                x, (h_f, c_f) = self.lstms[layer](x, layer_hidden_states)
+                x, (h_f, c_f), *_ = self.lstms[layer](x, layer_hidden_states)
                 # both h_f and c_f are (1, batch, hidden_size)
                 # apply batch norm before dropout (which may not be needed at all now)
                 # https://stackoverflow.com/questions/39691902/ordering-of-batch-normalization-and-dropout
@@ -185,10 +187,15 @@ class LSTM(torch.nn.Module):
             h_f = torch.stack(h_fl, dim=0)  # (num_layers, batch, hidden_size)
             c_f = torch.stack(c_fl, dim=0)  # (num_layers, batch, hidden_size)
             h = (h_f, c_f)
+            all_h = None
         else:
             # if not doing batch_norm just call the multi-layer LSTM [and apply the final dropout]
-            x, h = self.lstm(x, h)
+            if self.using_custom_lstm:
+                x, h, all_h = self.lstm(x, h)
+            else:
+                x, h = self.lstm(x, h)
+                all_h = None
             if self.dropout:
                 x = self.dropout(x)
 
-        return x, h
+        return x, h, all_h

@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-
-# Copyright (c) 2022 Myrtle.ai
 # theodore@myrtle.ai, September 2022
 import argparse
 import json

@@ -1,7 +1,6 @@
 # Copyright (c) 2017 Keith Ito
 # Copyright (c) 2023, Myrtle Software Limited, www.myrtle.ai. All rights reserved.
 """ from https://github.com/keithito/tacotron """
-import re
 import string
 
 from . import cleaners

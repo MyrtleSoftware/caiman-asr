@@ -77,4 +77,3 @@ Our WebDataset support currently has the following limitations:
 
 - It isn't currently possible to mix and match `json` and `webdataset` formats for the training and validation data passed to `./scripts/train.sh`.
 - It is necessary to have more shards per dataset (including validation data) than `NUM_GPUS` so that each GPU can read from a different shard.
-- Speed: for each GPU, reading from shards is performed in the main process without multiprocessing. This is due to a limitation in `torchdata=0.5.x` that prevents the use of both distributed and multiprocessing dataloading at the same time. This is fixed in PyTorch>2.0 and we intend to increase the loading speed in a future release.

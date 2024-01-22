@@ -24,8 +24,6 @@ import torch.distributed as dist
 from dllogger import JSONStreamBackend, StdOutBackend, Verbosity
 from torch.utils.tensorboard import SummaryWriter
 
-from . import helpers
-
 tb_loggers = {}
 
 

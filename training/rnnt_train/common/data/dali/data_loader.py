@@ -15,10 +15,9 @@
 import json
 import math
 import os
-from typing import List, Union
 
-import numpy as np
 import torch.distributed as dist
+from beartype.typing import List, Union
 
 from rnnt_train.common.data.webdataset import LengthUnknownError, WebDatasetReader
 from rnnt_train.common.helpers import print_once
@@ -27,14 +26,18 @@ from .iterator import DaliRnntIterator
 from .pipeline import DaliPipeline
 
 
-def _parse_json(json_path: str, start_label=0, predicate=lambda json: True):
+def _parse_json(
+    json_path: str,
+    start_label=0,
+    predicate=lambda json: True,
+):
     """
     Parses json file to the format required by DALI
     Args:
         json_path: path to json file
         start_label: the label, starting from which DALI will assign consecutive int numbers to every transcript
         predicate: function, that accepts a sample descriptor (i.e. json dictionary) as an argument.
-                   If the predicate for a given sample returns True, it will be included in the dataset.
+            If the predicate for a given sample returns True, it will be included in the dataset.
 
     Returns:
         output_files: dictionary, that maps file name to label assigned by DALI
@@ -49,7 +52,8 @@ def _parse_json(json_path: str, start_label=0, predicate=lambda json: True):
         if not predicate(original_sample):
             continue
         transcripts[curr_label] = original_sample["transcript"]
-        output_files[original_sample["files"][-1]["fname"]] = dict(
+        fname = original_sample["files"][-1]["fname"]
+        output_files[fname] = dict(
             label=curr_label,
             duration=original_sample["original_duration"],
         )
@@ -87,6 +91,7 @@ class DaliDataLoader:
         normalize: bool,
         num_cpu_threads: int,
         num_buckets: int,
+        seed: int,
         grad_accumulation_batches: int = 1,
         device_type: str = "gpu",
         tar_files: Union[str, List[str], None] = None,
@@ -113,6 +118,7 @@ class DaliDataLoader:
             normalize=normalize,
             num_cpu_threads=num_cpu_threads,
             tar_files=tar_files,
+            seed=seed,
         )
 
     def _init_iterator(
@@ -126,6 +132,7 @@ class DaliDataLoader:
         pipeline_type,
         normalize,
         num_cpu_threads,
+        seed: int,
         tar_files: Union[str, List[str], None] = None,
     ):
         """
@@ -164,7 +171,7 @@ class DaliDataLoader:
                 sample_rate=config_data["sample_rate"],
             )
 
-        pipeline = DaliPipeline.from_config(
+        self.pipeline = DaliPipeline.from_config(
             config_data=config_data,
             config_features=config_features,
             normalize=normalize,
@@ -177,10 +184,11 @@ class DaliDataLoader:
             pipeline_type=pipeline_type,
             webdataset_reader=webdataset_reader,
             no_logging=self.no_logging,
+            seed=seed,
         )
 
         return DaliRnntIterator(
-            [pipeline],
+            [self.pipeline],
             transcripts=transcripts,
             tokenizer=tokenizer,
             batch_size=self.batch_size,

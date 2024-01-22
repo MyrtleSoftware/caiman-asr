@@ -20,3 +20,22 @@ repos:
     - id: black
       language_version: python3
       args: [--line-length=88]
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  # Ruff version.
+  rev: v0.1.5
+  hooks:
+    # Fix unused imports
+    - id: ruff
+      args: [--select, F401, --fix]
+      # This also excludes the smoke tests in myrtle-training
+      exclude: training/tests/test_smoke_tests.py
+- repo: https://github.com/tcort/markdown-link-check
+  rev: v3.11.2
+  hooks:
+    - id: markdown-link-check
+      args: [
+        "-q",
+        "--alive=200,404"
+      ]
+      # Later versions of node are incompatible with Ubuntu 18
+      language_version: "17.9.1"

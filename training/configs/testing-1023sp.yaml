@@ -43,7 +43,7 @@ input_val:
     frame_stacking: 3
     frame_subsampling: 3
 
-# For training we trim silence, keep samples <= max_duration and apply augmentation
+# For training we trim silence, keep samples <= max_duration < max_transcript_len and apply augmentation
 input_train:
   audio_dataset:
     <<: *val_dataset
@@ -75,6 +75,7 @@ rnnt:
   enc_stack_time_factor: 2
   enc_dropout: 0.1
   enc_batch_norm: false
+  enc_freeze: false
 
   pred_n_hid: 512
   pred_rnn_layers: 2
@@ -84,9 +85,17 @@ rnnt:
   joint_n_hid: 512
   joint_dropout: 0.3
   joint_net_lr_factor: 1.0
+  joint_apex_transducer: pack
+  joint_apex_relu_dropout: true
 
   forget_gate_bias: 1.0
 
-  custom_lstm: false
-  hard_activation_functions: false
+  custom_lstm: true
   quantize: false
+  enc_rw_dropout: 0.0
+  pred_rw_dropout: 0.0
+
+grad_noise_scheduler:
+  noise_level: 0.0
+  decay_const: 0.55
+  start_step: 2000

@@ -1,8 +1,8 @@
 from argparse import Namespace
 from dataclasses import dataclass
-from typing import List, Optional
 
 import torch.multiprocessing as mp
+from beartype.typing import List, Optional
 
 from rnnt_train.common.data.dali import sampler as dali_sampler
 from rnnt_train.common.data.dali.data_loader import DaliDataLoader
@@ -112,4 +112,5 @@ def build_dali_loader(
         tar_files=dataload_args.tar_files,
         read_from_tar=args.read_from_tar,
         no_logging=no_logging,
+        seed=args.seed,
     )

@@ -1,9 +1,10 @@
 # written by iria [& rob] @ myrtle, Jul 2022
 
 import math
-from typing import Final
 
 import torch
+from beartype.typing import Final
+from einops import rearrange
 from torch import nn
 
 
@@ -107,6 +108,12 @@ class CustomLSTM(nn.Module):
         # accumulate layer final states in lists
         h_fl = []
         c_fl = []
+        if self.training:
+            # Element i of this list will be a tensor of all hidden states from layer i
+            all_h_fl = []
+            # Same, but for cell states
+            all_c_fl = []
+
         # apply the LSTM layer by layer
         for layer in range(self.num_layers):
             # determine layer input
@@ -132,19 +139,40 @@ class CustomLSTM(nn.Module):
             bih = getattr(self, f"bias_ih_l{layer}")  # (4*hidden_size, )
             bhh = getattr(self, f"bias_hh_l{layer}")  # (4*hidden_size, )
             # apply custom layer
-            output, (h_f, c_f) = self.custom_layer(
+            # Get the output, final states, and all the states
+            output, (h_f, c_f), (all_h_f, all_c_f) = self.custom_layer(
                 layer_input, h_0, c_0, U, V, bih, bhh
             )
             # accumulate the layer final states
             h_fl.append(h_f)
             c_fl.append(c_f)
 
+            if self.training:
+                # Accumulate all states from the layer
+                all_h_fl.append(all_h_f)
+                all_c_fl.append(all_c_f)
+
         # compute the final state tensors
         h_f = torch.stack(h_fl, dim=0)  # (num_layers, batch, hidden_size)
         c_f = torch.stack(c_fl, dim=0)  # (num_layers, batch, hidden_size)
         # return the final layer output sequence          (seq_len, batch, hidden_size)
         # and the final hidden and cell state tensors     (num_layers, batch, hidden_size)
-        return output, (h_f, c_f)
+
+        if self.training:
+            # Turn list of tensors into just tensors
+            all_h_f = rearrange(
+                all_h_fl,
+                "num_layers seq_len batch hidden_size -> num_layers seq_len batch hidden_size",
+            )
+            all_c_f = rearrange(
+                all_c_fl,
+                "num_layers seq_len batch hidden_size -> num_layers seq_len batch hidden_size",
+            )
+            all_hidden = (all_h_f, all_c_f)
+        else:
+            all_hidden = None
+
+        return output, (h_f, c_f), all_hidden
 
 
 # Using an identity function instead of a class simplifies the code from print(custom_layer.code)
@@ -224,6 +252,11 @@ class CustomLSTMLayer(nn.Module):
         bih = self.bf16(bih)  # BF16       of bias   tensor bih
         bhh = self.bf16(bhh)  # BF16       of bias   tensor bhh
 
+        # Element i of this list is the hidden state at time i in the sequence
+        all_h_tl = []
+        # Same, but for cell states
+        all_c_tl = []
+
         output_seq = []
         for t in range(seq_len):
             x_t = layer_input[t]  # (batch, layer_input_size)
@@ -257,6 +290,20 @@ class CustomLSTMLayer(nn.Module):
             h_t = o_t * self.tanh(c_t)  # (batch, HS) hidden state (and current output)
             h_t = self.bf16(h_t)
             output_seq.append(h_t)
+            all_h_tl.append(h_t)
+            all_c_tl.append(c_t)
         #
         output = torch.stack(output_seq, dim=0)  # (seq_len, batch, HS)
-        return output, (h_t, c_t)  # (seq_len, batch, HS), ((batch, HS), (batch, HS))
+
+        # Turn list of tensors into just tensors
+        # Can't use einops.rearrange because incompatible with torch.jit
+        all_h_t = torch.stack(all_h_tl, dim=0)
+        all_c_t = torch.stack(all_c_tl, dim=0)
+
+        # The shape of the return values is:
+        # (seq_len, batch, HS), ((batch, HS), (batch, HS), (seq_len, batch, HS), (seq_len, batch, HS))
+        return (
+            output,
+            (h_t, c_t),
+            (all_h_t, all_c_t),
+        )
