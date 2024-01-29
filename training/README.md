@@ -267,6 +267,9 @@ batch_size * GRAD_ACCUMULATION_BATCHES * NUM_GPUS = GLOBAL_BATCH_SIZE
 
 In order to achieve the highest throughput during training, we recommend that you use the highest `batch_size` possible without incurring an OOM error. Please see [../README.md#train-times](../README.md#train-times) for the recommended batch size hyperparameters on `8 x A100 (80GB)` and `8 x A5000 (24GB)` machines.
 
+When you have a candidate batch size, you may want to train for a few epochs on a subset of your data to check that there is no OOM error. You can set the `N_UTTERANCES_ONLY` environment variable to restrict how many utterances are loaded from your dataset.
+Note that `N_UTTERANCES_ONLY` must be larger than `GLOBAL_BATCH_SIZE`.
+
 The recommended target is a GLOBAL_BATCH_SIZE of 1024 when your data has a length distribution similar to LibriSpeech. For discussions of how to select a target GLOBAL_BATCH_SIZE, please refer to the discussions in CommonVoice's 'Training Commands' section below.
 It is not always possible to achieve your target GLOBAL_BATCH_SIZE due to the memory constraints of the GPU and the GRAD_ACCUMULATION_BATCHES needed at a given batch_size. In this case, you may settle on a value slightly higher or lower than your target. For example, when training the `testing` model on LibriSpeech using a 2x 24GB TITAN RTX as described below, we use GLOBAL_BATCH_SIZE=1008.
 
@@ -470,6 +473,18 @@ According to our experiments, the best time to switch on the gradient noise is a
 (i.e. after the `WARMUP_STEPS` in the `scripts/train.sh` file). Moreover, the noise is only added in the gradients of
 the encoder components, hence if during training the user chooses to freeze the encoder, adding grad noise will be off
 by default.
+
+## 4.8 Narrowband training <a name="narrowband"></a>
+
+For some target domains, data is recorded at (or compressed to) 8 kHz (narrowband). For models trained with audio >8 kHz (16 kHz is the default) the audio will be upsampled to the higher sample rate before inference. This creates a mismatch between training and inference, since the model will partly rely on information from the higher frequency bands.
+
+This can be partly mitigated by resampling a part of the training data to narrowband and back to higher frequencies, so the model is trained on audio that more closely resembles the validation data.
+
+To apply this downsampling on-the-fly to a random half of batches, set `PROB_TRAIN_NARROWBAND=0.5` in your training command.
+
+## 4.9 Profiling <a name="profiling"></a>
+
+To profile training, see these [instructions](docs/profiling.md).
 
 # 5. Validation Sets <a name="validation"></a>
 

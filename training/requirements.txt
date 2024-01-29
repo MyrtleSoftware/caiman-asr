@@ -12,8 +12,10 @@ protobuf==3.20.1
 pytest==7.2.1
 qtorch==0.3.0
 sentencepiece==0.1.94
+snakeviz==2.2.0
 soundfile==0.10.3.post1
 sox==1.4.1
 tensorboard==2.11.2
 text_unidecode==1.3
+yappi==1.5.1
 zmq==0.0.0

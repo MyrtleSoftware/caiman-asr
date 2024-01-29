@@ -55,7 +55,10 @@ ARGS+=" --alpha=$ALPHA"
 [ "$DUMP_NTH" != None ] &&           ARGS+=" --dump_nth=$DUMP_NTH"
 [ "$DUMP_PREDS" = true ] &&          ARGS+=" --dump_preds"
 [ "$READ_FROM_TAR" = true ] &&       ARGS+=" --read_from_tar"
+[ "$INSPECT_AUDIO" = true ] &&       ARGS+=" --inspect_audio"
 [ -n "$VAL_TAR_FILES" ] &&           ARGS+=" --val_tar_files $VAL_TAR_FILES"
 [ -n "$MAX_SYMBOL_PER_SAMPLE" ] &&   ARGS+=" --max_symbol_per_sample=$MAX_SYMBOL_PER_SAMPLE"
+[ -n "$PROB_VAL_NARROWBAND" ] &&     ARGS+=" --prob_val_narrowband $PROB_VAL_NARROWBAND"
+[ -n "$N_UTTERANCES_ONLY" ] &&       ARGS+=" --n_utterances_only=$N_UTTERANCES_ONLY"
 
 python ${PYTHON_COMMAND} ${ARGS} ${EXTRA_ARGS}

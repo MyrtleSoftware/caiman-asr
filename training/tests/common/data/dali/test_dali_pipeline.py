@@ -1,5 +1,6 @@
 import copy
 from argparse import Namespace
+from pathlib import Path
 
 import pytest
 import torch
@@ -26,6 +27,11 @@ def dataload_args(test_data_dir) -> Namespace:
         val_tar_files=None,
         read_from_tar=False,
         seed=1,
+        prob_val_narrowband=0.0,
+        prob_train_narrowband=0.0,
+        inspect_audio=False,
+        output_dir=Path("/results"),
+        n_utterances_only=None,
     )
 
 

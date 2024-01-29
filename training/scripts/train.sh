@@ -95,6 +95,8 @@ ARGS+=" --timestamp=$TIMESTAMP"
 [ "$DUMP_MEL_STATS" = true ] &&      ARGS+=" --dump_mel_stats"
 [ "$READ_FROM_TAR" = true ] &&       ARGS+=" --read_from_tar"
 [ "$SKIP_STATE_DICT_CHECK" = true ] && ARGS+=" --skip_state_dict_check"
+[ "$PROFILER" = true ] &&            ARGS+=" --profiler"
+[ "$INSPECT_AUDIO" = true ] &&       ARGS+=" --inspect_audio"
 [ -n "$TRAIN_TAR_FILES" ] &&         ARGS+=" --train_tar_files $TRAIN_TAR_FILES"
 [ -n "$VAL_TAR_FILES" ] &&           ARGS+=" --val_tar_files $VAL_TAR_FILES"
 [ -n "$CHECKPOINT" ] &&              ARGS+=" --ckpt=$CHECKPOINT"
@@ -109,6 +111,9 @@ ARGS+=" --timestamp=$TIMESTAMP"
 [ -n "$MAX_SYMBOL_PER_SAMPLE" ] &&   ARGS+=" --max_symbol_per_sample=$MAX_SYMBOL_PER_SAMPLE"
 [ -n "$RSP_SEQ_LEN_FREQ" ] &&        ARGS+=" --rsp_seq_len_freq $RSP_SEQ_LEN_FREQ"
 [ -n "$RSP_DELAY" ] &&               ARGS+=" --rsp_delay=$RSP_DELAY"
+[ -n "$PROB_VAL_NARROWBAND" ] &&     ARGS+=" --prob_val_narrowband $PROB_VAL_NARROWBAND"
+[ -n "$PROB_TRAIN_NARROWBAND" ] &&   ARGS+=" --prob_train_narrowband $PROB_TRAIN_NARROWBAND"
+[ -n "$N_UTTERANCES_ONLY" ] &&       ARGS+=" --n_utterances_only=$N_UTTERANCES_ONLY"
 
 DISTRIBUTED=${DISTRIBUTED:-"torchrun --standalone --nnodes 1 --nproc_per_node=$NUM_GPUS"}
 ${DISTRIBUTED} ${PYTHON_COMMAND} ${ARGS} ${EXTRA_ARGS} 2>&1 | tee $OUTPUT_DIR/training_log_$TIMESTAMP.txt

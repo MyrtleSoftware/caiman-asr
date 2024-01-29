@@ -29,11 +29,13 @@ import torch.distributed as dist
 from rnnt_train.common.evaluate import evaluate
 from rnnt_train.common.helpers import greedy_wer, print_once
 from rnnt_train.common.logging_layers import get_logging_entries
+from rnnt_train.common.profiling import finish_profiling, save_timings, set_up_profiling
 from rnnt_train.common.rsp import (
     generate_batch_history,
     rsp_config_checks,
     rsp_end_step,
 )
+from rnnt_train.common.shared_args import add_shared_args, check_shared_args
 from rnnt_train.common.tb_dllogger import flush_log, log
 from rnnt_train.setup.base import TRAIN, VAL
 from rnnt_train.setup.train import TrainSetup
@@ -339,6 +341,19 @@ def train_arg_parser() -> argparse.ArgumentParser:
         "will result in trained models that are incompatible with downstream inference "
         "server and is intended for experimentation only.",
     )
+    io.add_argument(
+        "--profiler",
+        action="store_true",
+        help="""Enable profiling with yappi and save htop/nvidia-smi logs.
+        This may slow down training""",
+    )
+    io.add_argument(
+        "--prob_train_narrowband",
+        type=float,
+        default=0.0,
+        help="Probability that a batch of training audio gets downsampled to 8kHz and then upsampled to original sample rate",
+    )
+    add_shared_args(parser)
     return parser
 
 
@@ -377,6 +392,7 @@ def apply_ema(model, ema_model, decay):
 
 def main(args, train_objects):
     args = verify_train_args(args)
+    check_shared_args(args)
     world_size = train_objects.world_size
 
     assert (
@@ -482,9 +498,16 @@ def main(args, train_objects):
     for epoch in range(start_epoch + 1, args.epochs + 1):
         epoch_utts = 0
         accumulated_batches = 0
+
+        dataloading_total = 0.0  # Time spent getting audio from DALI
+        feat_proc_total = 0.0  # Time spent in spec augment / frame stacking
+        forward_backward_total = 0.0  # Time spent in forward / backward passes
+
         epoch_start_time = time.time()
 
+        before_dataloading = time.time()
         for batch in train_loader:
+            dataloading_total += time.time() - before_dataloading
             if accumulated_batches == 0:
                 train_objects.training_only.adjust_lr(step)
                 optimizer_wrapper.zero_grad()
@@ -516,11 +539,16 @@ def main(args, train_objects):
                 audio_lens = audio_lens.cuda()
                 txt = txt.cuda()
                 txt_lens = txt_lens.cuda()
+            before_feat_proc = time.time()
 
             # now do spec augment / frame stacking - rob@myrtle
             # feats is (seq_len, batch, input_dim)
             feats, feat_lens = train_feat_proc([audio, audio_lens])
             all_feat_lens += feat_lens
+
+            feat_proc_total += time.time() - before_feat_proc
+
+            before_forward_backward = time.time()
 
             loss_item, loss_nan, state = train_step_fn(
                 model=model,
@@ -533,6 +561,8 @@ def main(args, train_objects):
                 scaler=scaler,
                 rnnt_state=state,
             )
+
+            forward_backward_total += time.time() - before_forward_backward
 
             if not loss_nan:
                 losses.append(loss_item)
@@ -614,6 +644,7 @@ def main(args, train_objects):
                 step += 1
                 accumulated_batches = 0
                 # end of step
+            before_dataloading = time.time()
 
         if args.dump_mel_stats:
             # this should use more stable computations; in practice stdevs are quite large - rob@myrtle
@@ -682,6 +713,14 @@ def main(args, train_objects):
             checkpointer.save(
                 model, ema_model, optimizer, epoch, step, best_wer, tokenizer_kw
             )
+        save_timings(
+            dataloading_total,
+            feat_proc_total,
+            forward_backward_total,
+            args.output_dir,
+            epoch,
+            args.timestamp,
+        )
 
     log((), None, "train_avg", {"throughput": epoch_utts / epoch_time})
 
@@ -708,5 +747,7 @@ def main(args, train_objects):
 if __name__ == "__main__":
     parser = train_arg_parser()
     args = parser.parse_args()
+    profilers = set_up_profiling(args.profiler, args.output_dir, args.timestamp)
     train_objects = TrainSetup().run(args)
     main(args, train_objects)
+    finish_profiling(args.profiler, args.output_dir, profilers, args.timestamp)

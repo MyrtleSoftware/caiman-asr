@@ -21,6 +21,7 @@ from collections import OrderedDict
 
 import torch
 import torch.distributed as dist
+from beartype import beartype
 from beartype.typing import Optional, Tuple
 
 from .metrics import word_error_rate
@@ -36,6 +37,11 @@ def __rnnt_decoder_predictions_tensor(tensor, detokenize):
         prediction
     """
     return [detokenize(pred) for pred in tensor]
+
+
+@beartype
+def get_rank_or_zero() -> int:
+    return dist.get_rank() if dist.is_initialized() else 0
 
 
 def print_once(msg):

@@ -28,6 +28,9 @@ RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata && \
     apt-get install -y libsndfile1 sox git cmake jq ffmpeg && \
     apt-get install -y --no-install-recommends numactl && \
+    apt-get install -y iproute2 && \
+    # Used for logging CPU usage:
+    apt-get install -y htop aha && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace/training

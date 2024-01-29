@@ -26,6 +26,7 @@ from beartype.typing import Any, Dict
 from rnnt_train.common import helpers
 from rnnt_train.common.data.webdataset import LengthUnknownError
 from rnnt_train.common.helpers import print_once, process_evaluation_epoch
+from rnnt_train.common.shared_args import check_shared_args
 from rnnt_train.common.stream_norm import StreamNorm
 from rnnt_train.common.tb_dllogger import flush_log, log
 from rnnt_train.setup.base import VAL, BuiltObjects
@@ -246,6 +247,7 @@ def validate_cpu(
 
 
 def main(args, val_objects):
+    check_shared_args(args)
     # check data path args
     if not args.read_from_tar:
         assert (

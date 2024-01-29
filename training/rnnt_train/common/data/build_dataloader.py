@@ -1,5 +1,6 @@
 from argparse import Namespace
 from dataclasses import dataclass
+from pathlib import Path
 
 import torch.multiprocessing as mp
 from beartype.typing import List, Optional
@@ -23,6 +24,7 @@ class DataLoaderArgs:
     normalize: bool
     shuffle: bool
     num_buckets: Optional[int]
+    prob_narrowband: float
     tar_files: Optional[List[str]] = None
 
     @classmethod
@@ -37,6 +39,7 @@ class DataLoaderArgs:
             normalize = not args.dump_mel_stats
             shuffle = True
             num_buckets = args.num_buckets
+            prob_narrowband = args.prob_train_narrowband
         else:
             grad_accumulation_batches = 1
             json_names = args.val_manifests
@@ -47,6 +50,7 @@ class DataLoaderArgs:
             normalize = not getattr(args, "streaming_normalization", False)
             shuffle = False
             num_buckets = None
+            prob_narrowband = args.prob_val_narrowband
 
         return cls(
             grad_accumulation_batches=grad_accumulation_batches,
@@ -55,6 +59,7 @@ class DataLoaderArgs:
             shuffle=shuffle,
             num_buckets=num_buckets,
             tar_files=tar_files,
+            prob_narrowband=prob_narrowband,
         )
 
 
@@ -113,4 +118,8 @@ def build_dali_loader(
         read_from_tar=args.read_from_tar,
         no_logging=no_logging,
         seed=args.seed,
+        prob_narrowband=dataload_args.prob_narrowband,
+        inspect_audio=args.inspect_audio,
+        output_dir=Path(args.output_dir),
+        n_utterances_only=args.n_utterances_only,
     )

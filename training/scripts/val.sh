@@ -49,8 +49,11 @@ ARGS+=" --dali_device=$DALI_DEVICE"
 [ "$CUDNN_BENCHMARK" = true ] &&     ARGS+=" --cudnn_benchmark"
 [ "$NO_LOSS" = true ] &&             ARGS+=" --no_loss"
 [ "$READ_FROM_TAR" = true ] &&       ARGS+=" --read_from_tar"
+[ "$INSPECT_AUDIO" = true ] &&       ARGS+=" --inspect_audio"
 [ -n "$VAL_TAR_FILES" ] &&           ARGS+=" --val_tar_files $VAL_TAR_FILES"
 [ -n "$MAX_SYMBOL_PER_SAMPLE" ] &&   ARGS+=" --max_symbol_per_sample=$MAX_SYMBOL_PER_SAMPLE"
+[ -n "$PROB_VAL_NARROWBAND" ] &&     ARGS+=" --prob_val_narrowband $PROB_VAL_NARROWBAND"
+[ -n "$N_UTTERANCES_ONLY" ] &&       ARGS+=" --n_utterances_only=$N_UTTERANCES_ONLY"
 
 DISTRIBUTED=${DISTRIBUTED:-"torchrun --standalone --nnodes 1 --nproc_per_node=$NUM_GPUS"}
 ${DISTRIBUTED} ${PYTHON_COMMAND} ${ARGS} ${EXTRA_ARGS}

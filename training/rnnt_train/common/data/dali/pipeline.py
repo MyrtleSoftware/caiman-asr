@@ -15,6 +15,7 @@
 # modified by rob@myrtle
 
 import math
+from pathlib import Path
 
 import numpy as np
 import nvidia.dali
@@ -22,6 +23,7 @@ import nvidia.dali.ops as ops
 import nvidia.dali.types as types
 import torch
 from beartype.typing import Optional
+from scipy.io.wavfile import write
 
 from rnnt_train.common.data.webdataset import WebDatasetReader
 
@@ -71,14 +73,21 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
         max_duration,
         normalize,
         seed: int,
+        prob_narrowband: float,
+        inspect_audio: bool,
+        output_dir: Path,
         preprocessing_device="gpu",
         webdataset_reader: Optional[WebDatasetReader] = None,
         no_logging: bool = False,
     ):
+        pipelined_possible = not inspect_audio
+        async_possible = pipelined_possible
         super().__init__(
             batch_size,
             num_threads,
             device_id,
+            exec_pipelined=pipelined_possible,
+            exec_async=async_possible,
             seed=seed,
         )
 
@@ -98,6 +107,7 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
         ), "Incorrect preprocessing device. Please choose either 'cpu' or 'gpu'"
 
         self.resample_range = resample_range
+        self.prob_narrowband = prob_narrowband
 
         train_pipeline = pipeline_type == "train"
         self.train = train_pipeline
@@ -107,6 +117,15 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
         self.max_duration = max_duration
         self.do_normalize = normalize
         self.do_remove_silence = True if silence_threshold is not None else False
+
+        self.inspect_audio = inspect_audio
+        if self.inspect_audio:
+            self.save_audio = ops.PythonFunction(
+                save_audio_factory(pipeline_type, shard_id, output_dir),
+                num_outputs=1,
+                device="cpu",
+                batch_processing=False,
+            )
 
         self.read_from_tar = bool(webdataset_reader)
         if self.read_from_tar:
@@ -206,6 +225,9 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
         normalize: bool,
         num_cpu_threads: int,
         seed: int,
+        prob_narrowband: float,
+        inspect_audio: bool,
+        output_dir: Path,
         device_type: str = "gpu",
         do_resampling: bool = True,
         *args,
@@ -250,6 +272,9 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
             max_duration=max_duration,
             normalize=normalize,
             seed=seed,
+            prob_narrowband=prob_narrowband,
+            inspect_audio=inspect_audio,
+            output_dir=output_dir,
             *args,
             **kwargs,
         )
@@ -302,11 +327,30 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
         if self.do_remove_silence:
             audio = self._remove_silence(audio)
 
+        if self.prob_narrowband > 0.0:
+            # target_sr will be either self.sample_rate or 8000
+            diff_sr = self.sample_rate - 8000.0
+            target_sr = self.sample_rate - diff_sr * nvidia.dali.fn.random.coin_flip(
+                probability=self.prob_narrowband
+            )
+
+            # resample to target_sr
+            audio = nvidia.dali.fn.audio_resample(
+                audio, in_rate=self.sample_rate, out_rate=target_sr
+            )
+            # resample back to original sample rate
+            audio = nvidia.dali.fn.audio_resample(
+                audio, in_rate=target_sr, out_rate=self.sample_rate
+            )
+
         if self.preprocessing_device == "gpu":
             audio = audio.gpu()
 
         if self.dither_coeff != 0.0:
             audio = audio + self.normal_distribution(audio) * self.dither_coeff
+
+        if self.inspect_audio:
+            audio = self.save_audio(audio)
 
         audio = self.preemph(audio)
 
@@ -324,3 +368,21 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
         # When modifying DALI pipeline returns, make sure you update `output_map` in DALIGenericIterator invocation
         # modified to return args on the preprocessing device - rob@myrtle
         return audio, audio_len, label, label_lens
+
+
+def save_audio_factory(pipeline_type, shard_id, output_dir: Path):
+    audio_dir = output_dir / "augmented_audios"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    i = 0
+
+    def save_audio(np_array):
+        nonlocal i
+        write(
+            audio_dir / f"audio_{pipeline_type}_{shard_id}_{i}.wav",
+            16000,
+            np_array,
+        )
+        i += 1
+        return np_array
+
+    return save_audio

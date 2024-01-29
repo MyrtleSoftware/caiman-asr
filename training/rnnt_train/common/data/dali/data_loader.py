@@ -15,9 +15,11 @@
 import json
 import math
 import os
+import random
+from pathlib import Path
 
 import torch.distributed as dist
-from beartype.typing import List, Union
+from beartype.typing import Dict, List, Optional, Tuple, Union
 
 from rnnt_train.common.data.webdataset import LengthUnknownError, WebDatasetReader
 from rnnt_train.common.helpers import print_once
@@ -28,9 +30,9 @@ from .pipeline import DaliPipeline
 
 def _parse_json(
     json_path: str,
-    start_label=0,
+    start_label: int = 0,
     predicate=lambda json: True,
-):
+) -> Tuple[Dict[str, Dict[str, Union[int, float]]], Dict[int, str]]:
     """
     Parses json file to the format required by DALI
     Args:
@@ -40,7 +42,7 @@ def _parse_json(
             If the predicate for a given sample returns True, it will be included in the dataset.
 
     Returns:
-        output_files: dictionary, that maps file name to label assigned by DALI
+        output_files: dictionary, that maps file name to the label and duration assigned by DALI
         transcripts: dictionary, that maps label assigned by DALI to the transcript
     """
     with open(json_path) as f:
@@ -92,6 +94,10 @@ class DaliDataLoader:
         num_cpu_threads: int,
         num_buckets: int,
         seed: int,
+        prob_narrowband: float,
+        inspect_audio: bool,
+        output_dir: Path,
+        n_utterances_only: Optional[int],
         grad_accumulation_batches: int = 1,
         device_type: str = "gpu",
         tar_files: Union[str, List[str], None] = None,
@@ -119,6 +125,10 @@ class DaliDataLoader:
             num_cpu_threads=num_cpu_threads,
             tar_files=tar_files,
             seed=seed,
+            prob_narrowband=prob_narrowband,
+            inspect_audio=inspect_audio,
+            output_dir=output_dir,
+            n_utterances_only=n_utterances_only,
         )
 
     def _init_iterator(
@@ -132,7 +142,11 @@ class DaliDataLoader:
         pipeline_type,
         normalize,
         num_cpu_threads,
+        inspect_audio: bool,
         seed: int,
+        prob_narrowband: float,
+        output_dir: Path,
+        n_utterances_only: Optional[int],
         tar_files: Union[str, List[str], None] = None,
     ):
         """
@@ -151,6 +165,11 @@ class DaliDataLoader:
                 )
                 output_files.update(of)
                 transcripts.update(tr)
+            output_files, transcripts = _filter_files(
+                output_files, transcripts, n_utterances_only
+            )
+
+            assert len(output_files) == len(transcripts)
             self.sampler.make_file_list(output_files, json_names)
             print_once(f"Dataset read by DALI. Number of samples: {self.dataset_size}")
             webdataset_reader = None
@@ -185,6 +204,9 @@ class DaliDataLoader:
             webdataset_reader=webdataset_reader,
             no_logging=self.no_logging,
             seed=seed,
+            prob_narrowband=prob_narrowband,
+            inspect_audio=inspect_audio,
+            output_dir=output_dir,
         )
 
         return DaliRnntIterator(
@@ -244,3 +266,35 @@ class DaliDataLoader:
         raise LengthUnknownError(
             "Dataset size is unknown. Number of samples is unknown when reading from tar file"
         )
+
+
+def _filter_files(
+    output_files: Dict[str, Dict[str, Union[int, float]]],
+    transcripts: Dict[int, str],
+    n_utterances_only: Optional[int],
+) -> Tuple[Dict[str, Dict[str, Union[int, float]]], Dict[int, str]]:
+    """Shuffles the dataset and takes only n_utterances_only utterances"""
+    state = random.getstate()
+    # Inside this function we must use the same seed across all processes,
+    # since the dataset sharding depends on output_files and transcripts
+    # being identical across processes.
+    random.seed(42)
+    if n_utterances_only is None:
+        return output_files, transcripts
+    how_many_to_take = min(n_utterances_only, len(output_files))
+    output_files_sublist = random.sample(list(output_files.items()), how_many_to_take)
+    transcripts_sublist = [
+        (utt_info["label"], transcripts[utt_info["label"]])
+        for _, utt_info in output_files_sublist
+    ]
+    # The label idxs have to be a permutation of 0...length-1, so we overwrite
+    # the existing label idxs
+    transcripts_good_indices = [
+        (i, transcript) for i, (_, transcript) in enumerate(transcripts_sublist)
+    ]
+    output_files_good_indices = [
+        (fname, {"label": i, "duration": utt_info["duration"]})
+        for i, (fname, utt_info) in enumerate(output_files_sublist)
+    ]
+    random.setstate(state)
+    return dict(output_files_good_indices), dict(transcripts_good_indices)

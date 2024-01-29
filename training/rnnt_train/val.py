@@ -24,6 +24,7 @@ from beartype.typing import Any, Dict
 
 from rnnt_train.common.evaluate import evaluate
 from rnnt_train.common.helpers import print_once
+from rnnt_train.common.shared_args import add_shared_args, check_shared_args
 from rnnt_train.common.tb_dllogger import flush_log
 from rnnt_train.setup.base import VAL, BuiltObjects
 from rnnt_train.setup.val import ValSetup
@@ -134,6 +135,7 @@ def val_arg_parser() -> ArgumentParser:
         action="store_true",
         help="To use less memory, don't calculate transducer loss",
     )
+    add_shared_args(parser)
     return parser
 
 
@@ -182,6 +184,7 @@ def validate(
 
 
 def main(args, val_objects):
+    check_shared_args(args)
     # check data path args
     if not args.read_from_tar:
         assert (

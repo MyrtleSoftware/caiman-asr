@@ -18,6 +18,8 @@ DATASETS=$1
 CHECKPOINTS=$2
 RESULTS=$3
 
+: ${SNAKEVIZ_PORT:=64546}
+
 # Any additional arguments are treated as volumes to be mounted
 # This allows docker container to follow symlinks in the mounted
 # <DATASETS>, <CHECKPOINTS>, and <RESULTS> directories to different
@@ -45,6 +47,8 @@ DOCKER_ARGS+="-v $CHECKPOINTS:/checkpoints/ "
 DOCKER_ARGS+="-v $RESULTS:/results/ "
 DOCKER_ARGS+="-v $PWD:/code "
 DOCKER_ARGS+="$EXTRA_VOLUMES $volumes "
-DOCKER_ARGS+="-e TZ=$(cat /etc/timezone)"
+DOCKER_ARGS+="-e TZ=$(cat /etc/timezone) "
+DOCKER_ARGS+="-e SNAKEVIZ_PORT=$SNAKEVIZ_PORT "
+DOCKER_ARGS+="-p $SNAKEVIZ_PORT:$SNAKEVIZ_PORT " # Expose this port so snakeviz can use it
 
 docker run ${DOCKER_ARGS} ${DOCKER_NAME} sh -c "/workspace/training/scripts/docker/settimezone.sh && $COMMAND"
