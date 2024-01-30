@@ -115,5 +115,9 @@ ARGS+=" --timestamp=$TIMESTAMP"
 [ -n "$PROB_TRAIN_NARROWBAND" ] &&   ARGS+=" --prob_train_narrowband $PROB_TRAIN_NARROWBAND"
 [ -n "$N_UTTERANCES_ONLY" ] &&       ARGS+=" --n_utterances_only=$N_UTTERANCES_ONLY"
 
+# We want the exit code of the Python script (maybe nonzero if it fails)
+# and not the exit code of tee (always zero)
+set -o pipefail
+
 DISTRIBUTED=${DISTRIBUTED:-"torchrun --standalone --nnodes 1 --nproc_per_node=$NUM_GPUS"}
 ${DISTRIBUTED} ${PYTHON_COMMAND} ${ARGS} ${EXTRA_ARGS} 2>&1 | tee $OUTPUT_DIR/training_log_$TIMESTAMP.txt

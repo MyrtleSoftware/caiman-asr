@@ -344,7 +344,7 @@ def train_arg_parser() -> argparse.ArgumentParser:
     io.add_argument(
         "--profiler",
         action="store_true",
-        help="""Enable profiling with yappi and save htop/nvidia-smi logs.
+        help="""Enable profiling with yappi and save top/nvidia-smi logs.
         This may slow down training""",
     )
     io.add_argument(

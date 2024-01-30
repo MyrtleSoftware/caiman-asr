@@ -30,7 +30,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends numactl && \
     apt-get install -y iproute2 && \
     # Used for logging CPU usage:
-    apt-get install -y htop aha && \
+    apt-get install -y aha && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace/training

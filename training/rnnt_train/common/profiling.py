@@ -46,11 +46,11 @@ def set_up_profiling(
         nvidia_smi_process = subprocess.Popen(
             ["./scripts/profile/record_nvidia_smi.bash", nvidia_smi_logfile]
         )
-        htop_logfile = benchmark_dir / f"htop_log_{timestamp}.html"
-        htop_process = subprocess.Popen(
-            ["./scripts/profile/record_htop.bash", htop_logfile]
+        top_logfile = benchmark_dir / f"top_log_{timestamp}.html"
+        top_process = subprocess.Popen(
+            ["./scripts/profile/record_top.bash", top_logfile]
         )
-        return [nvidia_smi_process, htop_process]
+        return [nvidia_smi_process, top_process]
     else:
         return []
 

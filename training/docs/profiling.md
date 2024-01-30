@@ -13,7 +13,7 @@ Profiling results will be saved in `[output_dir]/benchmark/`. This consists of:
     ```
 
     This will print an interactive URL that you can view in a web browser.
-* htop logs named `htop_log_[timestamp].html`. These can be viewed outside the container using a web browser.
+* top logs named `top_log_[timestamp].html`. These can be viewed outside the container using a web browser.
 * nvidia-smi text logs named `nvidia_smi_log_[timestamp].txt`.
 * Manual timings of certain parts of the training loop for each epoch. These are text files named `timings_epochN_rankM_[timestamp].txt`.
 * system information in `system_info_[timestamp].txt`.
