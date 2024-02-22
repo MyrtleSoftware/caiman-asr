@@ -13,9 +13,6 @@
 # limitations under the License.
 
 
-import torch
-
-
 def lr_policy(
     optimizer,
     initial_lr,
@@ -24,7 +21,6 @@ def lr_policy(
     warmup_steps,
     hold_steps,
     half_life_steps,
-    dist_lamb=False,
 ):
     """
     learning rate policy
@@ -36,7 +32,6 @@ def lr_policy(
         warmup_steps: number of steps over which learning rate ramps up
         hold_steps: number of steps over which learning rate is constant
         half_life_steps: learning rate half-life in steps during decay
-        dist_lamb: If True, we are using the DistributedFusedLAMB optimizer.
     """
 
     if step < warmup_steps:
@@ -50,9 +45,5 @@ def lr_policy(
         initial_lr = [initial_lr]
     assert len(initial_lr) == len(optimizer.param_groups)
 
-    if not dist_lamb:
-        for lr, param_group in zip(initial_lr, optimizer.param_groups):
-            param_group["lr"] = max(a * lr, min_lr)
-    else:
-        for lr, sub_optim in zip(initial_lr, optimizer.child_optimizers):
-            sub_optim._lr = max(a * lr, min_lr * torch.ones_like(lr))
+    for lr, param_group in zip(initial_lr, optimizer.param_groups):
+        param_group["lr"] = max(a * lr, min_lr)

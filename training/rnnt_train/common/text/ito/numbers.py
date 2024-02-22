@@ -22,7 +22,6 @@ import re
 import inflect
 
 # Extend list of values after decillion
-# TODO: this is an inflect package dependency and not the best solution
 inflect.mill = [
     " ",
     " thousand",

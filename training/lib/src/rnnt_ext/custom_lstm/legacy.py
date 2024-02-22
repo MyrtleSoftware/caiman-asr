@@ -1,4 +1,5 @@
-# written by iria [& rob] @ myrtle, Jul 2022
+#! /usr/bin/env python3
+# Note: Any modifications to this code require recompilation for the changes to take effect.
 
 import math
 
@@ -88,8 +89,8 @@ class CustomLSTM(nn.Module):
             # Most of the compute takes place inside the CustomLSTMLayer class.
             # This class is therefore wrapped in TorchScript (jit) for speed.
             # Under PyTorch 1.13 Automatic Mixed Precision (AMP) is not compatible
-            # with TorchScript.  We follow https://pytorch.org/docs/1.13/amp.html
-            # quote "For now, we suggest to disable the Jit Autocast Pass".
+            # with TorchScript. In https://pytorch.org/docs/1.13/amp.html
+            # it is quoted "For now, we suggest to disable the Jit Autocast Pass".
             # Setting autocast to False (below) is 34% faster than the True
             # default when using the non-quantizing CustomLSTM with AMP on A100s.
             # However, on A100s it is 5% faster still to simply not use AMP.
@@ -115,6 +116,7 @@ class CustomLSTM(nn.Module):
             all_c_fl = []
 
         # apply the LSTM layer by layer
+        output = None
         for layer in range(self.num_layers):
             # determine layer input
             if layer == 0:
@@ -125,7 +127,7 @@ class CustomLSTM(nn.Module):
                 else:
                     layer_input = output  # (seq_len, batch, hidden_size)
             # determine layer h_0, c_0
-            if init_states == None:
+            if init_states is None:
                 h_0 = torch.zeros(batch_size, self.hidden_size).to(input_tensor.device)
                 c_0 = torch.zeros(batch_size, self.hidden_size).to(input_tensor.device)
             else:
@@ -162,11 +164,11 @@ class CustomLSTM(nn.Module):
             # Turn list of tensors into just tensors
             all_h_f = rearrange(
                 all_h_fl,
-                "num_layers seq_len batch hidden_size -> num_layers seq_len batch hidden_size",
+                "num_layers seq_len batch hidden_size -> num_layers seq_len batch hidden_size",  # noqa: E501
             )
             all_c_f = rearrange(
                 all_c_fl,
-                "num_layers seq_len batch hidden_size -> num_layers seq_len batch hidden_size",
+                "num_layers seq_len batch hidden_size -> num_layers seq_len batch hidden_size",  # noqa: E501
             )
             all_hidden = (all_h_f, all_c_f)
         else:
@@ -175,7 +177,6 @@ class CustomLSTM(nn.Module):
         return output, (h_f, c_f), all_hidden
 
 
-# Using an identity function instead of a class simplifies the code from print(custom_layer.code)
 def identity_func(x):
     return x
 
@@ -190,7 +191,7 @@ def identity_func(x):
 # the init() and those which pass layer_input_size and hidden_size (marked Final) to the
 # init() and define and register all weight Parameters locally.  These bring no speedup,
 # and also conflict with the use of deepcopy elsewhere.  I've also tried PyTorch 1.13
-# FuncTorch which also doesn't help.  For now, this is probably as good as it gets - rob.
+# FuncTorch which also doesn't help.  For now, this is probably as good as it gets.
 
 
 class CustomLSTMLayer(nn.Module):
@@ -213,7 +214,7 @@ class CustomLSTMLayer(nn.Module):
             self.sigmoid = torch.sigmoid
         # setup the quantization functions
         if self.quantize:
-            # this is a slow import so we do it only when necessary
+            # this is a slow import so will only do it when necessary
             from rnnt_train.common.quantize import BfpQuantizer, BrainFloatQuantizer
 
             self.bf16 = BrainFloatQuantizer(
@@ -301,7 +302,8 @@ class CustomLSTMLayer(nn.Module):
         all_c_t = torch.stack(all_c_tl, dim=0)
 
         # The shape of the return values is:
-        # (seq_len, batch, HS), ((batch, HS), (batch, HS), (seq_len, batch, HS), (seq_len, batch, HS))
+        # (seq_len, batch, HS), ((batch, HS), (batch, HS),
+        # (seq_len, batch, HS), (seq_len, batch, HS))
         return (
             output,
             (h_t, c_t),

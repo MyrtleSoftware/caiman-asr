@@ -1,3 +1,4 @@
+#! /usr/bin/env python3
 # Copyright (c) 2019-2020, NVIDIA CORPORATION. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,8 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# modified by myrtle
-
 import argparse
 import json
 import os
@@ -26,8 +25,10 @@ import numpy as np
 import torch
 import torch.distributed as dist
 
+from rnnt_train.common.data.dali.noise import NoiseSchedule
+from rnnt_train.common.data.noise_augmentation_args import add_noise_augmentation_args
 from rnnt_train.common.evaluate import evaluate
-from rnnt_train.common.helpers import greedy_wer, print_once
+from rnnt_train.common.helpers import calculate_wer, print_once
 from rnnt_train.common.logging_layers import get_logging_entries
 from rnnt_train.common.profiling import finish_profiling, save_timings, set_up_profiling
 from rnnt_train.common.rsp import (
@@ -37,6 +38,8 @@ from rnnt_train.common.rsp import (
 )
 from rnnt_train.common.shared_args import add_shared_args, check_shared_args
 from rnnt_train.common.tb_dllogger import flush_log, log
+from rnnt_train.common.tee import start_logging_stdout_and_stderr
+from rnnt_train.common.torchrun import maybe_restart_with_torchrun
 from rnnt_train.setup.base import TRAIN, VAL
 from rnnt_train.setup.train import TrainSetup
 
@@ -65,23 +68,23 @@ def train_arg_parser() -> argparse.ArgumentParser:
     )
     training.add_argument(
         "--half_life_steps",
-        default=2805,
+        default=10880,
         type=int,
         help="half life (in steps) for exponential learning rate decay",
     )
     training.add_argument(
-        "--cudnn_benchmark",
-        action="store_true",
-        default=True,
-        help="Enable cudnn benchmark",
-    )
-    training.add_argument(
-        "--amp",
+        "--no_cudnn_benchmark",
         action="store_true",
         default=False,
-        help="Use pytorch mixed precision training",
+        help="Disable cudnn benchmark",
     )
-    training.add_argument("--seed", default=None, type=int, help="Random seed")
+    training.add_argument(
+        "--no_amp",
+        action="store_true",
+        default=False,
+        help="Turn off pytorch mixed precision training",
+    )
+    training.add_argument("--seed", default=1, type=int, help="Random seed")
     training.add_argument(
         "--local_rank",
         default=os.getenv("LOCAL_RANK", 0),
@@ -96,6 +99,7 @@ def train_arg_parser() -> argparse.ArgumentParser:
     )
     training.add_argument(
         "--hidden_hidden_bias_scale",
+        "--hidden_hidden_bias_scaled",
         type=float,
         help="If set, overwrites value in config.",
     )
@@ -121,23 +125,36 @@ def train_arg_parser() -> argparse.ArgumentParser:
         help="Effective batch size across all GPUs after grad accumulation",
     )
     optim.add_argument(
-        "--val_batch_size", default=2, type=int, help="Evalution time batch size"
+        "--grad_accumulation_batches",
+        default=8,
+        type=int,
+        help="Number of batches that must be accumulated for a single model update (step)",
     )
-    optim.add_argument("--lr", default=4e-3, type=float, help="Peak learning rate")
     optim.add_argument(
-        "--min_lr", default=1e-5, type=float, help="minimum learning rate"
+        "--batch_split_factor",
+        default=1,
+        type=int,
+        help="Multiple >=1 describing how much larger the encoder/prediction batch size "
+        "is than the joint/loss batch size",
+    )
+    optim.add_argument(
+        "--val_batch_size", default=1, type=int, help="Evaluation time batch size"
+    )
+    optim.add_argument(
+        "--lr", "--learning_rate", default=4e-3, type=float, help="Peak learning rate"
+    )
+    optim.add_argument(
+        "--min_lr",
+        "--min_learning_rate",
+        default=4e-4,
+        type=float,
+        help="minimum learning rate",
     )
     optim.add_argument(
         "--weight_decay",
         default=1e-2,
         type=float,
         help="Weight decay for the optimizer",
-    )
-    optim.add_argument(
-        "--grad_accumulation_batches",
-        default=8,
-        type=int,
-        help="Number of batches that must be accumulated for a single model update (step)",
     )
     optim.add_argument(
         "--clip_norm",
@@ -174,18 +191,20 @@ def train_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Start training anew from the specified checkpoint.",
     )
-    io.add_argument("--ckpt", default=None, type=str, help="Path to a checkpoint")
     io.add_argument(
-        "--save_at_the_end",
+        "--ckpt", "--checkpoint", default=None, type=str, help="Path to a checkpoint"
+    )
+    io.add_argument(
+        "--dont_save_at_the_end",
         action="store_true",
-        help="Saves model checkpoint at the end of training",
+        help="Don't save model checkpoint at the end of training",
     )
     io.add_argument(
         "--save_frequency",
         default=None,
         type=int,
         help=(
-            "Checkpoint saving frequency in epochs. If 0 (or None), we only possibly save "
+            "Checkpoint saving frequency in epochs. If 0 (or None), only possibly save "
             "best and last checkpoints depending on values of --save_best_from and "
             "--save_at_the_end respectively."
         ),
@@ -210,15 +229,14 @@ def train_arg_parser() -> argparse.ArgumentParser:
     )
     io.add_argument(
         "--prediction_frequency",
-        default=None,
+        default=1000,
         type=int,
         help="Number of steps between printing sample decodings",
     )
     io.add_argument(
         "--model_config",
-        default="configs/testing-1023sp_run.yaml",
+        default="/workspace/training/configs/testing-1023sp_run.yaml",
         type=str,
-        required=True,
         help="Path of the model configuration file",
     )
     io.add_argument(
@@ -234,7 +252,11 @@ def train_arg_parser() -> argparse.ArgumentParser:
         "--train_manifests",
         type=str,
         required=False,
-        default=None,
+        default=[
+            "/datasets/LibriSpeech/librispeech-train-clean-100-wav.json",
+            "/datasets/LibriSpeech/librispeech-train-clean-360-wav.json",
+            "/datasets/LibriSpeech/librispeech-train-other-500-wav.json",
+        ],
         nargs="+",
         help="Paths of the training dataset manifest file"
         "Ignored if --read_from_tar=True",
@@ -243,7 +265,7 @@ def train_arg_parser() -> argparse.ArgumentParser:
         "--val_manifests",
         type=str,
         required=False,
-        default=None,
+        default=["/datasets/LibriSpeech/librispeech-dev-clean-wav.json"],
         nargs="+",
         help="Paths of the evaluation datasets manifest files"
         "Ignored if --read_from_tar=True",
@@ -275,12 +297,16 @@ def train_arg_parser() -> argparse.ArgumentParser:
         "--read_from_tar=True.",
     )
     io.add_argument(
-        "--dataset_dir", required=True, type=str, help="Root dir of dataset"
+        "--dataset_dir",
+        "--data_dir",
+        type=str,
+        help="Root dir of dataset",
+        default="/datasets/LibriSpeech",
     )
     io.add_argument(
         "--output_dir",
         type=str,
-        required=True,
+        default="/results",
         help="Directory for logs and checkpoints",
     )
     io.add_argument(
@@ -289,7 +315,7 @@ def train_arg_parser() -> argparse.ArgumentParser:
     io.add_argument(
         "--max_symbol_per_sample",
         type=int,
-        default=None,
+        default=300,
         help="maximum number of symbols per sample can have during eval",
     )
     io.add_argument(
@@ -323,7 +349,8 @@ def train_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="""Steps of training to do before turning on random state passing. If this
-        is None the value defaults to the one set by rnnt_train/common/rsp.py::set_rsp_delay_default.
+        is None the value defaults to the one set by "
+        "rnnt_train/common/rsp.py::set_rsp_delay_default.
         See that docstring for more information.
         """,
     )
@@ -351,8 +378,10 @@ def train_arg_parser() -> argparse.ArgumentParser:
         "--prob_train_narrowband",
         type=float,
         default=0.0,
-        help="Probability that a batch of training audio gets downsampled to 8kHz and then upsampled to original sample rate",
+        help="Probability that a batch of training audio gets downsampled to 8kHz"
+        " and then upsampled to original sample rate",
     )
+    add_noise_augmentation_args(parser)
     add_shared_args(parser)
     return parser
 
@@ -363,9 +392,6 @@ def verify_train_args(args: Namespace) -> Namespace:
         assert (
             args.train_manifests is not None
         ), "Must provide train_manifests if not reading from tar"
-        assert (
-            args.val_manifests is not None
-        ), "Must provide val_manifests if not reading from tar"
         assert args.train_tar_files is None and args.val_tar_files is None, (
             "Must not provide tar files if not reading from tar but "
             f"{args.train_tar_files=} and {args.val_tar_files=}.\nDid you mean to "
@@ -378,6 +404,7 @@ def verify_train_args(args: Namespace) -> Namespace:
         assert (
             args.train_tar_files is not None
         ), "Must provide train_tar_files if --read_from_tar=True"
+
     return args
 
 
@@ -426,9 +453,10 @@ def main(args, train_objects):
             )
         raise ValueError(error_msg)
     if args.dump_mel_stats:
-        assert (
-            not args.num_gpus > 1
-        ), "dumping mel stats not supported in multi-gpu mode. Set NUM_GPU=1 to continue"
+        assert not args.num_gpus > 1, (
+            "dumping mel stats not supported in multi-gpu mode. "
+            "Set `--num_gpus 1` to continue"
+        )
 
     if world_size == 1 or dist.get_rank() == 0:
         # save configuration to file
@@ -456,6 +484,10 @@ def main(args, train_objects):
     start_epoch = meta["start_epoch"]
     best_wer = meta["best_wer"]
     step = initial_step = meta["step"]
+
+    assert (
+        start_epoch < args.epochs
+    ), f"{start_epoch=} and {args.epochs=}. No training to do. Exiting."
     if steps_per_epoch is not None:
         start_step = meta["start_epoch"] * steps_per_epoch + 1
         if start_step != step:
@@ -463,8 +495,24 @@ def main(args, train_objects):
                 f"WARNING: starting step={start_step} but got step={step} from checkpoint"
             )
             step = start_step
-    train_dataset_kw = train_objects.data_objects[TRAIN].dataset_kw
     train_features_kw = train_objects.data_objects[TRAIN].features_kw
+    train_standardize_wer = train_objects.data_objects[TRAIN].dataset_kw[
+        "standardize_wer"
+    ]
+    val_standardize_wer = train_objects.data_objects[VAL].dataset_kw["standardize_wer"]
+
+    noise_schedule = None
+    if (
+        train_loader.pipeline.do_background_noise_aug
+        or train_loader.pipeline.do_babble_noise_aug
+    ):
+        noise_schedule = NoiseSchedule(
+            args.noise_delay_steps,
+            args.noise_ramp_steps,
+            args.noise_initial_low,
+            args.noise_initial_high,
+            train_loader,
+        )
 
     if args.dump_mel_stats:
         # prepare accumulators
@@ -496,8 +544,25 @@ def main(args, train_objects):
 
     # training loop
     for epoch in range(start_epoch + 1, args.epochs + 1):
+        if noise_schedule is not None:
+            noise_schedule.adjust_snrs(step)
+
+        if train_loader.pipeline.do_background_noise_aug:
+            print_once(
+                f"At start of epoch {epoch} SNRs are "
+                f"{train_loader.pipeline.background_noise_iterator.low}-"
+                f"{train_loader.pipeline.background_noise_iterator.high} dB"
+            )
+        if train_loader.pipeline.do_babble_noise_aug:
+            print_once(
+                f"At start of epoch {epoch} babble SNRs are "
+                f"{train_loader.pipeline.babble_noise_iterator.low}-"
+                f"{train_loader.pipeline.babble_noise_iterator.high} dB"
+            )
+
         epoch_utts = 0
         accumulated_batches = 0
+        step_start_time = time.time()
 
         dataloading_total = 0.0  # Time spent getting audio from DALI
         feat_proc_total = 0.0  # Time spent in spec augment / frame stacking
@@ -512,13 +577,11 @@ def main(args, train_objects):
                 train_objects.training_only.adjust_lr(step)
                 optimizer_wrapper.zero_grad()
                 step_utts = 0
-                step_start_time = time.time()
                 all_feat_lens = []
                 losses = []
+                if noise_schedule is not None:
+                    noise_schedule.adjust_snrs(step)
 
-            optimizer_wrapper.set_step(step, accumulated_batches)
-
-            # note : these variable names are a bit misleading : 'audio' is already features - rob@myrtle
             audio, audio_lens, txt, txt_lens = batch
 
             # audio is (batch, meldim, max_len)
@@ -533,7 +596,7 @@ def main(args, train_objects):
                 log((epoch, bnum, tot_samples))
                 continue
 
-            # if these tensors were computed on cpu then move them to gpu - rob@myrtle
+            # if these tensors were computed on cpu then move them to gpu
             if args.dali_device == "cpu":
                 audio = audio.cuda()
                 audio_lens = audio_lens.cuda()
@@ -541,7 +604,7 @@ def main(args, train_objects):
                 txt_lens = txt_lens.cuda()
             before_feat_proc = time.time()
 
-            # now do spec augment / frame stacking - rob@myrtle
+            # now do spec augment / frame stacking
             # feats is (seq_len, batch, input_dim)
             feats, feat_lens = train_feat_proc([audio, audio_lens])
             all_feat_lens += feat_lens
@@ -572,7 +635,7 @@ def main(args, train_objects):
 
             state, rsp_counter = rsp_end_step(state, loss_nan, step, args, rsp_counter)
 
-            # the > 0 condition is a bugfix; absence was causing 1st batch NaNs to enter this code - rob
+            # the > 0 condition prevents 1st batch NaNs entering this code
             if (
                 accumulated_batches > 0
                 and accumulated_batches % args.grad_accumulation_batches == 0
@@ -596,9 +659,13 @@ def main(args, train_objects):
                         args.prediction_frequency is None
                         or step % args.prediction_frequency == 0
                     ):
-                        preds = decoder.decode(model, feats, feat_lens)
-                        wer, pred_utt, ref = greedy_wer(
-                            preds, txt, txt_lens, tokenizer.detokenize
+                        preds, _ = decoder.decode(model, feats, feat_lens)
+                        wer, pred_utt, ref = calculate_wer(
+                            preds,
+                            txt,
+                            txt_lens,
+                            tokenizer.detokenize,
+                            standardize_wer=train_standardize_wer,
                         )
                         print_once(f"  Decoded:   {pred_utt[:90]}")
                         print_once(f"  Reference: {ref[:90]}")
@@ -607,11 +674,12 @@ def main(args, train_objects):
                         wer = {}
 
                     step_time = time.time() - step_start_time
+                    step_start_time = time.time()
                     # dllogger.log expects a tuple of:
                     # (epoch, <steps in current epoch>, steps_per_epoch)
-                    # if steps_per_epoch is None (meaning we are loading data from tar
-                    # files and we are on the first epoch) then, the for the sake of
-                    # logging we use a tuple of:
+                    # if steps_per_epoch is None (meaning that data is loaded from tar
+                    # files and training is on the first epoch) then, logging
+                    # is done with  a tuple of the form:
                     # (epoch, <steps in current epoch>, 'unk')
                     if steps_per_epoch is not None:
                         step_in_epoch = step % steps_per_epoch or steps_per_epoch
@@ -638,8 +706,8 @@ def main(args, train_objects):
                             **dict(tb_per_layer_logs),
                         },
                     )
-
-                step_start_time = time.time()
+                else:
+                    step_start_time = time.time()
 
                 step += 1
                 accumulated_batches = 0
@@ -647,7 +715,7 @@ def main(args, train_objects):
             before_dataloading = time.time()
 
         if args.dump_mel_stats:
-            # this should use more stable computations; in practice stdevs are quite large - rob@myrtle
+            # this should use more stable computations; in practice stdevs are quite large
             melmeans = melsum / meln
             melvars = melss / meln - melmeans * melmeans
             # calculated as doubles for precision; convert to float32s for use
@@ -678,10 +746,10 @@ def main(args, train_objects):
         )
 
         if steps_per_epoch is None:
-            # after running a full epoch we know how many steps there are
+            # after running a full epoch, the number of steps is known
             steps_per_epoch = step - initial_step
 
-        if epoch % args.val_frequency == 0:
+        if epoch % args.val_frequency == 0 or epoch == args.epochs:
             wer = evaluate(
                 epoch,
                 step,
@@ -691,7 +759,11 @@ def main(args, train_objects):
                 ema_model,
                 loss_fn,
                 decoder,
-                args,
+                cfg=cfg,
+                args=args,
+                standardize_wer=val_standardize_wer,
+                calculate_loss=True,
+                using_cpu=False,
             )["wer"]
 
             if wer < best_wer:
@@ -709,6 +781,9 @@ def main(args, train_objects):
                     )
 
         save_this_epoch = bool(args.save_frequency) and epoch % args.save_frequency == 0
+        save_this_epoch = save_this_epoch or (
+            epoch == args.epochs and not args.dont_save_at_the_end
+        )
         if save_this_epoch:
             checkpointer.save(
                 model, ema_model, optimizer, epoch, step, best_wer, tokenizer_kw
@@ -723,30 +798,18 @@ def main(args, train_objects):
         )
 
     log((), None, "train_avg", {"throughput": epoch_utts / epoch_time})
-
-    if epoch == args.epochs:
-        evaluate(
-            epoch,
-            step,
-            val_loader,
-            val_feat_proc,
-            tokenizer.detokenize,
-            ema_model,
-            loss_fn,
-            decoder,
-            args,
-        )
-
     flush_log()
-    if args.save_at_the_end:
-        checkpointer.save(
-            model, ema_model, optimizer, epoch, step, best_wer, tokenizer_kw
-        )
 
 
 if __name__ == "__main__":
     parser = train_arg_parser()
     args = parser.parse_args()
+    maybe_restart_with_torchrun(
+        args.num_gpus,
+        args.called_by_torchrun,
+        "/workspace/training/rnnt_train/train.py",
+    )
+    start_logging_stdout_and_stderr(args.output_dir, args.timestamp, "training")
     profilers = set_up_profiling(args.profiler, args.output_dir, args.timestamp)
     train_objects = TrainSetup().run(args)
     main(args, train_objects)

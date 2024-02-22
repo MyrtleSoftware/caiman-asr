@@ -23,13 +23,9 @@ def punctuation_map(labels):
     punctuation = punctuation.replace("&", "")
     punctuation = punctuation.replace("@", "")
     punctuation = punctuation.replace("%", "")
-    # TODO We might also want to consider:
-    # # -> number, pound, hashtag
-    # ~ -> tilde
-    # _ -> underscore
-    # If a punctuation symbol is inside our vocab, we do not remove from text
-    for l in labels:
-        punctuation = punctuation.replace(l, "")
+    # If a punctuation symbol is inside the vocab, do not remove from text
+    for label in labels:
+        punctuation = punctuation.replace(label, "")
     # Turn all punctuation to whitespace
     table = str.maketrans(punctuation, " " * len(punctuation))
     return table

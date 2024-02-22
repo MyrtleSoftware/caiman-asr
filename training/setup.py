@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="rnnt_train",
-    version="1.7.1",
+    version="1.8.0",
     description="Myrtle RNN-T training",
-    packages=find_packages(where="src"),
+    packages=find_packages(),
 )

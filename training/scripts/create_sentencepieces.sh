@@ -34,6 +34,6 @@ RUN_CONFIG=configs/${CONFIG_NAME}_run.yaml
 mkdir -p /datasets/sentencepieces
 # EDIT line below to point to the correct json file(s)
 jq -r '.[]["transcript"]' /datasets/LibriSpeech/librispeech-train-*-wav.json > /tmp/txt.txt
-python -c "import sentencepiece as spm; spm.SentencePieceTrainer.train(input='/tmp/txt.txt', model_prefix='$SPM_NAME', vocab_size=$SPM_SIZE, character_coverage=1.0, bos_id=-1, eos_id=-1, model_type='unigram')"
-cp $SPM_NAME.* /datasets/sentencepieces/
+python -c "import sentencepiece as spm; spm.SentencePieceTrainer.train(input='/tmp/txt.txt', model_prefix='$SPM_NAME', vocab_size=$SPM_SIZE, character_coverage=1.0, bos_id=-1, eos_id=-1, model_type='unigram', train_extremely_large_corpus=True)"
+cp ${SPM_NAME}.* /datasets/sentencepieces/
 cat $CONFIG | sed s/SENTENCEPIECE/$SPM_NAME/g | sed s/MAX_DURATION/$MAX_DURATION_SECS/g > $RUN_CONFIG

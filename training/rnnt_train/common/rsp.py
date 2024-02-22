@@ -11,6 +11,8 @@ from jaxtyping import Float, Int, jaxtyped
 from rnnt_train.common.helpers import print_once
 from rnnt_train.rnnt.state import PredNetState, RNNTState
 
+# flake8: noqa
+
 
 def is_random_state_passing_on(batch_concat_list):
     """Checks for non-zero values in the list after the first element"""
@@ -86,7 +88,7 @@ def rsp_end_step(
         # Maybe the state is in a bad place and causes NaNs
         rnnt_state = None
 
-    # We initially do not apply random state passing
+    # Initially do not apply random state passing
     if not rsp_on or step < args.rsp_delay:
         rnnt_state = None
 
@@ -97,8 +99,7 @@ def rsp_end_step(
     return rnnt_state, batches_until_history_reset
 
 
-@jaxtyped
-@beartype
+@jaxtyped(typechecker=beartype)
 def get_last_nonpadded_states(
     all_hid: Tuple[
         Float[torch.Tensor, "layers seq batch hidden"],
@@ -110,9 +111,9 @@ def get_last_nonpadded_states(
     Float[torch.Tensor, "layers batch hidden"],
     Float[torch.Tensor, "layers batch hidden"],
 ]:
-    """We want to pick out the last hidden state for each member of the batch.
+    """The last hidden state for each member of the batch has to be picked.
     This is not the last state in the tensor, since there's padding.
-    Hence we index using lens to get the last non-padded state."""
+    Hence index using lens to get the last non-padded state."""
     return (
         all_hid[0][:, lens - 1 - how_far_back, range(len(lens)), :],
         all_hid[1][:, lens - 1 - how_far_back, range(len(lens)), :],
@@ -123,8 +124,7 @@ def maybe_get_last_nonpadded(all_hid, lens):
     return None if all_hid is None else get_last_nonpadded_states(all_hid, lens)
 
 
-@jaxtyped
-@beartype
+@jaxtyped(typechecker=beartype)
 def get_pred_net_state(
     y: Int[torch.Tensor, "batch seq"],
     all_pred_hid: Optional[
@@ -140,11 +140,11 @@ def get_pred_net_state(
     the end of an utterance. The PredNetState consists of the last token and a
     LSTM state.
 
-    Unintuitively, we set how_far_back=1 to get the next-to-last LSTM state.
-    Justification: Suppose we have two utterances, with token sequences [I,
+    Unintuitively: set how_far_back=1 to get the next-to-last LSTM state.
+    Justification: Consider two utterances, with token sequences [I,
     like, cats] and [You, love, dogs]
 
-    If we could train on the concatenation of these two utterances,
+    By training on the concatenation of these two utterances,
     the pred net calculation looks like:
 
     (A)
@@ -155,7 +155,7 @@ def get_pred_net_state(
     Here 0 is the zero vector which LSTMs use as the initial hidden
     state if you don't pass in a hidden state.
 
-    If we trained on these utterances individually, the pred net
+    By training on these utterances individually, the pred net
     calculations are:
 
     (B)
@@ -170,18 +170,18 @@ def get_pred_net_state(
     (where H_i is a different state from h_i)
 
     Note that for the second utterance the hidden states are different
-    than in A, because we've lost the context of the first utterance.
-    We can fix this by replacing (SOS, 0) in C with (cats, h3) from B:
+    than in A, because the context of the first utterance is lost.
+    This can be fixed by replacing (SOS, 0) in C with (cats, h3) from B:
 
     (D)
     cats You love dogs
         ↘   ↘    ↘    ↘
      h3 ➡h4 ➡h5  ➡h6  ➡h7
 
-    Hence in D we have the same hidden states as in A since we're
-    combining the tokens and states in the same way as in A.
+    Hence, D has the same hidden states as A since
+    combining the tokens and states is done the same way as in A.
 
-    Thus we have to save the last token (e.g. cats) and the
+    Thus, it's required to save the last token (e.g. cats) and the
     next-to-last state (e.g. h3) to make this work.
 
     """

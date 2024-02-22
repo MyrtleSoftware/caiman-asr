@@ -79,28 +79,27 @@ def input(conf_yaml, split="train"):
     conf_features = conf.pop("filterbank_features")
     conf_splicing = conf.pop("frame_splicing", {})
     conf_specaugm = conf.pop("spec_augment", None)
-    conf_cutoutau = conf.pop("cutout_augment", None)
+    _ = conf.pop("cutout_augment", None)
 
     # Validate known inner classes
     inner_classes = [
         (conf_dataset, "speed_perturbation", SpeedPerturbationParams),
     ]
-    amp = ["optim_level"]
     for conf_tgt, key, klass in inner_classes:
         if key in conf_tgt:
-            conf_tgt[key] = validate_and_fill(klass, conf_tgt[key], optional=amp)
+            conf_tgt[key] = validate_and_fill(klass, conf_tgt[key])
 
     for k in conf:
         raise ValueError(f"Unknown key {k}")
 
     # Validate outer classes
-    conf_dataset = validate_and_fill(PipelineParams, conf_dataset)
-
-    conf_splicing = validate_and_fill(
-        features.FrameSplicing, conf_splicing, optional=amp
+    conf_dataset = validate_and_fill(
+        PipelineParams, conf_dataset, optional=["standardize_wer"]
     )
+
+    conf_splicing = validate_and_fill(features.FrameSplicing, conf_splicing)
     conf_specaugm = conf_specaugm and validate_and_fill(
-        features.SpecAugment, conf_specaugm, optional=amp
+        features.SpecAugment, conf_specaugm
     )
 
     # Check params shared between classes

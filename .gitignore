@@ -20,6 +20,7 @@ compile_commands.json
 # testing
 .hypothesis
 .pytest_cache
+*.coverage
 
 # logs
 *.log

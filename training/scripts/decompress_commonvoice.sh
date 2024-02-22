@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 
-# iria [& rob]
-
 path="/datasets/CommonVoice/cv-corpus-10.0-2022-07-04/en"
 mp3path=$path/"clips"
 wavpath=$path/"wav_clips"

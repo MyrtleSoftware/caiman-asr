@@ -13,33 +13,93 @@
 # limitations under the License.
 
 
+from beartype import beartype
+from beartype.typing import List, Tuple
 from editdistance import eval as levenshtein
 
-# For long (~1 hour) utterances, using this implementation of levenshtein speeds
-# up val.sh by ~2x.
+from rnnt_train.common.text.whisper_text_normalizer import EnglishTextNormalizer
 
 
-def word_error_rate(hypotheses, references):
-    """Computes average Word Error Rate (WER) between two text lists."""
+@beartype
+def word_error_rate(
+    hypotheses: List[str], references: List[str], standardize: bool = True
+) -> Tuple[float, int, int]:
+    """Compute Word Error Rate (WER) between two text lists.
+
+    This function calculates the WER between two lists. It is calculated as the sum of
+    addition, deletions, and substitutions of words in the hypotheses list entries compared
+    to the respective entries in the references list, divided by the total number of words
+    in the the references list.
+
+    Parameters
+    ----------
+    hypotheses
+        list of strings predicted by the system
+    references
+        list of transcripts
+    standardize
+        whether to standardize hypotheses and references before the WER calculation
+
+    Returns
+    -------
+    wer
+        the wer metric
+    scores
+        the number of additions, deletions, substitutions in all the entries of the
+        hypotheses list
+    words
+        the number of words in the references list
+
+    Raises
+    ------
+    ValueError:
+        if the number of references is greater than the number of hypotheses
+    """
 
     scores = 0
     words = 0
     len_diff = len(references) - len(hypotheses)
     if len_diff > 0:
         raise ValueError(
-            "Uneqal number of hypthoses and references: "
+            "Unequal number of hypotheses and references: "
             "{0} and {1}".format(len(hypotheses), len(references))
         )
-    elif len_diff < 0:
-        hypotheses = hypotheses[:len_diff]
 
-    for h, r in zip(hypotheses, references):
-        h_list = h.split()
-        r_list = r.split()
-        words += len(r_list)
-        scores += levenshtein(h_list, r_list)
+    for hyp, ref in zip(hypotheses, references):
+        if standardize:
+            hyp, ref = standardize_wer(hyp), standardize_wer(ref)
+        hyp_list = hyp.split()
+        ref_list = ref.split()
+        words += len(ref_list)
+        scores += levenshtein(hyp_list, ref_list)
     if words != 0:
         wer = 1.0 * scores / words
     else:
         wer = float("inf")
     return wer, scores, words
+
+
+@beartype
+def standardize_wer(text: str) -> str:
+    """
+    Apply Whisper normalization rules to text.
+
+    This function applies the Whisper normalization rules on the text of both
+    hypotheses and references in order to minimize
+    penalization of non-semantic text differences.
+
+
+    Parameters
+    ----------
+    text
+        string containing un-standardized text
+
+    Returns
+    -------
+    norm_text_list
+        string containing standardized text
+    """
+    standardizer = EnglishTextNormalizer()
+    standard_text = standardizer(text)
+
+    return standard_text

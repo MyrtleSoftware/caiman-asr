@@ -10,5 +10,5 @@ def test_val_import():
     from rnnt_train import val
 
 
-def test_valCPU_import():
-    from rnnt_train import valCPU
+def test_val_multiple_import():
+    from rnnt_train import val_multiple

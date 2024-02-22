@@ -1,12 +1,14 @@
 # Profiling
 
-You can turn on profiling by setting `PROFILER=true` in your training command. Note that profiling will likely slow down training and is intended as a debugging feature.
+You can turn on profiling by passing `--profiler` in your training command. Note that profiling will likely slow down training and is intended as a debugging feature.
 
-Some of the profiling results are only saved after the train completes so it is necessary to avoid killing with `Ctrl + C` if you want to record the full profiling results. Hence, it is recommended to profile a small number of `EPOCHS` and set `N_UTTERANCES_ONLY` to reduce the size of each epoch.
+Some of the profiling results are only saved after the train completes so it is necessary to avoid killing with `Ctrl + C` if you want to record the full profiling results. Hence, it is recommended to profile a small number of `epochs` and set `--n_utterances_only [N_UTTERANCES_ONLY]` to reduce the size of each epoch.
 
 Profiling results will be saved in `[output_dir]/benchmark/`. This consists of:
 
-* [yappi](https://github.com/sumerc/yappi/tree/master) logs named `program[rank]_[timestamp].prof`. These can be viewed via SnakeViz. Inside the container, run
+* [yappi](https://github.com/sumerc/yappi/tree/master) logs named `program[rank]_[timestamp].prof`. These can be viewed via SnakeViz:
+
+    Launch a container with the command `SNAKEVIZ_PORT=[an unused port] ./scripts/docker/launch.sh ...`. Inside the container, run
 
     ```sh
     ./scripts/profile/launch_snakeviz.bash /results/benchmark/program[rank]_[timestamp].prof

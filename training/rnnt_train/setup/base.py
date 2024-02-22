@@ -13,7 +13,7 @@ import torch.distributed as dist
 from beartype import beartype
 from beartype.typing import Callable, Dict, List, Optional, Tuple, Union
 from torch.cuda.amp import GradScaler
-from torch.nn.parallel import DistributedDataParallel
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 from rnnt_train.common.data import features
 from rnnt_train.common.data.build_dataloader import build_dali_loader
@@ -25,8 +25,9 @@ from rnnt_train.common.helpers import Checkpointer, print_once
 from rnnt_train.rnnt import config
 from rnnt_train.rnnt.decoder import RNNTDecoder
 from rnnt_train.rnnt.greedy import RNNTGreedyDecoder
-from rnnt_train.rnnt.loss import apexTransducerLoss
+from rnnt_train.rnnt.loss import ApexTransducerLoss
 from rnnt_train.rnnt.model import RNNT
+from rnnt_train.rnnt.sub_models import RNNTSubModels
 
 
 class PipelineType(Enum):
@@ -51,25 +52,20 @@ class OptimizerWrapper:
         args: Namespace,
         optimizer,
         scaler: Optional[GradScaler],
-        train_loader: DaliDataLoader,
     ):
         self.args = args
         self.optimizer = optimizer
         self.scaler = scaler
-        self._train_loader = train_loader
 
     def zero_grad(self) -> None:
         self.optimizer.zero_grad()
 
-    def set_step(self, step: int, accumulated_batches: int) -> None:
-        pass
-
     def step(self, total_norm: float) -> None:
-        if self.args.amp:
+        if not self.args.no_amp:
             self.do_scaler_step()
             self.scaler.update()
         else:
-            # when not using AMP we must test for inf / NaN gradients ourselves
+            # when not using AMP test for inf / NaN gradients
             if np.isfinite(total_norm):
                 self.optimizer.step()
 
@@ -106,11 +102,11 @@ class DataObject:
 @dataclass
 class BuiltObjects:
     decoder: RNNTDecoder
-    model: Union[RNNT, DistributedDataParallel]
+    model: Union[RNNT, DDP, RNNTSubModels]
     ema_model: RNNT
     tokenizers: Dict[PipelineType, Tokenizer]
     tokenizers_kw: Dict[PipelineType, dict]
-    loss_fn: apexTransducerLoss
+    loss_fn: ApexTransducerLoss
     multi_gpu: bool
     cfg: dict
     world_size: int
@@ -123,6 +119,8 @@ class BuiltObjects:
 class Setup(ABC):
     def run(self, args: Namespace) -> BuiltObjects:
         """Initialise the objects required for each PipelineType."""
+        # Must make output directory before the logging starts in initial_setup()
+        os.makedirs(args.output_dir, exist_ok=True)
         multi_gpu, world_size, np_rng, cfg, batch_sizes = self.initial_setup(args)
         (
             tokenizers,
@@ -138,14 +136,7 @@ class Setup(ABC):
             args, np_rng, world_size, batch_sizes, cfg, tokenizers
         )
         model, ema_model, training_only = self.build_model(
-            args,
-            cfg,
-            default_tokenizer,
-            multi_gpu,
-            default_tokenizer_kw,
-            world_size,
-            loss_fn,
-            data_loader=self.get_default(data_objects).loader,
+            args, cfg, default_tokenizer, multi_gpu, default_tokenizer_kw
         )
         return BuiltObjects(
             decoder=decoder,
@@ -195,7 +186,7 @@ class Setup(ABC):
         blank_idx: int,
         default_tokenizer: Tokenizer,
         default_tokenizer_kw: dict,
-    ) -> Tuple[RNNTDecoder, apexTransducerLoss]:
+    ) -> Tuple[RNNTDecoder, ApexTransducerLoss]:
         loss_fn = self.build_loss_fn(blank_idx, cfg)
         lm_info = self.build_lm_info(args, default_tokenizer, default_tokenizer_kw)
         decoder = self.build_decoder(args, blank_idx, default_tokenizer, lm_info)
@@ -209,10 +200,7 @@ class Setup(ABC):
         tokenizer: Tokenizer,
         multi_gpu: bool,
         tokenizer_kw: dict,
-        world_size: int,
-        loss_fn: apexTransducerLoss,
-        data_loader: DaliDataLoader,
-    ) -> Tuple[Union[RNNT, DistributedDataParallel], RNNT, Optional[TrainingOnly]]:
+    ) -> Tuple[Union[RNNT, DDP, RNNTSubModels], RNNT, Optional[TrainingOnly]]:
         pass
 
     def build_data_and_feat_proc(
@@ -227,7 +215,13 @@ class Setup(ABC):
         samplers = self.build_samplers(args, np_rng, world_size, batch_sizes)
         feat_procs = self.build_each_pipeline_type(self.build_a_feat_proc, args, cfg)
         data_objects = self.build_each_pipeline_type(
-            self.build_data_object, args, cfg, tokenizers, batch_sizes, samplers
+            self.build_data_object,
+            args,
+            cfg,
+            tokenizers,
+            batch_sizes,
+            samplers,
+            world_size,
         )
         return data_objects, feat_procs
 
@@ -249,12 +243,12 @@ class Setup(ABC):
     ) -> None:
         return None
 
-    def build_loss_fn(self, blank_idx: int, cfg: dict) -> apexTransducerLoss:
+    def build_loss_fn(self, blank_idx: int, cfg: dict) -> ApexTransducerLoss:
         """set up the loss function: if the TransducerJoint has packed_output=True then the
-        input to the TransducerLoss must have packed_input=True"""
+        input to the ApexTransducerLoss must have packed_input=True"""
         rnnt_config = config.rnnt(cfg)
         rnnt_config["gpu_unavailable"] = self.preferred_device() == CPU
-        return apexTransducerLoss(
+        return ApexTransducerLoss(
             blank_idx=blank_idx,
             packed_input=rnnt_config["joint_apex_transducer"] == "pack",
         )
@@ -272,10 +266,8 @@ class Setup(ABC):
             cfg, self.pipeline_type_to_str(pipeline_type)
         )
         feat_proc = torch.nn.Sequential(
-            specaugm_kw
-            and features.SpecAugment(optim_level=args.amp, **specaugm_kw)
-            or torch.nn.Identity(),
-            features.FrameSplicing(optim_level=args.amp, **splicing_kw),
+            specaugm_kw and features.SpecAugment(**specaugm_kw) or torch.nn.Identity(),
+            features.FrameSplicing(**splicing_kw),
             features.PermuteAudio(),
         )
         feat_proc.to(self.preferred_device())
@@ -289,6 +281,7 @@ class Setup(ABC):
         tokenizers: Dict[PipelineType, Tokenizer],
         batch_sizes: Dict[PipelineType, int],
         samplers: Dict[PipelineType, Optional[dali_sampler.SimpleSampler]],
+        world_size: int,
     ) -> DataObject:
         print_once("Setting up datasets...")
         (dataset_kw, features_kw, _, _) = config.input(
@@ -304,6 +297,7 @@ class Setup(ABC):
             tokenizer=tokenizers[pipeline_type],
             train_sampler=samplers[pipeline_type],
             cpu=self.preferred_device() == CPU,
+            world_size=world_size,
         )
         return DataObject(loader=loader, dataset_kw=dataset_kw, features_kw=features_kw)
 
@@ -317,7 +311,7 @@ class Setup(ABC):
         pass
 
     def build_each_pipeline_type(self, builder: Callable, *other_args) -> dict:
-        """For val and valCPU, this returns {VAL: builder(VAL)}
+        """For val, this returns {VAL: builder(VAL)}
         For train, this returns {TRAIN: builder(TRAIN), VAL: builder(VAL)}"""
         return {
             pipeline_type: builder(pipeline_type, *other_args)
@@ -363,7 +357,7 @@ class Setup(ABC):
             if not args.skip_init:
                 torch.set_num_interop_threads(1)
 
-        torch.backends.cudnn.benchmark = args.cudnn_benchmark
+        torch.backends.cudnn.benchmark = not args.no_cudnn_benchmark
 
     @abstractmethod
     def start_ddp(self, args) -> Tuple[bool, int]:
@@ -378,23 +372,21 @@ class Setup(ABC):
         # set up distributed processing
         if multi_gpu:
             torch.cuda.set_device(args.local_rank)
-            dist.init_process_group(
-                backend="nccl",
-                init_method="env://",
-                timeout=datetime.timedelta(**timeout),
-            )
+            if not args.skip_init:
+                dist.init_process_group(
+                    backend="nccl",
+                    init_method="env://",
+                    timeout=datetime.timedelta(**timeout),
+                )
             world_size = dist.get_world_size()
             print_once(f"Distributed processing with {world_size} GPUs\n")
         else:
             world_size = 1
         return multi_gpu, world_size
 
-    def more_than_one_gpu(self) -> bool:
+    @property
+    def multi_gpu(self) -> bool:
         return int(os.environ.get("WORLD_SIZE", 1)) > 1
-
-    @abstractmethod
-    def use_torch_dist(self, args: Namespace) -> bool:
-        pass
 
     def get_default(self, dictionary):
         return dictionary[TRAIN] if TRAIN in dictionary else dictionary[VAL]

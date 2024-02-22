@@ -55,9 +55,9 @@ def test_joint_apex_equivalent(batch_size, time_dim, apex_joint):
         # batch_size=1 is a special case of no padding
         assert torch.allclose(h_broadcast, h_apex)
     else:
-        # But in general case we can't check `assert torch.allclose(h_broadcast, h_apex)`
-        # as the apex implementation returns -1 in the locations that are beyond
-        # the specified lengths
+        # But in general case checking `assert torch.allclose(h_broadcast, h_apex)`
+        # cannot be conducted, as the apex implementation returns -1 in the locations
+        # that are beyond the specified lengths
         for hs_broadcast, hs_apex, f_len, g_len in zip(
             h_broadcast, h_apex, f_lens, g_lens
         ):
@@ -88,8 +88,9 @@ def test_apex_joint_dropout_not_eval(apex_joint, apex_joint_dropout):
     h_dropout = apex_joint_dropout(f, g, f_lens, g_lens)
 
     assert h.shape == h_dropout.shape
-    # Note that dropout scales non-zeroed values by 1/(1-p) so we wouldn't expect h and
-    # h_dropout to be equal even if, by chance, no element in h_dropout was zeroed
+    # Note that dropout scales non-zeroed values by 1/(1-p) so it wouldn't be
+    # expected for h and h_dropout to be equal even if, by chance, no element
+    # in h_dropout was zeroed
     assert not torch.allclose(h, h_dropout)
 
     # However, when in eval mode, dropout shouldn't be applied
@@ -101,104 +102,6 @@ def test_apex_joint_dropout_not_eval(apex_joint, apex_joint_dropout):
 
     assert h.shape == h_dropout.shape
     assert torch.allclose(h, h_dropout)
-
-
-@pytest.fixture()
-def input_dim_fixture():
-    return 240
-
-
-@pytest.fixture()
-def n_classes_fixture():
-    return 100
-
-
-@pytest.fixture()
-def model_fixture(
-    input_dim_fixture,
-    n_classes_fixture,
-    enc_n_hid_fixture,
-    pred_n_hid_fixture,
-    joint_n_hid_fixture,
-):
-    return model_setup(
-        input_dim_fixture,
-        n_classes_fixture,
-        False,
-        enc_n_hid_fixture,
-        pred_n_hid_fixture,
-        joint_n_hid_fixture,
-    )
-
-
-@pytest.fixture()
-def legacy_model_fixture(
-    input_dim_fixture,
-    n_classes_fixture,
-    enc_n_hid_fixture,
-    pred_n_hid_fixture,
-    joint_n_hid_fixture,
-):
-    return model_setup(
-        input_dim_fixture,
-        n_classes_fixture,
-        True,
-        enc_n_hid_fixture,
-        pred_n_hid_fixture,
-        joint_n_hid_fixture,
-    )
-
-
-@pytest.fixture()
-def enc_n_hid_fixture():
-    return 11
-
-
-@pytest.fixture()
-def pred_n_hid_fixture():
-    return 12
-
-
-@pytest.fixture()
-def joint_n_hid_fixture():
-    return 13
-
-
-def model_setup(
-    input_dim_fixture,
-    n_classes_fixture,
-    gpu_unavailable,
-    enc_n_hid_fixture,
-    pred_n_hid_fixture,
-    joint_n_hid_fixture,
-):
-    return RNNT(
-        n_classes=n_classes_fixture,
-        in_feats=input_dim_fixture,
-        enc_n_hid=enc_n_hid_fixture,
-        enc_pre_rnn_layers=2,
-        enc_post_rnn_layers=3,
-        enc_stack_time_factor=2,
-        enc_dropout=0.0,
-        enc_batch_norm=False,
-        enc_freeze=False,
-        pred_n_hid=pred_n_hid_fixture,
-        pred_rnn_layers=2,
-        pred_dropout=0.0,
-        pred_batch_norm=False,
-        joint_n_hid=joint_n_hid_fixture,
-        joint_dropout=0.0,
-        joint_net_lr_factor=1.0,
-        joint_apex_transducer=None,
-        joint_apex_relu_dropout=False,
-        forget_gate_bias=1.0,
-        custom_lstm=True,
-        quantize=False,
-        # Must have dropout 0.0 for deterministic results
-        enc_rw_dropout=0.0,
-        pred_rw_dropout=0.0,
-        gpu_unavailable=gpu_unavailable,
-    )
 
 
 def simulated_concatenation(
@@ -276,7 +179,7 @@ def simulated_concatenation(
     )
 
     # Apply model to the second part to get logprobs
-    # Note that we pass in the state from the first part
+    # Note that the state from the first part is passed in
     log_probs_second_part, _, _ = model(
         feats_second_part,
         feat_lens_second_part,
@@ -301,8 +204,7 @@ def simulated_concatenation(
         n_classes,
     )
 
-    # We also want the intermediate activations
-    # (sometimes easier to debug than the logprobs)
+    # Need the intermediate activations (sometimes easier to debug than the logprobs)
 
     # For the whole sequence
     (f, _), (g, _), _ = model.enc_pred(
@@ -399,8 +301,8 @@ def simulated_concatenation(
 @pytest.mark.parametrize("txt_seq_len", [10, 28])
 @pytest.mark.parametrize("use_legacy", [True, False])
 def test_no_padding(
-    model_fixture,
-    legacy_model_fixture,
+    model_factory,
+    legacy_model_factory,
     input_dim_fixture,
     n_classes_fixture,
     batch_size,
@@ -410,8 +312,8 @@ def test_no_padding(
     joint_n_hid_fixture,
 ):
     """Set up inputs for the simulated concatenation test.
-    This is the naive test where we don't take padding into account and
-    assume all sequences are the same length"""
+    This is the naive test where padding is not taken into account and
+    all sequences are assumed to be of the same length"""
     # Note that the audio_seq_len must be divisible by 4
     assert audio_seq_len % 4 == 0
     # Note that the txt_seq_len must be divisible by 2
@@ -446,9 +348,9 @@ def test_no_padding(
         [txt_seq_len - txt_seq_len // 2] * batch_size, device=device, dtype=torch.int
     )
     if use_legacy:
-        model = legacy_model_fixture
+        model = legacy_model_factory()
     else:
-        model = model_fixture
+        model = model_factory()
     simulated_concatenation(
         batch_size,
         feats,
@@ -472,20 +374,20 @@ def test_no_padding(
 
 @pytest.mark.parametrize("use_legacy", [True, False])
 def test_padding(
-    model_fixture,
-    legacy_model_fixture,
+    model_factory,
+    legacy_model_factory,
     input_dim_fixture,
     n_classes_fixture,
     use_legacy,
     joint_n_hid_fixture,
 ):
     """Set up inputs for the simulated concatenation test.
-    We do the padding in the same way as during training."""
+    Do the padding in the same way as during training."""
     device = "cpu" if use_legacy else "cuda"
     if use_legacy:
-        model = legacy_model_fixture
+        model = legacy_model_factory()
     else:
-        model = model_fixture
+        model = model_factory()
     batch_size = 6
     # To make the precision tests work, it seems that all of feat_lens_first_part
     # must be divisible by 2, and the max of all_feat_lens must be divisible by 2.
@@ -609,7 +511,9 @@ def test_padding(
 
 
 def generate_padded_feats(feat_lens, unpad_feats, input_dim, device):
-    """Given a list of unpadded audio feature tensors, returns a padded tensor containing the whole batch"""
+    """
+    Given a list of unpadded audio features, returns padded tensor containing whole batch
+    """
     max_feat_len = max(feat_lens).item()
     padded_feats_list = [
         torch.cat((f, torch.zeros(max_feat_len - f.shape[0], input_dim, device=device)))
@@ -620,7 +524,7 @@ def generate_padded_feats(feat_lens, unpad_feats, input_dim, device):
 
 
 def generate_padded_text(txt_lens, unpad_txt, device):
-    """Given a list of unpadded text tensors, returns a padded tensor containing the whole batch"""
+    """Given list of unpadded text, returns a padded tensor containing the whole batch"""
     max_txt_len = max(txt_lens).item()
     padded_txt_list = [
         torch.cat((t, torch.zeros(max_txt_len - t.shape[0], device=device)))

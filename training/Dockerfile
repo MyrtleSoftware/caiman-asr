@@ -12,16 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-ARG FROM_IMAGE_NAME=nvcr.io/nvidia/pytorch:23.03-py3
+ARG FROM_IMAGE_NAME=nvcr.io/nvidia/pytorch:23.10-py3
 FROM ${FROM_IMAGE_NAME}
 
 # pytorch version taken from here:
-# https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-23-03.html#rel-23-03
-ENV PYTORCH_VERSION=2.0.0a0+1767026
+# https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-23-10.html#rel-23-10
+ENV PYTORCH_VERSION=2.1.0a0+32f93b1
 
-# Added by rob@myrtle May 2022 to fix NVIDIA key rotation problem.
+# fix NVIDIA key rotation problem.
 # See https://forums.developer.nvidia.com/t/notice-cuda-linux-repository-key-rotation/212771 for details.
-RUN apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/3bf863cc.pub
+RUN apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/3bf863cc.pub
 
 # need to set the tzdata time noninteractively
 RUN apt-get update && \
@@ -49,7 +49,7 @@ WORKDIR /workspace/training/lib
 # # Separating the build/install steps gives better stdout/stderr diagnostics
 RUN python setup.py build
 # This is a non-editable install (we need it to put the cuda extensions in the module path which -e does not do)
-RUN python -m pip install --use-feature=in-tree-build .
+RUN python -m pip install .
 # Reset the workspace, needed by following scripts
 WORKDIR /workspace/training
 

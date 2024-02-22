@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
+import pytest
 from editdistance import eval as levenshtein
 from hypothesis import given
 from hypothesis.strategies import text
+
+from rnnt_train.common.metrics import word_error_rate
 
 
 @given(text(), text())
@@ -40,3 +43,26 @@ def levenshtein_ref(a, b):
             current[j] = min(add, delete, change)
 
     return current[n]
+
+
+@pytest.mark.parametrize(
+    "hypotheses, references, standardize, expected_wer",
+    [
+        (["hello world"], ["hello world"], True, (0.0, 0, 2)),
+        (["hello world"], ["hi everyone"], True, (1.0, 2, 2)),
+        (["hello world", "good morning"], ["hello world"], True, (0.0, 0, 2)),
+        ([], [], True, (float("inf"), 0, 0)),
+        (["hello world"], ["hello new world"], True, (1 / 3, 1, 3)),
+        (["good morning earth"], ["good morning mars good morning"], True, (0.6, 3, 5)),
+    ],
+)
+def test_word_error_rate(hypotheses, references, standardize, expected_wer):
+    wer, scores, words = word_error_rate(hypotheses, references, standardize)
+    assert (wer, scores, words) == expected_wer, "WER calculation is incorrect"
+
+
+def test_wer_unequal_lengths():
+    references = ["hello", "mars"]
+    hypotheses = ["hello"]
+    with pytest.raises(ValueError):
+        word_error_rate(hypotheses, references, standardize=True)

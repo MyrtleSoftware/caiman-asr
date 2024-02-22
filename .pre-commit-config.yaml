@@ -13,7 +13,7 @@ repos:
     rev: 5.12.0
     hooks:
     - id: isort
-      args: [--profile=black, --project=rnnt_train]
+      args: [--profile=black, --project=rnnt_train, --project=internal_rnnt_train]
 -   repo: https://github.com/psf/black
     rev: 23.3.0
     hooks:
@@ -39,3 +39,8 @@ repos:
       ]
       # Later versions of node are incompatible with Ubuntu 18
       language_version: "17.9.1"
+- repo: https://github.com/PyCQA/flake8
+  rev: 7.0.0
+  hooks:
+  - id: flake8
+    args: [--max-line-length=92, "--extend-ignore=E203,F401,F722"]

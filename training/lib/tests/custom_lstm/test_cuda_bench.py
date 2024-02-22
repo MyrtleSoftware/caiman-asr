@@ -5,7 +5,7 @@ import pytest
 import torch
 
 if not torch.cuda.is_available():
-    # Before jit import to avoid jit compilation on when we wont use it.
+    # Before jit import to avoid jit compilation on when it won't be used.
     pytest.skip("Cuda not available so can't run these test", allow_module_level=True)
 
 from rnnt_ext.custom_lstm.lstm import CustomLSTM
@@ -69,20 +69,20 @@ def bench(rnn, X, h, c, target, amp):
 
         if tot > 100 or frac_err(times) < 0.10:
             break
-    # We return the mean and standard error
+    # Return the mean and standard error
     # https://en.wikipedia.org/wiki/Standard_error
     return mean(times), stdev(times) / sqrt(len(times))
 
 
 def comp(ref, test, frac):
     if ref[0] > test[0]:
-        # We are faster
+        # Being faster
         return True
     elif ref[0] + ref[1] >= test[0] - test[1]:
-        # We are within error
+        # Being within error
         return True
     else:
-        # We are slower
+        # Being slower
         return (test[0] - ref[0]) / ref[0] < frac
 
 
@@ -93,8 +93,8 @@ def comp(ref, test, frac):
 @pytest.mark.parametrize("layers", [1, 2])
 @pytest.mark.parametrize("dtype", [torch.float32])
 def test_cuda_bench(batch, hidden, seq, amp, layers, dtype):
-    #
-    # NOTE: If hidden gets too small then cuDNN will switch over to a persistent LSTM which we cannot compete with.
+    # NOTE: If hidden gets too small then cuDNN will switch over to a persistent LSTM
+    # which this code cannot compete with.
 
     if amp and dtype is torch.float64:
         # AMP is a noop under double precision.

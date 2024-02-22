@@ -32,7 +32,8 @@ def normalize(s, quiet=False, charset=None, punct_map=None) -> str:
     """Normalizes string.
 
     Example:
-        'call me at 8:00 pm!' -> 'call me at eight zero pm'
+    >>> normalize('call me at 8:00 pm!')
+    'call me at eight zero zero pm'
     """
     if charset is None:
         charset = DEFAULT_CHARSET
@@ -64,15 +65,16 @@ def normalize_list(transcripts, quiet=False):
 def normalize_by_line(text, quiet=False):
     """Split text at \n, clean each line,
     and then glue together with spaces.
-    Hence we can still normalize most of
-    a document even if one line is unnormalizable
+    Hence most of the document will be normalized
+    even if one line is unnormalizable
     and needs to be deleted"""
     return " ".join(normalize_list(text.split("\n"), quiet))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Normalizes a file to just a-z, space, and '. Handles numbers acceptably"
+        description="Normalizes a file to just a-z, space, and '. Handles numbers "
+        "acceptably"
     )
     parser.add_argument(
         "file",

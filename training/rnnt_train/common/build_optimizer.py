@@ -24,7 +24,7 @@ def build_fused_lamb(args: Namespace, model: RNNT, opt_eps: float) -> FusedLAMB:
 
 
 @beartype
-def build_optimizer(args: Namespace, model: RNNT, world_size: int) -> FusedLAMB:
+def build_optimizer(args: Namespace, model: RNNT) -> FusedLAMB:
     """
     Top-level optimizer builder.
     """

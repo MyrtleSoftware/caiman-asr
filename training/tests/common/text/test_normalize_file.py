@@ -9,30 +9,32 @@ def test_wishlist(n):
     """It would be nice if normalize handled these cases better. But
     also changing normalize will cause the LM datasets' caches to need
     rebuilding"""
-    # TODO This one loses the dollar sign
     assert (
         n("$ 124,758") == "one hundred twenty four thousand seven hundred fifty eight"
     )
-    # TODO This one is wrong
+    assert (
+        n("$124,758")
+        == "one hundred twenty four thousand seven hundred fifty eight dollars"
+    )
     assert n("$1.2") == "one dollar two cents"
-    # TODO Newlines sometimes cause issues because they're removed after
-    # numbers are parsed
+    assert n("$1.02") == "one dollar two cents"
+    assert n("$1.20") == "one dollar twenty cents"
     assert n("$6.2\n million") == "six dollars two cents million"
     assert n("$6.2\nmillion") == "six dollars two cents million"
 
 
 @pytest.mark.parametrize("n", [normalize, normalize_by_line])
 def test_both(n):
-    # Dollars and percents are usually handled well:
+    # Tests for dollars and percentages
     assert (
         n("$124,758")
         == "one hundred twenty four thousand seven hundred fifty eight dollars"
     )
     assert n("$6.2 million") == "six point two million dollars"
     assert n("$1.2 million") == "one point two million dollars"
-    assert (
-        n("34.2%, to $19,111,001 and 12%")
-        == "thirty four point two percent to nineteen million one hundred eleven thousand one dollars and twelve percent"
+    assert n("34.2%, to $19,111,001 and 12%") == (
+        "thirty four point two percent to nineteen million one hundred eleven "
+        "thousand one dollars and twelve percent"
     )
     assert (
         n(" approximately $1.20 per share. ")
@@ -86,6 +88,7 @@ def test_both(n):
     # New lines become spaces
     assert n("new\nline") == "new line"
     assert n("1\n2\n3") == "one two three"
+    assert normalize("\n") == ""
 
 
 def test_normalize_by_line():
@@ -99,8 +102,3 @@ def test_normalize_by_line():
         )
         == "eleven dollars is parseable  thirteen dollars one cent is parseable"
     )
-
-
-def test_normalize():
-    # A single "\n" becomes ""
-    assert normalize("\n") == ""

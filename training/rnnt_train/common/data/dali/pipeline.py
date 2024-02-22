@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# modified by rob@myrtle
-
 import math
 from pathlib import Path
 
@@ -23,8 +21,17 @@ import nvidia.dali.ops as ops
 import nvidia.dali.types as types
 import torch
 from beartype.typing import Optional
+from nvidia.dali.plugin.numba.experimental import NumbaFunction
+from nvidia.dali.types import DALIDataType
 from scipy.io.wavfile import write
 
+from rnnt_train.common.data.dali.noise import (
+    BabbleNoiseIterator,
+    BackgroundNoiseIterator,
+    babble_batch_dali_api,
+    blend_dali_api,
+)
+from rnnt_train.common.data.noise_augmentation_args import NoiseAugmentationArgs
 from rnnt_train.common.data.webdataset import WebDatasetReader
 
 
@@ -35,6 +42,7 @@ class PipelineParams:
         max_duration=float("inf"),
         max_transcript_len=float("inf"),
         normalize_transcripts=False,
+        standardize_wer=True,
         trim_silence=False,
         speed_perturbation=None,
     ):
@@ -61,8 +69,8 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
         batch_size,
         file_root: str,
         sampler,
-        sample_rate,
-        resample_range: list,
+        sample_rate: int,
+        resample_range: Optional[list],
         window_size,
         window_stride,
         nfeatures,
@@ -72,16 +80,22 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
         preemph_coeff,
         max_duration,
         normalize,
+        noise_augmentation_args: NoiseAugmentationArgs,
         seed: int,
-        prob_narrowband: float,
+        turn_off_initial_padding: bool,
         inspect_audio: bool,
+        prob_narrowband: float,
         output_dir: Path,
         preprocessing_device="gpu",
         webdataset_reader: Optional[WebDatasetReader] = None,
         no_logging: bool = False,
     ):
+        self.do_background_noise_aug = (
+            noise_augmentation_args.prob_background_noise > 0.0
+        )
+        self.do_babble_noise_aug = noise_augmentation_args.prob_babble_noise > 0.0
         pipelined_possible = not inspect_audio
-        async_possible = pipelined_possible
+        async_possible = pipelined_possible and not self.do_babble_noise_aug
         super().__init__(
             batch_size,
             num_threads,
@@ -127,9 +141,62 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
                 batch_processing=False,
             )
 
+        # noise augmentation
+        if self.do_background_noise_aug:
+            self.background_noise_iterator = BackgroundNoiseIterator(
+                batch_size,
+                shard_id,
+                n_shards,
+                noise_augmentation_args.noise_dataset,
+                noise_augmentation_args.use_noise_audio_folder,
+                noise_augmentation_args.prob_background_noise,
+                noise_config=noise_augmentation_args.noise_config,
+                sample_rate=sample_rate,
+            )
+            self.noise_source = ops.ExternalSource(
+                source=self.background_noise_iterator, num_outputs=3
+            )
+            self.background_noise_func = NumbaFunction(
+                run_fn=blend_dali_api,
+                in_types=[
+                    DALIDataType.FLOAT,
+                    DALIDataType.FLOAT,
+                    DALIDataType.FLOAT,
+                    DALIDataType.FLOAT,
+                ],
+                ins_ndim=[1, 1, 1, 1],
+                outs_ndim=[1, 1, 1, 1],
+                out_types=[
+                    DALIDataType.FLOAT,
+                    DALIDataType.FLOAT,
+                    DALIDataType.FLOAT,
+                    DALIDataType.FLOAT,
+                ],
+                device="cpu",
+            )
+
+        if self.do_babble_noise_aug:
+            self.babble_noise_iterator = BabbleNoiseIterator(
+                batch_size, noise_augmentation_args.prob_babble_noise
+            )
+            self.babble_noise_source = ops.ExternalSource(
+                source=self.babble_noise_iterator, num_outputs=2
+            )
+            # Apply babble on a batch level so that other samples from the
+            # batch can be used as babble noise. Hence set batch_processing=True
+            self.babble_noise_func = NumbaFunction(
+                run_fn=babble_batch_dali_api,
+                in_types=[DALIDataType.FLOAT, DALIDataType.FLOAT, DALIDataType.FLOAT],
+                ins_ndim=[1, 1, 1],
+                outs_ndim=[1, 1, 1],
+                out_types=[DALIDataType.FLOAT, DALIDataType.FLOAT, DALIDataType.FLOAT],
+                device="cpu",
+                batch_processing=True,
+            )
+
         self.read_from_tar = bool(webdataset_reader)
         if self.read_from_tar:
-            assert sampler is None, f"Sampler not required for WebDataset"
+            assert sampler is None, "Sampler not required for WebDataset"
             self.read = ops.ExternalSource(
                 source=webdataset_reader,
                 num_outputs=2,
@@ -167,6 +234,14 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
             downmix=True,
         )
 
+        assert window_size > window_stride
+        # window_size and window_stride are measured in seconds
+        how_many_zeros = sample_rate * (window_size - window_stride)
+        # The ASR server pads the start of the audio with this many
+        # zeros, so the same is done for training and validation
+        self.initial_zeros = np.zeros(int(how_many_zeros))
+        self.turn_off_initial_padding = turn_off_initial_padding
+
         self.normal_distribution = ops.random.Normal(device=preprocessing_device)
 
         self.preemph = ops.PreemphasisFilter(
@@ -197,7 +272,7 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
 
         self.get_shape = ops.Shapes(device=preprocessing_device)
 
-        # in Dali the audio tensor this operates on has shape (mel_dims, time) - rob@myrtle
+        # in Dali the audio tensor this operates on has shape (mel_dims, time)
         self.normalize = ops.Normalize(device=preprocessing_device, axes=[1])
 
         self.pad = ops.Pad(device=preprocessing_device, fill_value=0)
@@ -224,14 +299,16 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
         config_features: dict,
         normalize: bool,
         num_cpu_threads: int,
+        turn_off_initial_padding: bool,
         seed: int,
-        prob_narrowband: float,
         inspect_audio: bool,
+        prob_narrowband: float,
         output_dir: Path,
+        noise_augmentation_args: NoiseAugmentationArgs,
+        webdataset_reader: Optional[WebDatasetReader],
+        no_logging: bool,
         device_type: str = "gpu",
         do_resampling: bool = True,
-        *args,
-        **kwargs,
     ):
         max_duration = config_data["max_duration"]
         sample_rate = config_data["sample_rate"]
@@ -271,12 +348,14 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
             preemph_coeff=preemph_coeff,
             max_duration=max_duration,
             normalize=normalize,
+            noise_augmentation_args=noise_augmentation_args,
             seed=seed,
-            prob_narrowband=prob_narrowband,
+            turn_off_initial_padding=turn_off_initial_padding,
             inspect_audio=inspect_audio,
+            prob_narrowband=prob_narrowband,
             output_dir=output_dir,
-            *args,
-            **kwargs,
+            no_logging=no_logging,
+            webdataset_reader=webdataset_reader,
         )
 
     @staticmethod
@@ -304,7 +383,6 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
             label = self.pad(label)
         else:
             # the 'labels' are just indexes so their lengths == 1 and are meaningless
-            # all the same we need to return something so
             label_len = self.get_shape(label)
 
         # 2) decode audio (already done in tar-file case)
@@ -324,10 +402,33 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
 
         audio, label, label_lens = self.read_data_in(resample_scale)
 
+        if self.do_background_noise_aug:
+            noise, target_snr, ratio_start = self.noise_source()
+            if resample_scale is None:
+                noise, nr = self.decode(noise)
+            else:
+                resample_coeffs = resample_scale * self.sample_rate
+                noise, nr = self.decode(noise, sample_rate=resample_coeffs)
+
         if self.do_remove_silence:
             audio = self._remove_silence(audio)
 
+        if self.do_babble_noise_aug:
+            babble_target_snr, babble_ratio_start = self.babble_noise_source()
+            audio, _, _ = self.babble_noise_func(
+                audio, babble_target_snr, babble_ratio_start
+            )
+
+        if self.do_background_noise_aug:
+            # blend noise and audio here
+            audio, _, _, _ = self.background_noise_func(
+                audio, noise, target_snr, ratio_start
+            )
+
         if self.prob_narrowband > 0.0:
+            # Reduce volume to avoid clipping
+            audio = audio / 3.0
+
             # target_sr will be either self.sample_rate or 8000
             diff_sr = self.sample_rate - 8000.0
             target_sr = self.sample_rate - diff_sr * nvidia.dali.fn.random.coin_flip(
@@ -336,15 +437,18 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
 
             # resample to target_sr
             audio = nvidia.dali.fn.audio_resample(
-                audio, in_rate=self.sample_rate, out_rate=target_sr
+                audio, in_rate=self.sample_rate, out_rate=target_sr, quality=100
             )
             # resample back to original sample rate
             audio = nvidia.dali.fn.audio_resample(
-                audio, in_rate=target_sr, out_rate=self.sample_rate
+                audio, in_rate=target_sr, out_rate=self.sample_rate, quality=100
             )
 
         if self.preprocessing_device == "gpu":
             audio = audio.gpu()
+
+        if not self.turn_off_initial_padding:
+            audio = nvidia.dali.fn.cat(self.initial_zeros, audio)
 
         if self.dither_coeff != 0.0:
             audio = audio + self.normal_distribution(audio) * self.dither_coeff
@@ -365,8 +469,9 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
 
         audio = self.pad(audio)
 
-        # When modifying DALI pipeline returns, make sure you update `output_map` in DALIGenericIterator invocation
-        # modified to return args on the preprocessing device - rob@myrtle
+        # When modifying DALI pipeline returns, make sure you update `output_map`
+        # in DALIGenericIterator invocation
+        # modified to return args on the preprocessing device
         return audio, audio_len, label, label_lens
 
 

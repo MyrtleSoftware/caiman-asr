@@ -27,17 +27,20 @@ def switch_on_grad_noise_scheduler(cfg: dict, enc_freeze: bool) -> bool:
         if grad_noise_level <= 0.0 or enc_freeze:
             if enc_freeze:
                 print_once(
-                    f"WARNING: Freezing the encoder turns off the encoder gradient noise automatically."
+                    "WARNING: Freezing the encoder turns off the encoder gradient "
+                    "noise automatically."
                 )
             return False
         else:
             print_once(
-                "Noise will be added to the gradients of the encoder tensors during training."
+                "Noise will be added to the gradients of the encoder tensors during "
+                "training."
             )
             return True
-    except KeyError as err:
+    except KeyError:
         print_once(
-            f"No gradient noise level information was found in the config file. Gradient noise scheduler will be None."
+            "No gradient noise level information was found in the config file. Gradient "
+            "noise scheduler will be None."
         )
         return False
 
@@ -49,8 +52,8 @@ class GradNoiseScheduler:
     is applied to the training of the model. The noise is sampled from a gaussian
     distribution with mean=0 and standard deviation that decreases with time according to
     the equation: noise_level/(1 + step - start_step)**decay_const.
-    The noise is added only to the gradients of the encoder tensors, and when the encoder is
-    frozen, it is off by default.
+    The noise is added only to the gradients of the encoder tensors, and when the encoder
+    is frozen, it is off by default.
 
 
     Parameters
@@ -97,8 +100,8 @@ class GradNoiseScheduler:
 
     def add_grad_noise(self, model, step: int, world_size: int):
         """
-        Update the gradients with noise sampled from a gaussian distribution according to the
-        step.
+        Update the gradients with noise sampled from a gaussian distribution according
+        to the step.
         """
 
         if self.switch_on(step):
@@ -112,7 +115,7 @@ class GradNoiseScheduler:
                     dtype=param.dtype,
                     generator=self.rng_grad_noise,
                 )
-                # each GPU adds noise to the tensors grads, but we only need it once
+                # each GPU adds noise to the tensors grads, but it is only needed once
                 noise.data.div(world_size)
                 param.grad.data.add_(noise)
         return model

@@ -15,19 +15,17 @@
 # limitations under the License.
 
 """ from https://github.com/keithito/tacotron
-Modified to add puncturation removal
-"""
+Modified to add punctuation removal
 
-"""
 Cleaners are transformations that run over the input text at both training and eval time.
 
-Cleaners can be selected by passing a comma-delimited list of cleaner names as the "cleaners"
-hyperparameter. Some cleaners are English-specific. You'll typically want to use:
+Cleaners can be selected by passing a comma-delimited list of cleaner names as the
+"cleaners" hyperparameter. Some cleaners are English-specific. You'll typically want to use:
     1. "english_cleaners" for English text
-    2. "transliteration_cleaners" for non-English text that can be transliterated to ASCII using
-         the Text-Unidecode library (https://pypi.org/project/text-unidecode/)
-    3. "basic_cleaners" if you do not want to transliterate (in this case, you should also update
-         the symbols in symbols.py to match your data).
+    2. "transliteration_cleaners" for non-English text that can be transliterated to
+        ASCII using the Text-Unidecode library (https://pypi.org/project/text-unidecode/)
+    3. "basic_cleaners" if you do not want to transliterate (in this case, you should
+        also update the symbols in symbols.py to match your data).
 
 """
 

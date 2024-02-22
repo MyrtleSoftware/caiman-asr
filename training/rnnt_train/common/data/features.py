@@ -19,9 +19,8 @@ import torch.nn as nn
 class BaseFeatures(nn.Module):
     """Base class for audio preprocessing."""
 
-    def __init__(self, optim_level):
+    def __init__(self):
         super(BaseFeatures, self).__init__()
-        self.optim_level = optim_level
 
     @torch.no_grad()
     def calculate_features(self, audio, audio_lens):
@@ -54,7 +53,6 @@ class SpecAugment(BaseFeatures):
 
     def __init__(
         self,
-        optim_level,
         freq_masks=0,
         min_freq=0,
         max_freq=10,
@@ -63,7 +61,7 @@ class SpecAugment(BaseFeatures):
         max_time=10,
         noise_magnitude=0,
     ):
-        super(SpecAugment, self).__init__(optim_level)
+        super(SpecAugment, self).__init__()
         assert 0 <= min_freq <= max_freq
         assert 0 <= min_time <= max_time
 
@@ -107,7 +105,7 @@ class SpecAugment(BaseFeatures):
             std = torch.zeros(x.size(0), x.size(1), 1, device=x.device)
             for idx in range(sh[0]):
                 mean[idx, :, 0] = x[idx, :, : x_lens[idx]].mean(dim=1)
-                std[idx, :, 0] = x[idx, :, : x_lens[idx]].mean(dim=1)
+                std[idx, :, 0] = x[idx, :, : x_lens[idx]].std(dim=1)
 
             std *= self.noise_magnitude
             noise = (mean + torch.randn_like(x) * std).masked_fill(~mask, 0)
@@ -168,8 +166,8 @@ def stack_subsample_frames(x, x_lens, stacking=1, subsampling=1):
 class FrameSplicing(BaseFeatures):
     __constants__ = ["frame_subsampling", "frame_stacking"]
 
-    def __init__(self, optim_level, frame_stacking=1, frame_subsampling=1):
-        super(FrameSplicing, self).__init__(optim_level)
+    def __init__(self, frame_stacking=1, frame_subsampling=1):
+        super(FrameSplicing, self).__init__()
         self.frame_stacking = frame_stacking
         self.frame_subsampling = frame_subsampling
 

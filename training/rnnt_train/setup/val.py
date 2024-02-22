@@ -6,23 +6,21 @@ import numpy as np
 import torch
 from beartype import beartype
 from beartype.typing import Dict, List, Optional, Tuple, Union
-from torch.nn.parallel import DistributedDataParallel
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 from rnnt_train.common.data.dali import sampler as dali_sampler
-from rnnt_train.common.data.dali.data_loader import DaliDataLoader
 from rnnt_train.common.data.text import Tokenizer
 from rnnt_train.common.helpers import Checkpointer, num_weights, print_once
 from rnnt_train.common.seed import set_seed
 from rnnt_train.common.tb_dllogger import init_log
 from rnnt_train.rnnt import config
-from rnnt_train.rnnt.loss import apexTransducerLoss
 from rnnt_train.rnnt.model import RNNT
 from rnnt_train.setup.base import CPU, CUDA, VAL, PipelineType, Setup
 
 
 @beartype
 class BaseValSetup(Setup):
-    """Code shared between val.py and valCPU.py"""
+    """Code shared between ValSetup and ValCPUSetup."""
 
     def build_model(
         self,
@@ -31,10 +29,7 @@ class BaseValSetup(Setup):
         tokenizer: Tokenizer,
         multi_gpu: bool,
         tokenizer_kw: dict,
-        world_size: int,
-        loss_fn: apexTransducerLoss,
-        data_loader: DaliDataLoader,
-    ) -> Tuple[Union[RNNT, DistributedDataParallel], RNNT, None]:
+    ) -> Tuple[Union[RNNT, DDP], RNNT, None]:
         rnnt_config = config.rnnt(cfg)
         rnnt_config["gpu_unavailable"] = self.preferred_device() == CPU
         model = RNNT(n_classes=tokenizer.num_labels + 1, **rnnt_config)
@@ -45,7 +40,7 @@ class BaseValSetup(Setup):
         ema_model = copy.deepcopy(model).to(self.preferred_device())
 
         if multi_gpu:
-            model = DistributedDataParallel(model)
+            model = DDP(model)
 
         # setup checkpointer
         checkpointer = Checkpointer(args.output_dir, "RNN-T")
@@ -67,12 +62,14 @@ class BaseValSetup(Setup):
             print_once("WARNING: This is an old RNN-T checkpoint")
             print_once("Cannot check if you are using the correct tokenizer\n")
             print_once(
-                f"Using the tokenizer keywords from the config file, which are {tokenizer_kw}"
+                "Using the tokenizer keywords from the config file, which are "
+                f"{tokenizer_kw}"
             )
         else:
             tokenizer_kw = checkpoint_tokenizer_kw
             print_once(
-                f"Using the tokenizer keywords from the RNN-T checkpoint, which are {tokenizer_kw}"
+                "Using the tokenizer keywords from the RNN-T checkpoint, which are "
+                f"{tokenizer_kw}"
             )
 
         # Initialize Tokenizer w/ tokenizer_kw from checkpoint or from base*.yaml file
@@ -84,8 +81,7 @@ class BaseValSetup(Setup):
         return {VAL: args.val_batch_size}
 
     def seed_and_logging(self, args: Namespace) -> np.random.Generator:
-        if args.seed is not None:
-            np_rng = set_seed(args.seed, args.local_rank)
+        np_rng = set_seed(args.seed, args.local_rank)
 
         if not args.skip_init:
             init_log(args)
@@ -109,14 +105,23 @@ class ValSetup(BaseValSetup):
     def preferred_device(self) -> torch.device:
         return CUDA
 
-    def use_torch_dist(self, args: Namespace) -> bool:
-        return self.more_than_one_gpu()
-
     def start_ddp(self, args) -> Tuple[bool, int]:
-        multi_gpu = self.use_torch_dist(args)
         # When validation takes a long time (e.g. on a ~40 hour dataset), one
         # process may finish long before the others. If it waits more than
-        # `timeout`, it will crash. We increase the default (30 min) to a year
+        # `timeout`, it will crash. Increasing the default (30 min) to a year
         # so that it never crashes.
-        # https://pytorch.org/docs/stable/distributed.html#torch.distributed.init_process_group
-        return self.start_ddp_with_gpu(args, multi_gpu, timeout={"weeks": 52})
+        # https://pytorch.org/docs/stable/distributed.html#torch.distributed.init_process_group # noqa
+        return self.start_ddp_with_gpu(args, self.multi_gpu, timeout={"weeks": 52})
+
+
+@beartype
+class ValCPUSetup(BaseValSetup):
+    def preferred_device(self) -> torch.device:
+        return CPU
+
+    def start_ddp(self, args) -> Tuple[bool, int]:
+        return False, 1
+
+    @property
+    def multi_gpu(self) -> bool:
+        return False

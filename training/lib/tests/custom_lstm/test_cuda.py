@@ -2,7 +2,7 @@ import pytest
 import torch
 
 if not torch.cuda.is_available():
-    # Before jit import to avoid jit compilation on when we wont use it.
+    # Before jit import, to avoid jit compilation when it will not be used.
     pytest.skip("Cuda not available so can't run these test", allow_module_level=True)
 
 import rnnt_ext.custom_lstm.lstm as CUDA

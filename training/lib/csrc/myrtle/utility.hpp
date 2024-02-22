@@ -1,3 +1,5 @@
+// Note: Any modifications to this C++ code require recompilation for the changes to take effect.
+
 #pragma once
 
 #include <limits>

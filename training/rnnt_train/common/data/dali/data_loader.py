@@ -12,55 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
 import math
 import os
-import random
 from pathlib import Path
 
 import torch.distributed as dist
-from beartype.typing import Dict, List, Optional, Tuple, Union
+from beartype.typing import List, Optional, Union
 
+from rnnt_train.common.data.dali.iterator import DaliRnntIterator
+from rnnt_train.common.data.dali.pipeline import DaliPipeline
+from rnnt_train.common.data.dali.utils import (
+    _filter_files,
+    _parse_json,
+    generate_json_names_from_dirs,
+    set_predicate,
+)
+from rnnt_train.common.data.noise_augmentation_args import NoiseAugmentationArgs
 from rnnt_train.common.data.webdataset import LengthUnknownError, WebDatasetReader
 from rnnt_train.common.helpers import print_once
-
-from .iterator import DaliRnntIterator
-from .pipeline import DaliPipeline
-
-
-def _parse_json(
-    json_path: str,
-    start_label: int = 0,
-    predicate=lambda json: True,
-) -> Tuple[Dict[str, Dict[str, Union[int, float]]], Dict[int, str]]:
-    """
-    Parses json file to the format required by DALI
-    Args:
-        json_path: path to json file
-        start_label: the label, starting from which DALI will assign consecutive int numbers to every transcript
-        predicate: function, that accepts a sample descriptor (i.e. json dictionary) as an argument.
-            If the predicate for a given sample returns True, it will be included in the dataset.
-
-    Returns:
-        output_files: dictionary, that maps file name to the label and duration assigned by DALI
-        transcripts: dictionary, that maps label assigned by DALI to the transcript
-    """
-    with open(json_path) as f:
-        librispeech_json = json.load(f)
-    output_files = {}
-    transcripts = {}
-    curr_label = start_label
-    for original_sample in librispeech_json:
-        if not predicate(original_sample):
-            continue
-        transcripts[curr_label] = original_sample["transcript"]
-        fname = original_sample["files"][-1]["fname"]
-        output_files[fname] = dict(
-            label=curr_label,
-            duration=original_sample["original_duration"],
-        )
-        curr_label += 1
-    return output_files, transcripts
 
 
 class DaliDataLoader:
@@ -94,14 +63,19 @@ class DaliDataLoader:
         num_cpu_threads: int,
         num_buckets: int,
         seed: int,
-        prob_narrowband: float,
+        turn_off_initial_padding: bool,
         inspect_audio: bool,
+        prob_narrowband: float,
         output_dir: Path,
         n_utterances_only: Optional[int],
+        noise_augmentation_args: NoiseAugmentationArgs,
         grad_accumulation_batches: int = 1,
         device_type: str = "gpu",
         tar_files: Union[str, List[str], None] = None,
         read_from_tar: bool = False,
+        val_from_dir: bool = False,
+        audio_dir: str = None,
+        txt_dir: str = None,
         no_logging: bool = False,
     ):
         self.batch_size = batch_size
@@ -111,6 +85,9 @@ class DaliDataLoader:
         self.device_type = device_type
         self.pipeline_type = self._parse_pipeline_type(pipeline_type)
         self.read_from_tar = read_from_tar
+        self.val_from_dir = val_from_dir
+        self.audio_dir = audio_dir
+        self.txt_dir = txt_dir
         self.sampler = sampler
         self.num_buckets = num_buckets
         self._dali_data_iterator = self._init_iterator(
@@ -123,10 +100,12 @@ class DaliDataLoader:
             pipeline_type=pipeline_type,
             normalize=normalize,
             num_cpu_threads=num_cpu_threads,
+            noise_augmentation_args=noise_augmentation_args,
             tar_files=tar_files,
             seed=seed,
-            prob_narrowband=prob_narrowband,
+            turn_off_initial_padding=turn_off_initial_padding,
             inspect_audio=inspect_audio,
+            prob_narrowband=prob_narrowband,
             output_dir=output_dir,
             n_utterances_only=n_utterances_only,
         )
@@ -142,6 +121,8 @@ class DaliDataLoader:
         pipeline_type,
         normalize,
         num_cpu_threads,
+        noise_augmentation_args: NoiseAugmentationArgs,
+        turn_off_initial_padding: bool,
         inspect_audio: bool,
         seed: int,
         prob_narrowband: float,
@@ -154,19 +135,24 @@ class DaliDataLoader:
         """
         max_duration = config_data["max_duration"]
         max_transcript_len = config_data["max_transcript_len"]
+        predicate = set_predicate(pipeline_type, max_duration, max_transcript_len)
         if not self.read_from_tar:
             output_files, transcripts = {}, {}
+            # if reading from directories, generate json names from directories
+            if self.val_from_dir and pipeline_type == "val":
+                json_names = generate_json_names_from_dirs(
+                    dataset_path, self.audio_dir, self.txt_dir
+                )
             for jname in json_names:
                 of, tr = _parse_json(
                     jname if jname[0] == "/" else os.path.join(dataset_path, jname),
                     len(output_files),
-                    predicate=lambda json: json["original_duration"] <= max_duration
-                    and len(json["transcript"]) < max_transcript_len,
+                    predicate=predicate,
                 )
                 output_files.update(of)
                 transcripts.update(tr)
             output_files, transcripts = _filter_files(
-                output_files, transcripts, n_utterances_only
+                output_files, transcripts, n_utterances_only, seed
             )
 
             assert len(output_files) == len(transcripts)
@@ -201,11 +187,13 @@ class DaliDataLoader:
             device_type=self.device_type,
             batch_size=self.batch_size,
             pipeline_type=pipeline_type,
+            noise_augmentation_args=noise_augmentation_args,
             webdataset_reader=webdataset_reader,
             no_logging=self.no_logging,
             seed=seed,
-            prob_narrowband=prob_narrowband,
+            turn_off_initial_padding=turn_off_initial_padding,
             inspect_audio=inspect_audio,
+            prob_narrowband=prob_narrowband,
             output_dir=output_dir,
         )
 
@@ -264,37 +252,6 @@ class DaliDataLoader:
         if self.sampler is not None:
             return self.sampler.get_dataset_size()
         raise LengthUnknownError(
-            "Dataset size is unknown. Number of samples is unknown when reading from tar file"
+            "Dataset size is unknown. Number of samples is unknown when reading from "
+            "tar file"
         )
-
-
-def _filter_files(
-    output_files: Dict[str, Dict[str, Union[int, float]]],
-    transcripts: Dict[int, str],
-    n_utterances_only: Optional[int],
-) -> Tuple[Dict[str, Dict[str, Union[int, float]]], Dict[int, str]]:
-    """Shuffles the dataset and takes only n_utterances_only utterances"""
-    state = random.getstate()
-    # Inside this function we must use the same seed across all processes,
-    # since the dataset sharding depends on output_files and transcripts
-    # being identical across processes.
-    random.seed(42)
-    if n_utterances_only is None:
-        return output_files, transcripts
-    how_many_to_take = min(n_utterances_only, len(output_files))
-    output_files_sublist = random.sample(list(output_files.items()), how_many_to_take)
-    transcripts_sublist = [
-        (utt_info["label"], transcripts[utt_info["label"]])
-        for _, utt_info in output_files_sublist
-    ]
-    # The label idxs have to be a permutation of 0...length-1, so we overwrite
-    # the existing label idxs
-    transcripts_good_indices = [
-        (i, transcript) for i, (_, transcript) in enumerate(transcripts_sublist)
-    ]
-    output_files_good_indices = [
-        (fname, {"label": i, "duration": utt_info["duration"]})
-        for i, (fname, utt_info) in enumerate(output_files_sublist)
-    ]
-    random.setstate(state)
-    return dict(output_files_good_indices), dict(transcripts_good_indices)

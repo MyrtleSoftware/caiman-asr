@@ -29,7 +29,7 @@ def test_grad_noise_scheduler(ex_input, expected):
 @pytest.mark.parametrize("enc_freeze", [True, False])
 def test_switch_on_grad_noise_sched_return_false(cfg_input, enc_freeze):
     gns = switch_on_grad_noise_scheduler(cfg_input, enc_freeze)
-    assert gns == False
+    assert gns is False
 
 
 @pytest.mark.parametrize(
@@ -40,4 +40,4 @@ def test_switch_on_grad_noise_sched_return_false(cfg_input, enc_freeze):
 )
 def test_switch_on_grad_noise_sched_return_true(cfg_input):
     gns = switch_on_grad_noise_scheduler(cfg_input, enc_freeze=False)
-    assert gns == True
+    assert gns is True

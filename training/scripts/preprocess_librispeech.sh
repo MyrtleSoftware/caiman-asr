@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # Copyright (c) 2019-2020, NVIDIA CORPORATION. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#!/usr/bin/env bash
 
 python ./rnnt_train/utils/convert_librispeech.py \
     --input_dir /datasets/LibriSpeech/train-clean-100 \

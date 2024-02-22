@@ -1,4 +1,5 @@
-# Copyright (c) 2022 Myrtle.ai
+#! /usr/bin/env python3
+
 
 import torch
 from qtorch import BlockFloatingPoint, FloatingPoint
@@ -54,7 +55,7 @@ class BfpQuantizer(torch.nn.Module):
         self.block_quantizer = Quantizer(
             forward_number=BlockFloatingPoint(
                 wl=fp_man + 1,
-                dim=0,  # we want to block quantize along same dimension of tensors
+                dim=0,  # block quantize along same dimension of tensors
             ),
             forward_rounding=forward_rounding,
         )

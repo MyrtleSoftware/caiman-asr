@@ -14,7 +14,7 @@ def get_logging_entries(
     tb_per_layer_logs = []
     try:
         for n, p in getattr(model, "module", model).named_parameters():
-            # We only log/compute the gradnorm of parameters that aren't frozen:
+            # Only log/compute the gradnorm of parameters that aren't frozen:
             if not p.requires_grad:
                 continue
             # in case of pytorch AMP compute the unscaled norm:

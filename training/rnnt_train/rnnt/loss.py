@@ -17,7 +17,7 @@ import torch
 from apex.contrib.transducer import TransducerLoss
 
 
-class apexTransducerLoss(torch.nn.Module):
+class ApexTransducerLoss(torch.nn.Module):
     """
     NVIDIA apex RNNT implementation from the apex module transducer_loss_cuda.
     """
@@ -34,16 +34,17 @@ class apexTransducerLoss(torch.nn.Module):
         Computes the RNNT loss function
 
         Args:
-            inputs:
-                logits: logits tensor of size [B, T, U, K+1] or [batch, max_seq_len,
+
+            logits: logits tensor of size [B, T, U, K+1] or [batch, max_seq_len,
                 max_output_seq, vocab_size+1] if packed_input=False. Otherwise, logits
-                is a tensor of size [total_packed, K+1] where total_packed = batch_offset[-1].
-                Precision is float32, or float16 when AMP=true.
-                logit_lens: the length of logits tensor.
-                y: text transcription tensor.
-                y_lens: the length text tensor.
-                batch_offset: cumulative sum of T*(U+1).
-                max_f_len: max number of features.
+                is a tensor of size [total_packed, K+1] where
+                total_packed = batch_offset[-1].
+                Precision is float16, or float32 when `--no_amp` is passed.
+            logit_lens: the length of logits tensor.
+            y: text transcription tensor.
+            y_lens: the length text tensor.
+            batch_offset: cumulative sum of T*(U+1).
+            max_f_len: max number of features.
         """
 
         if y.dtype != torch.int32:
@@ -57,9 +58,8 @@ class apexTransducerLoss(torch.nn.Module):
 
         if self.validate_first_n_remaining > 0:
             # Inputs validation is expensive as it requires sending items from GPU -> CPU
-            # and waiting for the result to arrive. Therefore we only validate the first
-            # ten times this loss is called. We don't just validate once because there
-            # was a bug that was only caught by validating multiple times.
+            # and waiting for the result to arrive. Configuring validation to happen
+            # only the first validate_first_n_remaining times.
             self._validate_inputs(logits, batch_offset, y)
             self.validate_first_n_remaining -= 1
 
@@ -94,9 +94,10 @@ class apexTransducerLoss(torch.nn.Module):
                 "When packed_input=False, logits should be of shape [B, T, U, K+1] "
                 f"but {logits.shape=}"
             )
-            assert (
-                y.shape[1] == logits.shape[2] - 1
-            ), f"When packed_input=False, {y.shape[1]=} should be 1 less than {logits.shape[2]=}"
+            assert y.shape[1] == logits.shape[2] - 1, (
+                f"When packed_input=False, {y.shape[1]=} should be 1 less than "
+                f"{logits.shape[2]=}"
+            )
 
 
 def get_packing_meta_data(
@@ -107,7 +108,6 @@ def get_packing_meta_data(
     """
     Return packing metadata for TransducerLoss and TransducerJoint
     """
-    dict_meta_data = {"batch_offset": None, "max_f_len": None, "packed_batch": None}
     final_feat_lens = (feat_lens + enc_time_reduction - 1) // enc_time_reduction
     batch_offset = torch.cumsum(final_feat_lens * (txt_lens + 1), dim=0)
     max_f_len = max(final_feat_lens)

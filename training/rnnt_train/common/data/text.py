@@ -1,4 +1,5 @@
 # Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2023, Myrtle Software Limited, www.myrtle.ai. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,8 +22,9 @@ class Tokenizer:
 
         Args:
             labels (str): all possible output symbols
+            sentpiece_model (str): name of tokenizer model
         """
-        # For labels use vocab or load worpieces
+        # For labels use vocab or load wordpieces
         self.charset = labels
         self.use_sentpiece = sentpiece_model is not None
         if self.use_sentpiece:

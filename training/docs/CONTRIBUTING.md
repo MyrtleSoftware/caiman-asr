@@ -12,11 +12,10 @@ which python3
 which pip3
 ```
 
-...and ensure that each returns a path. Python comes pre-installed on most Linux distributions so it's likely that even if you can't see it, it is on your system and can be added to your `$PATH`. If you don't have python3 installed you can install it on Ubuntu 18.04 or 20.04 by following [this tutorial](https://phoenixnap.com/kb/how-to-install-python-3-ubuntu). Now run:
+...and ensure that each returns a path. Python comes pre-installed on most Linux distributions so it's likely that even if you can't see it, it is on your system and can be added to your `$PATH`. If you don't have python3 installed you can install it on Ubuntu 18.04 or 20.04 by following [this tutorial](https://phoenixnap.com/kb/how-to-install-python-3-ubuntu). From the root of the repo run:
 
 ```bash
 pip install pre-commit==3.3.2
-cd .. # navigate to the root of the repo
 pre-commit install
 ```
 
@@ -43,15 +42,39 @@ pre-commit run --all-files
 
 ## Running `pytest` tests <a name="pytest"></a>
 
+### Unit-tests
+
 If you would like to run the tests manually run `$ pytest` inside a running container.
 
+To check test coverage, run the following inside a container:
+
+```
+coverage run -m pytest tests
+coverage report -m
+```
+
+### Distributed tests
+
+There are tests to ensure that the batch splitting code is working correctly **in the distributed case** with number of GPUs > 1. The tests can be run on a multi-gpu machine from inside a running container with the following command:
+
+```bash
+python tests/rnnt/test_batch_split.py --num_gpus 2
+```
+
+After seeing the pass/fail pytest output you will need to KeyboardInterrupt this script otherwise it will run until the NCCL watchdog timer is up.
+
+### Doctests
+
+[Doctests](https://docs.python.org/3/library/doctest.html) can be run inside a container with `pytest rnnt_train`. Note that this takes ~90s to collect the tests when run for the first time in a container, but following runs take <10s.
+
 ## Type checking
+
 We use [beartype](https://beartype.readthedocs.io/en/latest/) to check type annotations at runtime, and [jaxtyping](https://docs.kidger.site/jaxtyping/) to check tensor shapes.
 
-When applying both decorators to one function, the order matters. The correct order is:
+When applying jaxtyped, use it like this:
+
 ```python
-@jaxtyped
-@beartype
+@jaxtyped(typechecker=beartype)
 def function(...) -> ...:
    ...
 ```

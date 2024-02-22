@@ -14,8 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# valCPU.sh is derived from val.sh
-# rob@myrtle, May 2022
+echo -e "\e[33mDEPRECATED: this supports the legacy environment variable API.\e[0m"
+echo -e "\e[33mplease note that to use CPU you need to parse CPU argument.\e[0m"
+echo -e "\e[33mTo get newest features you will need to use ./scripts/val.sh\e[0m"
 
 export OMP_NUM_THREADS=1
 
@@ -27,17 +28,19 @@ export OMP_NUM_THREADS=1
 : ${VAL_BATCH_SIZE:=1}
 : ${SEED=1}
 : ${ALPHA:=0.001}
-: ${AMP:=false}
+: ${DALI_DEVICE:="cpu"}
 : ${CUDNN_BENCHMARK:=true}
 : ${STREAM_NORM:=false}
-: ${RESET_STREAM_STATS:=false}
-: ${DUMP_NTH:=None}
+: ${RESET_STREAM_STATS:=true}
 : ${DUMP_PREDS:=false}
+: ${NUM_GPUS:=1}
 : ${READ_FROM_TAR:=false}
-: ${PYTHON_COMMAND:="./rnnt_train/valCPU.py"}
+: ${PYTHON_COMMAND:="./rnnt_train/val.py"}
 : ${EXTRA_ARGS:=""}
+: ${NO_LOSS:=true}
+: ${CPU:=false}
 
-mkdir -p "$OUTPUT_DIR"
+TIMESTAMP=$(date '+%Y_%m_%d_%H_%M_%S')
 
 ARGS="--dataset_dir=$DATA_DIR"
 ARGS+=" --model_config=$MODEL_CONFIG"
@@ -47,13 +50,16 @@ ARGS+=" --val_manifests $VAL_MANIFESTS"
 ARGS+=" --val_batch_size=$VAL_BATCH_SIZE"
 ARGS+=" --seed=$SEED"
 ARGS+=" --alpha=$ALPHA"
+ARGS+=" --dali_device=$DALI_DEVICE"
+ARGS+=" --timestamp=$TIMESTAMP"
+ARGS+=" --num_gpus=$NUM_GPUS"
 
-[ "$AMP" = true ] &&                 ARGS+=" --amp"
-[ "$CUDNN_BENCHMARK" = true ] &&     ARGS+=" --cudnn_benchmark"
+[ "$CPU" = true ] &&                 ARGS+=" --cpu"
+[ "$CUDNN_BENCHMARK" = false ] &&    ARGS+=" --no_cudnn_benchmark"
 [ "$STREAM_NORM" = true ] &&         ARGS+=" --streaming_normalization"
-[ "$RESET_STREAM_STATS" = true ] &&  ARGS+=" --reset_stream_stats"
-[ "$DUMP_NTH" != None ] &&           ARGS+=" --dump_nth=$DUMP_NTH"
+[ "$RESET_STREAM_STATS" = false ] && ARGS+=" --dont_reset_stream_stats"
 [ "$DUMP_PREDS" = true ] &&          ARGS+=" --dump_preds"
+[ "$NO_LOSS" = false ] &&            ARGS+=" --calculate_loss"
 [ "$READ_FROM_TAR" = true ] &&       ARGS+=" --read_from_tar"
 [ "$INSPECT_AUDIO" = true ] &&       ARGS+=" --inspect_audio"
 [ -n "$VAL_TAR_FILES" ] &&           ARGS+=" --val_tar_files $VAL_TAR_FILES"
@@ -61,4 +67,5 @@ ARGS+=" --alpha=$ALPHA"
 [ -n "$PROB_VAL_NARROWBAND" ] &&     ARGS+=" --prob_val_narrowband $PROB_VAL_NARROWBAND"
 [ -n "$N_UTTERANCES_ONLY" ] &&       ARGS+=" --n_utterances_only=$N_UTTERANCES_ONLY"
 
-python ${PYTHON_COMMAND} ${ARGS} ${EXTRA_ARGS}
+
+${PYTHON_COMMAND} ${ARGS} ${EXTRA_ARGS}

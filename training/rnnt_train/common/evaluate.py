@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The evaluate() function was originally in train.py - rob@myrtle
 
 import time
 
@@ -21,8 +20,10 @@ from beartype.typing import Any, Dict
 
 from rnnt_train.common import helpers
 from rnnt_train.common.data.webdataset import LengthUnknownError
-from rnnt_train.common.helpers import process_evaluation_epoch
+from rnnt_train.common.helpers import is_rank_zero, process_evaluation_epoch
 from rnnt_train.common.tb_dllogger import log
+from rnnt_train.rnnt.model_forward import model_loss_forward_val
+from rnnt_train.utils.timestamp import group_timestamps
 
 
 @torch.no_grad()
@@ -35,77 +36,100 @@ def evaluate(
     ema_model,
     loss_fn,
     decoder,
+    cfg,
     args,
-    calculate_loss=True,
+    stream_norm=None,
+    standardize_wer=True,
+    calculate_loss=False,
+    nth_batch_only=None,
+    using_cpu=False,
 ) -> Dict[str, Any]:
     """
-    Perform on-GPU evaluation.
+    Perform evaluation.
     """
     ema_model.eval()
-    enc_time_reduction = ema_model.enc_stack_time_factor
+    # apply streaming normalization
+    if stream_norm and not args.dont_reset_stream_stats:
+        training_means = torch.load("/results/melmeans.pt")
+        training_vars = torch.load("/results/melvars.pt")
 
     start_time = time.time()
     if calculate_loss:
-        results = {"losses": [], "preds": [], "txts": [], "idx": []}
+        results = {"losses": [], "preds": [], "txts": [], "idx": [], "timestamps": []}
     else:
-        results = {"preds": [], "txts": [], "idx": []}
+        results = {"preds": [], "txts": [], "idx": [], "timestamps": []}
+
     try:
         total_loader_len = f"{len(val_loader):<10}"
     except LengthUnknownError:
         total_loader_len = "unk"
 
     for i, batch in enumerate(val_loader):
+        if nth_batch_only is not None:
+            if i < nth_batch_only:
+                continue
+            elif i > nth_batch_only:
+                break
         print(
             f"{val_loader.pipeline_type} evaluation: {i:>10}/{total_loader_len}",
             end="\r",
         )
 
-        # note : these variable names are a bit misleading : 'audio' is already features - rob@myrtle
+        # note : these variable names are a bit misleading : 'audio' is already features
         # txt is      (batch, max(txt_lens))
         # txt_lens is (batch, )
         audio, audio_lens, txt, txt_lens = batch
 
-        # if these tensors were computed on cpu then move them to gpu - rob@myrtle
-        if args.dali_device == "cpu":
+        if stream_norm:
+            # Then the audio tensor was not normalized by DALI and must be normalized here.
+            # The Rust Inference Server inits each new Channel with the stream-norm
+            # training stats.
+            # The Python default is to act similarly for each new utterance in the
+            # manifest.
+            # The Python system can then match the Rust system using a new Channel for
+            # each utterance.
+            if not args.dont_reset_stream_stats:
+                stream_norm.mel_means = training_means.clone()
+                stream_norm.mel_vars = training_vars.clone()
+            # The stream_norm class normalizes over time using an exponential moving
+            # average.
+            # The stats held in the stream_norm class are updated each frame,
+            # effectively adapting to
+            # the current speaker. audio is (batch, meldim, time) and batch is enforced
+            # to be 1 below.
+            for j in range(audio.shape[2]):
+                audio[0, :, j] = stream_norm.normalize(audio[0, :, j])
+
+        # move tensors back to gpu, unless cpu is used during validation
+        if args.dali_device == "cpu" and not using_cpu:
             audio = audio.cuda()
             audio_lens = audio_lens.cuda()
             txt = txt.cuda()
             txt_lens = txt_lens.cuda()
 
-        # now do frame stacking - rob@myrtle
+        # now do frame stacking
         feats, feat_lens = val_feat_proc([audio, audio_lens])
 
-        # batch_offset and max_f_len parameters are required for the apex transducer
-        # loss/joint implementations
-        final_feat_lens = (feat_lens + enc_time_reduction - 1) // enc_time_reduction
-        batch_offset = torch.cumsum(final_feat_lens * (txt_lens + 1), dim=0)
-        max_f_len = max(final_feat_lens)
-
         if calculate_loss:
-            # note : more misleading variable names : 'log_prob*' are actually logits - rob@myrtle
-            log_probs, log_prob_lens, _ = ema_model(
-                feats, feat_lens, txt, txt_lens, batch_offset=batch_offset
+            loss = model_loss_forward_val(
+                ema_model, loss_fn, feats, feat_lens, txt, txt_lens
             )
-            max_f_len = max(final_feat_lens)
-            loss = loss_fn(
-                log_probs,
-                log_prob_lens,
-                txt,
-                txt_lens,
-                batch_offset,
-                max_f_len,
-            )
-
-        pred = decoder.decode(ema_model, feats, feat_lens)
-
-        if calculate_loss:
             results["losses"] += helpers.gather_losses([loss.cpu()])
-        results["preds"] += helpers.gather_predictions([pred], detokenize)
+        pred, timestamps = decoder.decode(ema_model, feats, feat_lens)
+
+        preds = helpers.gather_predictions([pred], detokenize)
+        results["preds"] += preds
         results["txts"] += helpers.gather_transcripts(
             [txt.cpu()], [txt_lens.cpu()], detokenize
         )
+        if timestamps:
+            # For each predicted sentence, detokenize token into subword
+            subwords = [[detokenize(token) for token in sentence] for sentence in pred]
+            # convert token timestamps to word timestamps
+            word_timestamps = group_timestamps(subwords, timestamps, preds)
+            results["timestamps"] += word_timestamps
 
-    wer, loss = process_evaluation_epoch(results)
+    wer, loss = process_evaluation_epoch(results, standardize_wer=standardize_wer)
     results["wer"] = wer
 
     log(
@@ -114,5 +138,12 @@ def evaluate(
         "dev_ema",
         {"loss": loss, "wer": 100.0 * wer, "took": time.time() - start_time},
     )
+
+    if args.dump_preds and is_rank_zero():
+        with open(f"{args.output_dir}/preds.txt", "w") as f:
+            for line in results["preds"]:
+                f.write(str(line))
+                f.write("\n")
+
     ema_model.train()
     return results

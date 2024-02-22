@@ -45,18 +45,18 @@ Note that, in this script, we normalize transcripts before building a sentencepi
 
 ## Training and validation
 
-To trigger training or validation for data stored in WebDataset format you should pass `READ_FROM_TAR=true` to `train.sh`, `val.sh` and/or `valCPU.sh`.
+To trigger training or validation for data stored in WebDataset format you should pass `--read_from_tar` to `train.sh`, `val.sh`.
 
-You will also need to pass `VAL_TAR_FILES` (and for training, `TRAIN_TAR_FILES`) as one or more tar shard files/globs in `DATA_DIR`. For example if all of your training and tar files are in a flat `DATA_DIR` directory you might run:
+You will also need to pass `--val_tar_files` (and for training, `--train_tar_files`) as one or more tar shard files/globs in `data_dir`. For example if all of your training and tar files are in a flat `data_dir` directory you might run:
 
 ```bash
-READ_FROM_TAR=true  DATA_DIR=/datasets/TarredDataset TRAIN_TAR_FILES="train_*.tar" VAL_TAR_FILES="dev_*.tar" ./scripts/train.sh
+./scripts/train.sh --read_from_tar --data_dir=/datasets/TarredDataset --train_tar_files train_*.tar --val_tar_files dev_*.tar
 ```
 
-where `{TRAIN,VAL}_TAR_FILES` can be one or more filenames or fileglobs. In this mode, your training and tar files must have non-overlapping names. Alternatively, if you have a nested file structure you can set `DATA_DIR=/` and then pass absolute paths/globs to `TRAIN_TAR_FILES` and `VAL_TAR_FILES` for example like:
+where `{train,val}_tar_files` can be one or more filenames or fileglobs. In this mode, your training and validation tar files must have non-overlapping names. Alternatively, if you have a nested file structure you can set `--data_dir=/` and then pass absolute paths/globs to `--train_tar_files` and `--val_tar_files` for example like:
 
 ```bash
-READ_FROM_TAR=true DATA_DIR=/ TRAIN_TAR_FILES="/datasets/TarredDataset/train/**" VAL_TAR_FILES="/datasets/TarredDataset/dev/**" ./scripts/train.sh
+./scripts/train.sh --read_from_tar --data_dir=/ --train_tar_files /datasets/TarredDataset/train/** --val_tar_files /datasets/TarredDataset/dev/**
 ```
 
 Note that in the second case (when paths are absolute), glob expansions will be performed by your shell rather than the `WebDatasetReader` class.
@@ -64,9 +64,9 @@ Note that in the second case (when paths are absolute), glob expansions will be 
 For validation you might run:
 
 ```bash
-READ_FROM_TAR=true DATA_DIR=/datasets/TarredDataset VAL_TAR_FILES="dev_*.tar" ./scripts/val.sh
+./scripts/val.sh --read_from_tar --data_dir=/datasets/TarredDataset --val_tar_files dev_*.tar
 # or, absolute paths
-READ_FROM_TAR=true DATA_DIR=/ VAL_TAR_FILES="/datasets/TarredDataset/dev/**" ./scripts/val.sh
+./scripts/val.sh --read_from_tar --data_dir=/ --val_tar_files /datasets/TarredDataset/dev/**
 ```
 
 You should refer to the [training README](../README.md#training) for more details on training and validation arguments unrelated to this data format.
@@ -76,4 +76,4 @@ You should refer to the [training README](../README.md#training) for more detail
 Our WebDataset support currently has the following limitations:
 
 - It isn't currently possible to mix and match `json` and `webdataset` formats for the training and validation data passed to `./scripts/train.sh`.
-- It is necessary to have more shards per dataset (including validation data) than `NUM_GPUS` so that each GPU can read from a different shard.
+- It is necessary to have more shards per dataset (including validation data) than `num_gpus` so that each GPU can read from a different shard.

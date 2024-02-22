@@ -78,22 +78,29 @@ class LSTM(torch.nn.Module):
         if kwargs["custom_lstm"]:
             if kwargs["quantize"]:
                 print_once(
-                    f"WARNING : Quantization requires the (slow) legacy TorchScript CustomLSTM\n"
+                    "WARNING : Quantization requires the (slow) legacy TorchScript "
+                    "CustomLSTM\n"
                 )
-                # Legacy CustomLSTM import takes O(30s) on startup due to third-party qtorch import
-                # As such, we only do this if we need it
+                # Legacy CustomLSTM import takes O(30s) on startup due to third-party
+                # qtorch import
+                # As such, only import when needed
                 from rnnt_ext.custom_lstm.legacy import CustomLSTM
             elif kwargs["gpu_unavailable"]:
-                # Necessary if using valCPU with the hardware checkpoint
                 print_once(
                     "Using the legacy TorchScript CustomLSTM because GPU unavailable\n"
                 )
+                if not kwargs["quantize"]:
+                    # Warning message on using TorchScript CustomLSTM if no quantization
+                    print_once(
+                        "WARNING: Consider setting custom_lstm: false in the config file "
+                        "to use the PyTorch LSTM if not applying quantization."
+                    )
                 from rnnt_ext.custom_lstm.legacy import CustomLSTM
             else:
                 from rnnt_ext.custom_lstm.lstm import CustomLSTM
 
         if batch_norm:
-            # if applying batch norm after every LSTM layer, then we'll need separate 1-layer LSTMs
+            # if applying batch norm after every LSTM layer, 1-layer LSTMs are required
             self.lstms = torch.nn.ModuleList([])
             self.batch_norms = torch.nn.ModuleList([])
             self.dropouts = torch.nn.ModuleList([]) if dropout else None
@@ -121,7 +128,7 @@ class LSTM(torch.nn.Module):
                 if dropout:
                     self.dropouts.append(torch.nn.Dropout(dropout))
         else:
-            # if not applying batch norm we can use multi-layer LSTMs
+            # if not applying batch norm multi-layer LSTMs can  be used
             if kwargs["custom_lstm"]:
                 self.lstm = CustomLSTM(
                     input_size=input_size,
@@ -159,11 +166,11 @@ class LSTM(torch.nn.Module):
         # x is (seq_len, batch_size, input_size)
         # h is (h_0, c_0) where both h_0 and c_0 are (num_layers, batch, hidden_size)
         if self.batch_norm:
-            # if doing batch_norm we must apply multiple 1-layer LSTMs
+            # if doing batch_norm apply multiple 1-layer LSTMs
             h_fl = []
             c_fl = []
             for layer in range(self.num_layers):
-                if h == None:
+                if h is None:
                     layer_hidden_states = None
                 else:
                     h_0, c_0 = h[0][layer].unsqueeze(0), h[1][layer].unsqueeze(0)
@@ -172,7 +179,7 @@ class LSTM(torch.nn.Module):
                 x, (h_f, c_f), *_ = self.lstms[layer](x, layer_hidden_states)
                 # both h_f and c_f are (1, batch, hidden_size)
                 # apply batch norm before dropout (which may not be needed at all now)
-                # https://stackoverflow.com/questions/39691902/ordering-of-batch-normalization-and-dropout
+                # https://stackoverflow.com/questions/39691902/ordering-of-batch-normalization-and-dropout # noqa: E501
                 # permute x into (N,C,L) for batch norm, and back again afterwards
                 x = x.permute(1, 2, 0)
                 x = self.batch_norms[layer](x)
@@ -180,7 +187,7 @@ class LSTM(torch.nn.Module):
                 # apply dropout after every LSTM layer
                 if self.dropouts:
                     x = self.dropouts[layer](x)
-                # append the layer's output states to the layer lists as (batch, hidden_size) slices
+                # append layer's output states as (batch, hidden_size) slices
                 h_fl.append(h_f[0])
                 c_fl.append(c_f[0])
             # compute the final state tensors
@@ -189,7 +196,7 @@ class LSTM(torch.nn.Module):
             h = (h_f, c_f)
             all_h = None
         else:
-            # if not doing batch_norm just call the multi-layer LSTM [and apply the final dropout]
+            # if not doing batch_norm call the multi-layer LSTM and apply final dropout
             if self.using_custom_lstm:
                 x, h, all_h = self.lstm(x, h)
             else:

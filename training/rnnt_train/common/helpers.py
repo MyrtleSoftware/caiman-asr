@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# modified by rob@myrtle
-
 import glob
 import os
 import re
@@ -22,9 +20,9 @@ from collections import OrderedDict
 import torch
 import torch.distributed as dist
 from beartype import beartype
-from beartype.typing import Optional, Tuple
+from beartype.typing import Dict, Optional, Tuple
 
-from .metrics import word_error_rate
+from rnnt_train.common.metrics import word_error_rate
 
 
 def __rnnt_decoder_predictions_tensor(tensor, detokenize):
@@ -40,31 +38,29 @@ def __rnnt_decoder_predictions_tensor(tensor, detokenize):
 
 
 @beartype
+def is_rank_zero() -> bool:
+    return get_rank_or_zero() == 0
+
+
+@beartype
 def get_rank_or_zero() -> int:
     return dist.get_rank() if dist.is_initialized() else 0
 
 
 def print_once(msg):
-    if not dist.is_initialized() or dist.get_rank() == 0:
+    if is_rank_zero():
         print(msg)
 
 
-def greedy_wer(preds, tgt, tgt_lens, detokenize):
+def calculate_wer(preds, tgt, tgt_lens, detokenize, standardize_wer):
     """
-    Takes output of greedy ctc decoder and performs ctc decoding algorithm to
-    remove duplicates and special symbol. Prints wer and prediction examples to screen
-    Args:
-        tensors: A list of 3 tensors (predictions, targets, target_lengths)
-        labels: A list of labels
-
-    Returns:
-        word error rate
+    Calculates WER and returns an example hypothesis and reference.
     """
     with torch.no_grad():
         references = gather_transcripts([tgt], [tgt_lens], detokenize)
         hypotheses = __rnnt_decoder_predictions_tensor(preds, detokenize)
 
-    wer, _, _ = word_error_rate(hypotheses, references)
+    wer, _, _ = word_error_rate(hypotheses, references, standardize=standardize_wer)
     return wer, hypotheses[0], references[0]
 
 
@@ -89,11 +85,19 @@ def gather_transcripts(transcript_list, transcript_len_list, detokenize):
     ]
 
 
-def process_evaluation_epoch(aggregates) -> Tuple[float, Optional[float]]:
+@beartype
+def process_evaluation_epoch(
+    aggregates: Dict[str, list], standardize_wer: bool
+) -> Tuple[float, Optional[float]]:
     """
     Processes results from each worker at the end of evaluation and combine to final result
+
+    Aggregates will be updated in-place to have timestamps from all processes.
+
     Args:
         aggregates: dictionary containing information of entire evaluation
+        standardize_wer: whether to apply Whisper normalizatio rules to
+        the transcripts
     Return:
         wer: final word error rate
         loss: final loss
@@ -106,7 +110,9 @@ def process_evaluation_epoch(aggregates) -> Tuple[float, Optional[float]]:
     hypotheses = aggregates["preds"]
     references = aggregates["txts"]
 
-    wer, scores, num_words = word_error_rate(hypotheses, references)
+    wer, scores, num_words = word_error_rate(
+        hypotheses, references, standardize=standardize_wer
+    )
     multi_gpu = dist.is_initialized()
     if multi_gpu:
         if eloss is not None:
@@ -122,6 +128,21 @@ def process_evaluation_epoch(aggregates) -> Tuple[float, Optional[float]]:
         dist.all_reduce(num_words_tensor)
         num_words = num_words_tensor.item()
         wer = scores * 1.0 / num_words
+
+        gathered_results = (
+            [None] * dist.get_world_size() if dist.get_rank() == 0 else None
+        )
+        # Gather aggregates dictionary across all workers
+        dist.gather_object(aggregates, gathered_results, dst=0)
+
+        # If rank 0 process, combine timestamp data from all processes
+        if dist.get_rank() == 0:
+            lst_seq_time = [
+                timestamp
+                for results in gathered_results
+                for timestamp in results["timestamps"]
+            ]
+            aggregates["timestamps"] = lst_seq_time
     return wer, eloss
 
 
@@ -129,7 +150,8 @@ def num_weights(module):
     return sum(p.numel() for p in module.parameters() if p.requires_grad)
 
 
-unwrap_ddp = lambda model: getattr(model, "module", model)
+def unwrap_ddp(model):
+    return getattr(model, "module", model)
 
 
 class Checkpointer(object):
@@ -138,7 +160,7 @@ class Checkpointer(object):
         self.model_name = model_name
 
         tracked = [
-            (int(re.search("epoch(\d+)_", f).group(1)), f)
+            (int(re.search(r"epoch(\d+)_", f).group(1)), f)
             for f in glob.glob(f"{save_dir}/{self.model_name}_epoch*_checkpoint.pt")
         ]
         tracked = sorted(tracked, key=lambda t: t[0])
@@ -166,7 +188,7 @@ class Checkpointer(object):
             best_wer (float): lowest recorded WER on the dev set
             tokenizer_kw: Dictionary of details about the tokenizer,
                           including the list of characters (key "labels"),
-                          and (if we're using one) the path to the sentencepiece model
+                          and (if one is used) the path to the sentencepiece model
                           (key "sentpiece_model")
             is_best (bool, optional): set name of checkpoint to 'best'
                 and overwrite the previous one
@@ -215,7 +237,7 @@ class Checkpointer(object):
             try:
                 torch.load(tracked[-1], map_location="cpu")
                 return tracked[-1]
-            except:
+            except Exception:
                 print_once(f"Last checkpoint {tracked[-1]} appears corrupted.")
 
         elif len(tracked) >= 2:
@@ -224,7 +246,7 @@ class Checkpointer(object):
             return None
 
     def load(self, fpath, model, ema_model, optimizer=None, meta=None):
-        """Modified to support Test data evaluations which don't need optimizers/meta - rob@myrtle"""
+        """Modified to support Test data evaluations which don't need optimizers/meta"""
 
         print_once(f"Loading model from {fpath}")
         checkpoint = torch.load(fpath, map_location="cpu")
@@ -242,10 +264,10 @@ class Checkpointer(object):
             state_dict = checkpoint[key]
             unwrap_ddp(ema_model).load_state_dict(state_dict, strict=True)
 
-        if optimizer != None:
+        if optimizer is not None:
             optimizer.load_state_dict(checkpoint["optimizer"])
 
-        if meta != None:
+        if meta is not None:
             meta["start_epoch"] = checkpoint.get("epoch")
             meta["best_wer"] = checkpoint.get("best_wer", meta["best_wer"])
             meta["step"] = checkpoint.get("step", meta["step"])

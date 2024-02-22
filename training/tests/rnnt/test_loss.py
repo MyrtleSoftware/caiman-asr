@@ -2,14 +2,14 @@ import pytest
 import torch
 from apex.contrib.transducer import TransducerJoint
 
-from rnnt_train.rnnt.loss import apexTransducerLoss
+from rnnt_train.rnnt.loss import ApexTransducerLoss
 
 
 @pytest.mark.parametrize("batch_size", [2, 8])
 @pytest.mark.parametrize("time_dim", [2, 17])
 def test_pack_no_pack_equivalent(batch_size, time_dim):
     """
-    In this test we assume that there is no joint_net so the vocab size is the same as
+    In this test it is assumed that there is no joint_net so the vocab size is the same as
     the joint hidden dimension.
     """
     torch.manual_seed(42)
@@ -38,7 +38,7 @@ def test_pack_no_pack_equivalent(batch_size, time_dim):
     )
 
     joint_no_pack = TransducerJoint(pack_output=False)
-    loss_fn_no_pack = apexTransducerLoss(blank_idx=blank_idx, packed_input=False)
+    loss_fn_no_pack = ApexTransducerLoss(blank_idx=blank_idx, packed_input=False)
     h_no_pack = joint_no_pack(f, g, f_lens, g_lens)
     loss_no_pack = loss_fn_no_pack(h_no_pack, f_lens, y, y_lens, None, None)
 
@@ -46,7 +46,7 @@ def test_pack_no_pack_equivalent(batch_size, time_dim):
     max_f_len = max(f_lens)
     packed_batch = packed_batch = batch_offset[-1].item()
     joint_pack = TransducerJoint(pack_output=True)
-    loss_fn_pack = apexTransducerLoss(blank_idx=blank_idx, packed_input=True)
+    loss_fn_pack = ApexTransducerLoss(blank_idx=blank_idx, packed_input=True)
     h_pack = joint_pack(
         f, g, f_lens, g_lens, batch_offset=batch_offset, packed_batch=packed_batch
     )

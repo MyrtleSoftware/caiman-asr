@@ -1,16 +1,19 @@
 # Myrtle.ai RNN-T PyTorch Training Script
 
+**NOTE:** As of v1.8, the API of `scripts/train.sh` & `scripts/val.sh` have changed. These scripts now take command line arguments instead of environment variables (`--num_gpus=8` instead of `NUM_GPUS=8`).
+For backwards compatibility, the scripts `scripts/legacy/train.sh` and `scripts/legacy/val.sh` still use the former API but these legacy scripts do not support features introduced after v1.7.1, and they will be removed in a future release.
+
+
 # 0. Contents
 
 1.  [Installation](#installation)
 2.  [Models](#models)
 3.  [Data](#data)
 4.  [Training Commands](#training)
-5.  [Validation Sets](#validation)
-6.  [Validation on CPU](#valcpu)
-7.  [Hardware Inference Server Support](#server)
-8.  [Python Inference](#inference)
-9.  [Acknowledgement](#ack)
+5.  [Validation Commands](#validation)
+6.  [Hardware Inference Server Support](#server)
+7.  [Python Inference](#inference)
+8.  [Acknowledgement](#ack)
 
 
 # 1. Installation <a name="installation"></a>
@@ -85,12 +88,15 @@ The configs referenced above are not intended to be edited directly.  Instead, t
 
 # 3. Data <a name="data"></a>
 
-This repository supports reading data from two formats. These are:
+This repository supports reading data from three formats. These are:
 
 1. `json`: All audio as wav (or flac) files in a single directory hierarchy with transcripts in [json file(s)](examples/example.json) referencing these audio files.
 2. `webdataset`: Audio `<key>.{flac,wav}` files stored with associated `<key>.txt` transcripts in tar file shards. Format described [here](https://github.com/webdataset/webdataset#the-webdataset-format).
+3. `directories`: Audio (wav or flac) files and the respective text transcripts are in two separate directories.
 
-In this README there are instructions for how to download and preprocess data in the `json` format. To use the `webdataset` format see the [WebDataset README](./docs/WebDataset.md). `json` examples are provided for the following datasets:
+In this README there are instructions for how to download and preprocess data in the `json` format. To use the `webdataset` format see the [WebDataset README](./docs/WebDataset.md).
+The `directories` format is supported only for validation, and more information can be found in the [validation on directories README](./docs/validation_on_directories.md).
+`json` examples are provided for the following datasets:
 
 * LibriSpeech [http://www.openslr.org/12](http://www.openslr.org/12)
 * CommonVoice [https://commonvoice.mozilla.org/en/datasets](https://commonvoice.mozilla.org/en/datasets)
@@ -162,12 +168,19 @@ Note that while the scripts below prepare wav files, the NVIDIA DALI code that l
 load flac and ogg files.  In our experiments we have found training on flac files to be just as fast as
 training on wav files (both read from SSD) and we will be using flac files in the future to save space.
 
-#### Note on text normalization
+#### Note on text normalization and Standardization
 
 The examples below assume a character set of size 28: a space, an apostrophe and 26 lower case letters. The preprocessing scripts
 and model configs assume this too. As such, these example scripts **will lowercase and remove punctuation from validation data** as
 well as training data meaning that dev-set WERs may be lower that they might be for the full character set.
-If transcripts aren't normalized during this preprocessing stage, it is possible to normalize them on the fly during training **and validation** with the [_clean_text](./rnnt_train/common/text/ito/__init__.py) function by setting `normalize_transcripts: true` in your config. By default we set `normalize_transcripts: false`.
+If transcripts aren't normalized during this preprocessing stage, they will be normalized
+on the fly during training (and validation) with the [_clean_text](./rnnt_train/common/text/ito/__init__.py)
+function. Normalization of transcripts can be turned off by setting `normalize_transcripts: false` in your config.
+
+Note that we standardize all references and hypotheses with the Whisper normalizer before calculating WERs,
+as described in the [WER calculation docs](./docs/wer_calculation.md).
+To switch off standardization, modify the respective config file entry to read `standardize_wer: false`.
+
 
 #### LibriSpeech
 
@@ -236,7 +249,7 @@ For evaluation, the `dev.json` manifest file is used.
 The above script also creates the sentencepiece model in /datasets/sentencepieces/ and adjusts the
 `configs/testing-1023sp_run.yaml` file to use this model and data.
 
-#### Other Datasets
+#### Preprocessing Other Datasets
 
 To train on your own data, you should adapt the steps in the LibriSpeech preprocessing pipeline
 [`scripts/preprocess_librispeech.sh`](scripts/preprocess_librispeech.sh). As mentioned above, we
@@ -257,23 +270,9 @@ After running your version of `scripts/preprocess_<your dataset>.sh` you should 
 
 # 4. Training Commands <a name="training"></a>
 
+Before starting training you must select your batch size hyper-parameters. Please see the [Batch size arguments](docs/batch_size_hyperparameters.md) documentation for this.
 
-RNN-T trains use large synthetic batches specified with the GLOBAL_BATCH_SIZE variable.  These large synthetic batches are split between the NUM_GPUS where each gpu accumulates gradients over GRAD_ACCUMULATION_BATCHES until a single update is applied to the model (one "step").  The actual `batch_size`
-fed to each GPU for each computation is not controlled directly but can be calculated using the formula
-
-```
-batch_size * GRAD_ACCUMULATION_BATCHES * NUM_GPUS = GLOBAL_BATCH_SIZE
-```
-
-In order to achieve the highest throughput during training, we recommend that you use the highest `batch_size` possible without incurring an OOM error. Please see [../README.md#train-times](../README.md#train-times) for the recommended batch size hyperparameters on `8 x A100 (80GB)` and `8 x A5000 (24GB)` machines.
-
-When you have a candidate batch size, you may want to train for a few epochs on a subset of your data to check that there is no OOM error. You can set the `N_UTTERANCES_ONLY` environment variable to restrict how many utterances are loaded from your dataset.
-Note that `N_UTTERANCES_ONLY` must be larger than `GLOBAL_BATCH_SIZE`.
-
-The recommended target is a GLOBAL_BATCH_SIZE of 1024 when your data has a length distribution similar to LibriSpeech. For discussions of how to select a target GLOBAL_BATCH_SIZE, please refer to the discussions in CommonVoice's 'Training Commands' section below.
-It is not always possible to achieve your target GLOBAL_BATCH_SIZE due to the memory constraints of the GPU and the GRAD_ACCUMULATION_BATCHES needed at a given batch_size. In this case, you may settle on a value slightly higher or lower than your target. For example, when training the `testing` model on LibriSpeech using a 2x 24GB TITAN RTX as described below, we use GLOBAL_BATCH_SIZE=1008.
-
-Our step control recommendations for the learning rate scheduler assume a global batch size of ~1024.
+Note that the example training commands below for LibriSpeech and CommonVoice don't use the recommended `--global_batch_size=1024`. These examples will be changed to use the recommended values in a future release.
 
 ## 4.1 Example Training Commands
 
@@ -286,29 +285,24 @@ If you did not run the scripts above this can be achieved by running:
 cat configs/testing-1023sp.yaml | sed s/SENTENCEPIECE/librispeech1023/g | sed s/MAX_DURATION/16.7/g > configs/testing-1023sp_run.yaml
 ```
 
-The `testing` model can be run on LibriSpeech at batch_size of 24 without incurring an out-of-memory
-error.  On a x2 TITAN RTX system we select this by setting GLOBAL_BATCH_SIZE=1008, GRAD_ACCUMULATION_BATCHES=21 and
-NUM_GPUS=2.  16GB V100s can support a batch_size of 16, and 40GB A100s can
-support a batch_size of 40.
-
 The default setup saves an overwriting checkpoint every time dev Word Error Rate (WER) improves and a non-overwriting
-checkpoint at the end of training. You can set `SAVE_AT_THE_END=false` to disable the final checkpoint save.
-Additionally, if you would like to save a checkpoint every Nth epoch, set `SAVE_FREQUENCY=N`.
+checkpoint at the end of training. You can pass `--dont_save_at_the_end` to disable the final checkpoint save.
+Additionally, if you would like to save a checkpoint every Nth epoch, set `--save_frequency=N`.
 
 The default number of epochs to train for is 100.
-Set, for example, EPOCHS=150 to make a different choice.
+Set, for example, `--epochs=150` to make a different choice.
 
 So, on two 24GB TITAN RTX GPUs, training LibriSpeech, run the following inside the container:
 
 ```
-NUM_GPUS=2 GLOBAL_BATCH_SIZE=1008 GRAD_ACCUMULATION_BATCHES=21 EPOCHS=150 ./scripts/train.sh
+./scripts/train.sh --num_gpus=2 --global_batch_size=1008 --grad_accumulation_batches=21 --epochs=150
 ```
 
 The output of the training command is logged to `/results/training_log_[a timestamp].txt`.
 Arguments are logged to `/results/training_args_[a timestamp].json`.
 The config file is saved to `/results/[config file name]_[a timestamp].txt`.
 
-To resume training see the [`RESUME=true` docs.](docs/resume_finetune.md).
+To resume training see the [`--resume` docs.](docs/resume_finetune.md).
 
 #### CommonVoice
 
@@ -326,45 +320,44 @@ training.  High quality gradients are required for the model to learn well.  Exp
 the amount of speech per model update implicit in the above LibriSpeech command, roughly 12,500 seconds, or
 3.5 hours, of speech per update, also helps maintain gradient quality; see below.
 
-In principle the shorter max_duration means we ought to be able to increase batch_size with CommonVoice to
+In principle the shorter max_duration means we ought to be able to increase `PER_GPU_BATCH_SIZE` with CommonVoice to
 take advantage of all available GPU memory and maximize throughput.  In our experiments we have found
 this triggers the freezing pathology described in the Training Examples section below, and so thus far
-on a 24GB RTX we have used batch_size 24 as in the LibriSpeech case.
+on a 24GB RTX we have used `PER_GPU_BATCH_SIZE` 24 as in the LibriSpeech case.
 
-We therefore currently scale GRAD_ACCUMULATION_BATCHES by a factor of 12.3/5.7 to 45, and set
-GLOBAL_BATCH_SIZE to GRAD_ACCUMULATION_BATCHES * NUM_GPUS * batch_size, which is 2160, to get
+
+We therefore currently scale `grad_accumulation_batches` by a factor of 12.3/5.7 to 45, and set
+`global_batch_size` to `grad_accumulation_batches * num_gpus * PER_GPU_BATCH_SIZE`, which is 2160, to get
 approximately 3.5 hours of speech per update.
 
 For CommonVoice training, also on two 24GB TITAN RTX GPUs, we therefore run:
 
 ```
-NUM_GPUS=2 GLOBAL_BATCH_SIZE=2160 GRAD_ACCUMULATION_BATCHES=45 EPOCHS=150 DATA_DIR=/datasets/CommonVoice/cv-corpus-10.0-2022-07-04/en TRAIN_MANIFESTS=train.json VAL_MANIFESTS=dev.json ./scripts/train.sh
+./scripts/train.sh --num_gpus=2 --global_batch_size=2160 --grad_accumulation_batches=45 --epochs=150 --data_dir=/datasets/CommonVoice/cv-corpus-10.0-2022-07-04/en --train_manifests=train.json --val_manifests=dev.json
 ```
 
 The max duration of 7.75s means this model is trained on approximately 1208 hrs of data.
 
 
-#### Other Datasets
+#### Defaults to update for your own data
 
-Depending on the amount of training data you are using, you may need to update the learning rate schedule. This is controlled via the following args:
+When training on your own data you will need to change the following args from their defaults to reflect your setup:
 
-1. `HALF_LIFE_STEPS`: the half life (in steps) for exponential learning rate decay
-2. `WARMUP_STEPS`: number of steps over which learning rate is linearly increased from `MIN_LEARNING_RATE`
-3. `HOLD_STEPS`: number of steps over which we hold the learning rate constant after warmup
+* `--data_dir`
+* `--train_manifests`/`--train_tar_files`
+    * The way to pass multiple `train_manifests` is `--train_manifests first.json second.json third.json`.
+* `--val_manifests`/`--val_tar_files`/(`--val_audio_dir` + `--val_txt_dir`)
+* `--model_config=configs/base-8703sp_run.yaml` (or the `_run.yaml` config file created by your `scripts/preprocess_<your dataset>.sh` script)
 
-For training experiments with 1k-3k hrs of data we find that it is best to keep `WARMUP_STEPS` and `HOLD_STEPS` at their default values.
-The best value of `HALF_LIFE_STEPS` will change depending on the amount of data you are using. Specifically, we
-see that for 1-3k hrs of training data `HALF_LIFE_STEPS=2805` works well whereas for 10k hrs we use a value of `10880`.
-If you are using more than 10k hrs we recommend starting with `10880` and increasing from there. Note that increasing
-`HALF_LIFE_STEPS` increases the probability of diverging late in training.
+The learning-rate schedule arg defaults are tested on 1k-50k hrs of data but when training on larger datasets than this you may need to tune the values. These arguments are:
 
-Alongside the normal training args like `EPOCHS`, etc you will also need to pass the following to `./scripts/train.sh`:
+1. `--half_life_steps`: the half life (in steps) for exponential learning rate decay
+2. `--warmup_steps`: number of steps over which learning rate is linearly increased from `--min_learning_rate`
+3. `--hold_steps`: number of steps over which we hold the learning rate constant after warmup
 
-* `DATA_DIR`
-* `TRAIN_MANIFESTS`
-* `VAL_MANIFESTS`
-* `MODEL_CONFIG=configs/base-8703sp_run.yaml` (or the `_run.yaml` config file created by your `scripts/preprocess_<your dataset>.sh` script)
-* `HALF_LIFE_STEPS`
+If you are using more than 50k hrs we recommend starting with `half_life_steps=10880` and increasing from there. Note that increasing
+`--half_life_steps` increases the probability of diverging late in training.
+
 
 ## 4.2 TensorBoard
 
@@ -400,7 +393,7 @@ loss and word-error-rate curves for a successful mixed-precision train on the Co
 In [examples/failure](examples/failure/) we include grad-norm, loss and word-error-rate
 curves for a pathological CommonVoice training case in which grad-norm blew up to infinity and then went
 to NaN.  This pathology is caused by exploding gradients in the RNN-T model encoder.  This pathology
-affected roughly 1 in 10 LibriSpeech trains.  Training with larger GLOBAL_BATCH_SIZE values and smaller
+affected roughly 1 in 10 LibriSpeech trains.  Training with larger `global_batch_size` values and smaller
 max/mean duration ratios both appear to make this pathology less likely to occur.  If this pathology does
 occur, resuming training from the last-saved good checkpoint is sometimes successful.
 
@@ -410,14 +403,72 @@ size usually avoids the problem.  We hope to investigate this pathology further 
 
 ## 4.4 Mixed Precision Training <a name="tr_amp"></a>
 
-By default we enable PyTorch mixed-precision-training with training arg `AMP=true`. To disable it set `AMP=false`.
+By default we enable PyTorch mixed-precision-training . To disable it, pass `--no_amp`.
 We previously benchmarked NVIDIAs Apex mixed-precision-training as approximately 1.85x faster on the
 TITAN RTXs, 1.61x faster on V100s, but only about 1.1x faster on A100s (which operate at 19 bits by
 default); we expect the PyTorch version results to be similar.  We switched to the PyTorch
 version after noting that models trained with the Apex version took longer to perform inference.
 This problem does not occur with PyTorch mixed-precision trained models.
 
-## 4.5 Large Tokenizer Training <a name="large_tokenizers"></a>
+## 4.5 Noise Augmented Training <a name="tr_noise"></a>
+
+We can apply two types of noise augmentation during training: background noise and babble noise. These are both applied sample-wise and are set via the `--prob_background_noise` and `--prob_babble_noise` arguments
+respectively which must be in `[0.0, 1.0]`. These types of noise augmentation are applied independently so if
+both have probabilities greater than 0.0 then some samples will have both augmentation types applied.
+
+By default, `prob_background_noise` is `0.25` and `prob_babble_noise` is `0.0`.
+
+On an `8 x A100 (80GB)` system, turning off background noise augmentation increases the base model's training throughput by ~17% and the large model's throughput by ~11%.
+
+Babble is applied by taking other utterances from the same batch and mixing them with the speech whereas
+background noise takes a non-speech noise file and mixes it with the speech.
+
+The noise data is combined with speech data on-the-fly during training.  For each utterance in each batch a
+signal to noise ratio (SNR) is randomly chosen between an internally held 'low' and 'high' value.  The
+noise is adjusted to have this SNR relative to the speech, the noise and speech are combined, and the result is
+scaled to have the same volume as the original speech signal.
+
+Before combination, the noise audio will be duplicated to become at least as long as the speech utterance.
+
+The initial values for 'low' and 'high' can be specified (in dB) using the `--noise_initial_low` and
+`--noise_initial_high` arguments when calling `train.sh`.  This range is then maintained for the number of
+steps specified by the `--noise_delay_steps` argument after which the noise level is ramped up over
+`--noise_ramp_steps` to its final range. These arguments are shared between both types of noise.
+The final range for background noise is 0-30dB (taken from the Google paper "Streaming
+end-to-end speech recognition for mobile devices", [He et al., 2018](https://arxiv.org/abs/1811.06621)) while the final range of
+babble noise is 15-30dB.
+
+By default, background noise will use [Myrtle/CAIMAN-ASR-BackgroundNoise](https://huggingface.co/datasets/Myrtle/CAIMAN-ASR-BackgroundNoise) from the [Hugging Face Hub](https://huggingface.co/docs/hub/en/datasets-overview).
+
+Note that this dataset will be cached in `~/.cache/huggingface/` in order to persist between containers.
+You can change this location like so: `HF_CACHE=[path] ./scripts/docker/launch.sh ...`.
+
+To change the default noise dataset, set `--noise_dataset` to an audio dataset on the Hugging Face Hub.
+The training script will use all the audios in the noise dataset's `train` split.
+
+If you instead wish to train with local noise files, make sure your noise is organized in the Hugging Face [AudioFolder](https://huggingface.co/docs/datasets/en/audio_dataset#audiofolder) format.
+Then set `--noise_dataset` to be the path to the directory containing your noise data (i.e. the parent of the `data` directory), and pass `--use_noise_audio_folder`.
+
+The following command will train the base model on the LibriSpeech dataset on an `8 x A100 (80GB)` system with these settings:
+- applying background noise to 25% of samples
+- applying babble noise to 10% of samples
+- using the default noise schedule
+  - initial values 30--60dB
+  - noise delay of 4896 steps
+  - noise ramp of 4896 steps
+
+```bash
+./scripts/train.sh --model_config=configs/base-8703sp_run.yaml --num_gpus=8 \
+    --grad_accumulation_batches=4 --epochs=150 --prob_background_noise=0.25 \
+    --prob_babble_noise=0.1 \
+    --val_manifests=/datasets/LibriSpeech/librispeech-dev-other-wav.json
+```
+
+### Inspecting audio
+
+To listen to the effects of noise augmentation, pass `--inspect_audio`. All audios will then be saved to `/results/augmented_audios` after augmentations have been applied. This is intended for debugging only---DALI is slower with this option, and a full epoch of saved audios will use as much disk space as the training dataset.
+
+## 4.6 Large Tokenizer Training <a name="large_tokenizers"></a>
 
 Training the RNN-T system with a large tokenizer (i.e. bigger than 1023 tokens) often results in exploding gradients
 at 20-30k training steps.  This appears to be caused by the output matrix weights learning to be very small over time,
@@ -432,7 +483,7 @@ joint_net_lr_factor: 0.343
 
 Note that this is already set for the 85M parameter model with tokenizer size 8703 in `configs/base-8703sp.yaml`, as well as for the 196M parameter model with tokenizer size 17407 in `configs/large-17407sp.yaml`.
 
-## 4.6 Random State Passing
+## 4.7 Random State Passing
 
 RNN-Ts can find it difficult to generalise to sequences longer than those seen during training, as described in [Chiu et al, 2020](https://arxiv.org/abs/2005.03271).
 
@@ -442,16 +493,16 @@ On our in-house validation data, RSP reduces WERs on long (~1 hour) utterances b
 
 Experiments indicated:
 - It was better to apply RSP 1% of the time, instead of 50% as in the paper.
-- Applying RSP from the beginning of training raised WERs, so RSP is only applied after `RSP_DELAY` steps
-  - `RSP_DELAY` can be set on the command line but, by default, is set to the step at which the learning rate has decayed to 1/8 of its initial value (i.e. after x3 `HALF_LIFE_STEPS` have elapsed). To see the benefits from RSP we find that we need >=5k updates after this point so this heuristic will not be appropriate if you intend to cancel training much sooner than this. See [docstring of `set_rsp_delay_default` function](rnnt_train/common/rsp.py) for more details.
+- Applying RSP from the beginning of training raised WERs, so RSP is only applied after `--rsp_delay` steps
+  - `--rsp_delay` can be set on the command line but, by default, is set to the step at which the learning rate has decayed to 1/8 of its initial value (i.e. after x3 `half_life_steps` have elapsed). To see the benefits from RSP we find that we need >=5k updates after this point so this heuristic will not be appropriate if you intend to cancel training much sooner than this. See [docstring of `set_rsp_delay_default` function](rnnt_train/common/rsp.py) for more details.
 
-RSP is on by default, and can be modified via the `RSP_SEQ_LEN_FREQ` argument, e.g. `RSP_SEQ_LEN_FREQ="99 0 1"`.
+RSP is on by default, and can be modified via the `--rsp_seq_len_freq` argument, e.g. `--rsp_seq_len_freq 99 0 1`.
 This parameter controls RSP's frequency and amount; see the `--rsp_seq_len_freq` docstring in [`train.py`](./rnnt_train/train.py).
 
 
 RSP requires Myrtle.ai's [CustomLSTM](./docs/custom_lstm.md) which is why `custom_lstm: true` is set by default in the yaml configs.
 
-## 4.7 Gradient Noise <a name="grad_noise"></a>
+## 4.8 Gradient Noise <a name="grad_noise"></a>
 
 Adding Gaussian noise to the gradients of the network is a way of assisting the model generalize on out-of-domain datasets
 by not over-fitting on the datasets it is trained on. Inspired by the research paper by
@@ -470,76 +521,66 @@ Training with noise is switched off by default.
 It can be switched on by setting the noise level $noise\textunderscore level$ to be a positive value in the config file.
 
 According to our experiments, the best time to switch on the gradient noise is after the warm-up period
-(i.e. after the `WARMUP_STEPS` in the `scripts/train.sh` file). Moreover, the noise is only added in the gradients of
+(i.e. after `warmup_steps`). Moreover, the noise is only added in the gradients of
 the encoder components, hence if during training the user chooses to freeze the encoder, adding grad noise will be off
 by default.
 
-## 4.8 Narrowband training <a name="narrowband"></a>
+## 4.9 Narrowband training <a name="narrowband"></a>
 
 For some target domains, data is recorded at (or compressed to) 8 kHz (narrowband). For models trained with audio >8 kHz (16 kHz is the default) the audio will be upsampled to the higher sample rate before inference. This creates a mismatch between training and inference, since the model will partly rely on information from the higher frequency bands.
 
 This can be partly mitigated by resampling a part of the training data to narrowband and back to higher frequencies, so the model is trained on audio that more closely resembles the validation data.
 
-To apply this downsampling on-the-fly to a random half of batches, set `PROB_TRAIN_NARROWBAND=0.5` in your training command.
+To apply this downsampling on-the-fly to a random half of batches, set `--prob_train_narrowband=0.5` in your training command.
 
-## 4.9 Profiling <a name="profiling"></a>
+## 4.10 Profiling <a name="profiling"></a>
 
 To profile training, see these [instructions](docs/profiling.md).
 
-# 5. Validation Sets <a name="validation"></a>
+# 5. Validation Commands <a name="validation"></a>
 
 Validation is performed throughout training.  However, we can also validate models after training.
-During training the maximum number of tokens that can be decoded per utterance is capped by the `MAX_SYMBOL_PER_SAMPLE` arg
+During training the maximum number of tokens that can be decoded per utterance is capped by the `--max_symbol_per_sample` arg
 which defaults to 300 (about a minute of speech). This is necessary since untrained models may ramble on indefinitely during decoding.
-However, during validation `MAX_SYMBOL_PER_SAMPLE` is not set so no maximum decoding length is applied. It is
+However, during validation `--max_symbol_per_sample` is not set so no maximum decoding length is applied. It is
 therefore possible that the same dev set may yield different word error rates in training vs after training.
 
 The default evaluation command validates the best `testing-1023sp_run` model checkpoint saved during training (to be found in
-/results/RNN-T_best_checkpoint.pt) against the LibriSpeech dev-clean partition.  Inside the container run
+`/results/RNN-T_best_checkpoint.pt`) against the LibriSpeech dev-clean partition.  Inside the container run
 
 ```
-NUM_GPUS=2 ./scripts/val.sh
+./scripts/val.sh --num_gpus=2
 ```
 
 To validate against the noisy-speech dev-other partition, run
 
 ```
-NUM_GPUS=2 VAL_MANIFESTS=/datasets/LibriSpeech/librispeech-dev-other-wav.json ./scripts/val.sh
+./scripts/val.sh --num_gpus=2 --val_manifests=/datasets/LibriSpeech/librispeech-dev-other-wav.json
 ```
 
 To validate against the CommonVoice dev set, run
 
 ```
-NUM_GPUS=2 DATA_DIR=/datasets/CommonVoice/cv-corpus-10.0-2022-07-04/en VAL_MANIFESTS=dev.json ./scripts/val.sh
+./scripts/val.sh --num_gpus=2 --data_dir=/datasets/CommonVoice/cv-corpus-10.0-2022-07-04/en --val_manifests=dev.json
 ```
 
-Validation can be performed using other checkpoints by specifying the CHECKPOINT variable.
-Validation can be performed using other model config files by specifying the MODEL_CONFIG variable.
+Validation can be performed using other checkpoints by specifying the `--checkpoint` argument.
+Validation can be performed using other model config files by specifying the `--model_config` argument.
+It is possible to run validation on the CPU by passing the `--cpu` flag.
 
-## 5.1 Long utterances <a name="long_utterances"></a>
+The output of the validation command is logged to `/results/validation_log_[a timestamp].txt`.
 
-Besides the WER, `val.sh` also calculates the transducer loss on the dev set.
+## 5.1 Transducer Loss <a name="transducer_loss"></a>
+
+Besides the WER, `val.sh` can also calculate the transducer loss on the dev set.
 This calculation may cause the GPU to run out of memory on
-very long utterances. To skip the loss calculation and only
-calculate WER, run
+very long utterances. To perform the loss calculation, run
 ```
-NO_LOSS=true NUM_GPUS=2 ./scripts/val.sh
+./scripts/val.sh --calculate_loss --num_gpus=2
 ```
+Please note that the loss calculation is not available when using the `--cpu` flag.
 
-# 6. Validation on CPU <a name="valcpu"></a>
-
-It is also possible to validate models using CPU only.  The CPU version has additional functionality not found
-in the GPU version, some of which is described in the Sections below.
-
-To validate the `testing-1023sp_run` model against the LibriSpeech dev-clean partition, run:
-
-```
-./scripts/valCPU.sh
-```
-
-As above, the MODEL_CONFIG, VAL_MANIFESTS, DATA_DIR and CHECKPOINT variables allow you to specify other options.
-
-# 7. Hardware Inference Server Support <a name="server"></a>
+# 6. Hardware Inference Server Support <a name="server"></a>
 
 To run your model on Myrtle's hardware-accelerated inference server you will need to dump mel statistics from your dataset to
 support streaming normalization and create a hardware checkpoint to enable transfer of this and other data.
@@ -552,50 +593,55 @@ hardware-accelerated inference server Myrtle has implemented most of the same al
 Feature normalization is an exception since the DALI algorithm computes the mean and standard deviation used
 to normalize each mel-bin over the full length of each utterance, which is incompatible with streaming.  An
 adaptive streaming normalization algorithm is implemented in [./rnnt_train/common/stream_norm.py](./rnnt_train/common/stream_norm.py)
-which can be run using valCPU.\* as shown below.
+which can be run using val.\* as shown below.
 
 The adaptive streaming normalization algorithm uses exponentially weighted moving averages and variances to
 perform normalization of each new frame of mel-bin values.  This requires an initial set of mel-bin
 mean and variance values which can be obtained by running the training script with
-DUMP_MEL_STATS set to true with NUM_GPUS=1:
+`--dump_mel_stats` and `--num_gpus=1`:
 
 ```
-DUMP_MEL_STATS=true NUM_GPUS=1 GLOBAL_BATCH_SIZE=1008 GRAD_ACCUMULATION_BATCHES=21 EPOCHS=1 ./scripts/train.sh
+./scripts/train.sh --dump_mel_stats --num_gpus=1 --global_batch_size=1008 --grad_accumulation_batches=21 --epochs=1
 ```
 
 The training data statistics are written to `<RESULTS>` as melmeans.\* and melvars.\* as both PyTorch
 tensors and Numpy arrays.  These arrays can be transferred to the Rust inference server code and read by
-valCPU.py for use by the adaptive streaming normalization algorithm written in Python:
+val.py for use by the adaptive streaming normalization algorithm written in Python:
 
 ```
-STREAM_NORM=true ./scripts/valCPU.sh
+./scripts/val.sh --stream_norm
 ```
 
 The exponential weighting uses alpha to weight new values and 1-alpha to weight old values.
-The default value of alpha is 0.001 but this can be changed using the ALPHA command line variable.
+The default value of alpha is 0.001 but this can be changed using the `--alpha` command line argument.
 
 ### Streaming Normalization Resets
 
-The default behaviour of valCPU.py when applying streaming normalization is to update its internal statistics
-with every frame of every utterance in the manifest being evaluated.  This is significant because, for example,
+The default behaviour of val.py when applying streaming normalization is to reset its internal statistics to the training data statistics after every utterance.
+
+This is significant because, for example,
 LibriSpeech dev-clean contains roughly 8 minutes of speech from each of 40 speakers, and the 8 minutes from
-each speaker is in consecutive utterances.  The adaptive streaming normalization algorithm will therefore
+each speaker is in consecutive utterances.
+If this resetting didn't happen, then the adaptive streaming normalization algorithm would therefore
 adapt, in a few seconds depending on the value of alpha, to each speaker in turn, and then have a period of
 stability before encountering the next speaker.
+
+Experiments have shown that not resetting the statistics leads to different Word Error Rates.
 
 The Rust inference server code initializes each new Channel it creates using the training data statistics.
 Therefore, if a new Channel is created for each utterance when evaluating on dev-clean, each Channel will
 have to adapt from the training data initial statistics to the current speaker over just one utterance,
-every time.  This difference from the Python system's default behaviour results in different reported
-Word Error Rates.
+every time.
 
-To make the Python system behave in the same way as the Rust system, that is, to reset the streaming
-normalization statistics to the training data statistics for each utterance in the manifest, set the
-RESET_STREAM_STATS command line variable
+To make the Python system behave differently from the Rust system, that is, to keep updating the streaming
+normalization statistics for each utterance in the manifest, pass the
+`--dont_reset_stream_stats` command line argument:
 
 ```
-STREAM_NORM=true RESET_STREAM_STATS=true ./scripts/valCPU.sh
+./scripts/val.sh --stream_norm --dont_reset_stream_stats
 ```
+
+In most cases you should not pass this argument, since you will usually want to match the behavior of the Rust system.
 
 In practical hardware systems it would be advantageous to arrange for multiple utterances from the same speaker
 to be sent to the same Channel so that any speaker adaptation is retained and reused to minimize Word Error
@@ -622,21 +668,24 @@ The hardware checkpoint also contains the sentencepiece model specified in the c
 means and variances as dumped above, and the specified alpha value for mel statistics decay in streaming
 normalization.
 
-This checkpoint will load into val.py and valCPU.py with "EMA" warnings that can be ignored.
+This checkpoint will load into val.py with "EMA" warnings that can be ignored.
 
+### Initial padding
 
-# 8. Python Inference <a name="inference"></a>
+See [here](docs/initial_padding.md).
 
-To dump the predicted text for a list of input wav files set the DUMP_PREDS variable and call valCPU.sh:
+# 7. Python Inference <a name="inference"></a>
+
+To dump the predicted text for a list of input wav files, pass the `--dump_preds` argument and call `val.sh`:
 
 ```
-DUMP_PREDS=true VAL_MANIFESTS=/results/your-inference-list.json ./scripts/valCPU.sh
+./scripts/val.sh --dump_preds --val_manifests=/results/your-inference-list.json
 ```
 
-Predicted text will be written to /results/preds.txt
+Predicted text will be written to `/results/preds.txt`
 
-DUMP_PREDS can be used whether or not there are ground-truth transcripts in the json file.  If there are
-then the word error rate reported by valCPU will be accurate, if not then it will be nonsense and should
+The argument `--dump_preds` can be used whether or not there are ground-truth transcripts in the json file.  If there are,
+then the word error rate reported by val will be accurate; if not, then it will be nonsense and should
 be ignored.  The minimal json file for inference (with 2 wav files) looks like this:
 
 ```
@@ -663,12 +712,11 @@ be ignored.  The minimal json file for inference (with 2 wav files) looks like t
 ```
 
 where "dummy" can be replaced by the ground-truth transcript for accurate word error rate calculation,
-where the filenames are relative to the $DATA_DIR variable fed to (or defaulted to by) valCPU.sh, and where
+where the filenames are relative to the `--data_dir` argument fed to (or defaulted to by) `val.sh`, and where
 the original_duration values are effectively ignored (compared to infinity) but must be present.
-Predictions can be generated using other checkpoints by specifying the CHECKPOINT variable.
+Predictions can be generated using other checkpoints by specifying the `--checkpoint` argument.
 
 
-
-# 9. Acknowledgement <a name="ack"></a>
+# 8. Acknowledgement <a name="ack"></a>
 
 This repository is based on the [MLCommons MLPerf RNN-T training benchmark.](https://github.com/mlcommons/training/tree/master/rnn_speech_recognition/pytorch)

@@ -1,3 +1,4 @@
+# Note: Any modifications to this code require recompilation for the changes to take effect.
 import math
 
 import lstm_cu
@@ -21,7 +22,8 @@ def make_layer_function(lstm_fused_fwd, lstm_fused_bwd):
             """
             Compute the forward pass of an LSTM layer.
 
-            Never call this function directly, instead use the .apply(..) method which will provide the context object.
+            Never call this function directly, instead use the .apply(..) method which
+            will provide the context object.
 
             Arguments:
                 ctx: Context object for backpropagation.
@@ -34,23 +36,24 @@ def make_layer_function(lstm_fused_fwd, lstm_fused_bwd):
                 bR: Recurrent bias vector.
 
             Returns:
-                Tuple of (output, (yn, cn), (y_all, c_all))) where output is a stack of the hidden states y1...yn.
+                Tuple of (output, (yn, cn), (y_all, c_all))) where output is a stack of
+                    the hidden states y1...yn.
                 y_all and c_all contain all the hidden and cell states
             """
 
-            # This stacks the sequences along the batch dimension (and makes that dimension contiguous).
+            # Stacks sequences along the batch dimension (and make contiguous).
             batch_view_x: Ten = x.flatten(0, 1)
-            # Now we compute all the xW^t's + biases in one go.
+            # Now compute all the xW^t's + biases in one go.
             gates: Ten = torch.addmm(bW + bR, batch_view_x, W.t())
-            # Then we unfold the sequences back into their own dimensions.
+            # Then unfold the sequences back into their own dimensions.
             gates: Ten = gates.view(x.shape[0], x.shape[1], W.shape[0])
-            # Above equivilent to: torch.baddbmm(bW + bR, x, W.t().expand(x.shape[0], -1, -1))
+            # Above equiv to torch.baddbmm(bW + bR, x, W.t().expand(x.shape[0], -1, -1))
 
-            # This lets us know if need to compute dX in backwards.
+            # This reports if it is required to compute dX in backwards.
             batch_view_x.requires_grad = x.requires_grad
 
-            # If we are in an autocasting region then gates could be reduced precision e.g. float16.
-            # Hence, we propagate gates's dtype from now on.
+            # If in autocasting region, the gates could be float16.
+            # Hence, propagate gates's dtype from now on.
 
             shape = [i for i in x.shape]
             shape[-1] = W.shape[0] // 4
@@ -62,7 +65,7 @@ def make_layer_function(lstm_fused_fwd, lstm_fused_bwd):
                 "memory_format": torch.contiguous_format,
             }
 
-            # We store all the intermediate hidden/cell states in one tensor.
+            # Store all the intermediate hidden/cell states in one tensor.
 
             y: Ten = torch.empty(shape, **kwargs)
             c: Ten = torch.empty(shape, **kwargs)
@@ -77,7 +80,8 @@ def make_layer_function(lstm_fused_fwd, lstm_fused_bwd):
 
             ctx.save_for_backward(W, Rp, batch_view_x, y[:-1].flatten(0, 1), c, gates)
 
-            # y[-1] and c[-1] are the final hidden/cell states, y[1:] is a stack of hidden states 1...n.
+            # y[-1] and c[-1] are the final hidden/cell states, y[1:] is a stack of
+            # hidden states 1...n.
 
             return y[1:], (y[-1], c[-1]), (y[1:], c[1:])
 
@@ -92,11 +96,13 @@ def make_layer_function(lstm_fused_fwd, lstm_fused_bwd):
             """
             Compute the backwards pass of an LSTM layer.
 
-            Never call this function directly, instead call .backward(..) on the output of the .apply(..) method.
+            Never call this function directly, instead call .backward(..) on the output
+            of the .apply(..) method.
 
             Arguments:
                 delta: Gradient of the loss with respect to the output of the layer.
-                _ignore: Ignored argument to match the return signature of the forward function.
+                _ignore: Ignored argument to match the return signature of the forward
+                    function.
                 _ignore2: As above
 
             Returns:
@@ -114,10 +120,7 @@ def make_layer_function(lstm_fused_fwd, lstm_fused_bwd):
 
             dB: Ten = dG.sum([0, 1])
 
-            # Need batch_size before reshape
-            N = dG.shape[1]
-
-            # Again we must do manual bmm to get performance
+            # Must do manual bmm to get performance
             dG: Ten = dG.flatten(0, 1)
 
             shape_dX = (delta.shape[0], x.shape[0] // delta.shape[0], x.shape[1])
@@ -130,7 +133,8 @@ def make_layer_function(lstm_fused_fwd, lstm_fused_bwd):
             x.requires_grad = False
 
             dW: Ten = torch.matmul(dG.t(), x)
-            # NOTE: In https://doi.org/10.1109/TNNLS.2016.2582924 they sum dG from 1 to N and y from 0 to N-1 but their y is shifted by 1.
+            # NOTE: In https://doi.org/10.1109/TNNLS.2016.2582924 they sum dG from 1 to
+            # N and y from 0 to N-1 but their y is shifted by 1.
             dR: Ten = torch.matmul(dG.t(), y)
 
             return None, None, dX, dW, dR, dB.unsqueeze(0), dB.unsqueeze(0)
@@ -208,14 +212,16 @@ class Layer(torch.nn.Module):
 
         Arguments:
             x: Input sequence.
-            state: Tuple of (y0, c0) where y0 is the initial hidden state and c0 is the initial cell state.
+            state: Tuple of (y0, c0) where y0 is the initial hidden state and c0 is the
+                initial cell state.
 
         Returns:
-            Tuple of (output, (yn, cn), (y_all, c_all))) where output is a stack of the hidden states y1...yn.
+            Tuple of (output, (yn, cn), (y_all, c_all))) where output is a stack of the
+                hidden states y1...yn.
             y_all and c_all contain all the hidden and cell states
         """
 
-        # Tensor float is enabled by default for cudnn, we mirror that here.
+        # Tensor float is enabled by default for cudnn, so mirror that here.
         cache_tf32 = torch.backends.cuda.matmul.allow_tf32
 
         torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32
@@ -234,7 +240,10 @@ class Layer(torch.nn.Module):
         return output, (hn, cn), (all_hn, all_cn)
 
     def extra_repr(self):
-        return f"input_size={self.input_size:.>4}, hidden_size={self.hidden_size:.>4}, hard={self.hard}, rw_dropout={self.rw_dropout}"
+        return (
+            f"input_size={self.input_size:.>4}, hidden_size={self.hidden_size:.>4}, "
+            f"hard={self.hard}, rw_dropout={self.rw_dropout}"
+        )
 
 
 class CustomLSTM(torch.nn.Module):
@@ -262,10 +271,11 @@ class CustomLSTM(torch.nn.Module):
             input_size: The number of expected features in the input x.
             hidden_size: The number of features in the hidden state h.
             num_layers: Number of recurrent layers.
-            dropout: If non-zero, introduces a Dropout layer on the outputs of each LSTM layer except the last layer,
-                with dropout probability equal to dropout.
+            dropout: If non-zero, introduces a Dropout layer on the outputs of each LSTM
+                layer except the last layer, with dropout probability equal to dropout.
             hard: If True, use hard activation functions else use soft.
-            quantize: Unsupported (must be False), here for api compatibility with Legacy CustomLSTM.
+            quantize: Unsupported (must be False), here for api compatibility with
+                Legacy CustomLSTM.
             rw_dropout: Recurrent weight dropout probability.
             dtype: The data type of the weights and biases.
             device: The device to place the weights and biases on.
@@ -309,11 +319,13 @@ class CustomLSTM(torch.nn.Module):
         """
         Compute the forward pass of a multilayer LSTM.
 
-        Do not call this function directly, instead use the function call operator on the CustomLSTM object.
+        Do not call this function directly, instead use the function call operator on
+        the CustomLSTM object.
 
         Arguments:
             input_tensor: Input sequence.
-            init_states: Tuple of (h_0, c_0) where h_0 is the initial hidden state and c_0 is the initial cell state for each layers.
+            init_states: Tuple of (h_0, c_0) where h_0 is the initial hidden state and
+                c_0 is the initial cell state for each layers.
                 If set to None, then h_0 and c_0 default to zero.
 
         Returns:
@@ -333,6 +345,7 @@ class CustomLSTM(torch.nn.Module):
             # Same, but for cell states
             all_c_fl = []
 
+        output = None
         for i, layer in enumerate(self.layers):
             # Determine layer input.
             if i == 0:
@@ -344,7 +357,7 @@ class CustomLSTM(torch.nn.Module):
                     layer_input = self.drop_function(output)
 
             # Determine layer h_0, c_0
-            if init_states == None:
+            if init_states is None:
                 shape = [e for e in input_tensor.shape[1:]]
                 shape[-1] = self.hidden_size
 
@@ -378,11 +391,11 @@ class CustomLSTM(torch.nn.Module):
             # Turn list of tensors into just tensors
             all_h_f = rearrange(
                 all_h_fl,
-                "num_layers seq_len batch hidden_size -> num_layers seq_len batch hidden_size",
+                "num_layers seq_len batch hidden_size -> num_layers seq_len batch hidden_size",  # noqa: E501
             )
             all_c_f = rearrange(
                 all_c_fl,
-                "num_layers seq_len batch hidden_size -> num_layers seq_len batch hidden_size",
+                "num_layers seq_len batch hidden_size -> num_layers seq_len batch hidden_size",  # noqa: E501
             )
             all_hidden = (all_h_f, all_c_f)
         else:

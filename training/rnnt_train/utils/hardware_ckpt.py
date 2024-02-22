@@ -1,7 +1,4 @@
-#!/usr/bin/env python
-
-# Copyright (c) 2022 Myrtle.ai
-# rob
+#!/usr/bin/env python3
 
 import argparse
 from argparse import Namespace
@@ -66,8 +63,8 @@ def load_mel_stats(fpath_means, fpath_vars):
 def extract_sentencepiece_fname(config):
     """Extract the sentencepiece model filename from the config file."""
     with open(config, "r") as f:
-        for l in f:
-            ll = l.split()
+        for line in f:
+            ll = line.split()
             if len(ll) > 0 and ll[0] == "sentpiece_model:":
                 return ll[1]
     return False
@@ -102,9 +99,9 @@ def create_hardware_ckpt(args) -> dict:
     spmb = read_sentencepiece_model(spmfn)
 
     inference_config = inference_only_config(args.config)
-
-    # It is useful to be able to sanity-check these hardware checkpoints using val.py on Python.
-    # So ema_state_dict is renamed to state_dict in the hardware checkpoint which val.py will load with warnings.
+    # It is useful to be able to run these hardware checkpoints using val.py in Python.
+    # So ema_state_dict is renamed to state_dict in the hardware checkpoint which
+    # val.py will load with warnings.
     hardcp = {
         "state_dict": traincp["ema_state_dict"],
         "epoch": traincp["epoch"],
@@ -114,7 +111,7 @@ def create_hardware_ckpt(args) -> dict:
         "melvars": melvars,
         "melalpha": melalpha,
         "sentpiece_model": spmb,  # store the bytes object in the hardware checkpoint
-        "version": "1.7.1",  # add the semantic version number of the hardware checkpoint
+        "version": "1.8.0",  # add the semantic version number of the hardware checkpoint
         "rnnt_config": inference_config,  # copy in inference config
     }
 

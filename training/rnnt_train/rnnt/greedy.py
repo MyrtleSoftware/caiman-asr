@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2023, Myrtle Software Limited, www.myrtle.ai. All rights reserved.
 
-import numpy as np
 
 from rnnt_train.rnnt.decoder import RNNTDecoder
 
@@ -50,7 +49,7 @@ class RNNTGreedyDecoder(RNNTDecoder):
         """Is a no-op because language models not currently supported."""
         return k, lm_hidden
 
-    def _inner_decode(self, model, x, x_len, dumptype, dumpidx):
+    def _inner_decode(self, model, x, x_len):
         # x     is shape (time, 1, enc_dim)
         # x_len is shape ()
 
@@ -64,6 +63,7 @@ class RNNTGreedyDecoder(RNNTDecoder):
         hidden = None
 
         label = []
+        timestamps = []
         for time_idx in range(x_len):
             if (
                 self.max_symbol_per_sample is not None
@@ -86,12 +86,6 @@ class RNNTGreedyDecoder(RNNTDecoder):
                 # use the RNNT joint network to compute logits, for speed
                 logits = self._joint_step(model, f, g, log_normalize=False)[0, :]
 
-                if dumptype:
-                    np.save(
-                        f"/results/{dumptype}logp{dumpidx}.{time_idx}.{symbols_added}.npy",
-                        logits.numpy(),
-                    )
-
                 # get index k, of max logit (ie. argmax)
                 v, k = logits.max(0)
                 k = k.item()
@@ -107,7 +101,8 @@ class RNNTGreedyDecoder(RNNTDecoder):
                     )
 
                     label.append(k)
+                    timestamps.append(time_idx)
                 symbols_added += 1
 
         model.train(training_state)
-        return label
+        return label, timestamps

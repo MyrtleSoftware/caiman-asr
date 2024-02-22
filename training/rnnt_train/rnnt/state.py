@@ -8,8 +8,7 @@ from beartype.typing import Tuple
 from jaxtyping import Float, Int, jaxtyped
 
 
-@jaxtyped
-@beartype
+@jaxtyped(typechecker=beartype)
 @dataclass
 class EncoderState:
     pre_rnn: Tuple[
@@ -22,8 +21,7 @@ class EncoderState:
     ]
 
 
-@jaxtyped
-@beartype
+@jaxtyped(typechecker=beartype)
 @dataclass
 class PredNetState:
     next_to_last_pred_state: Tuple[
@@ -33,8 +31,7 @@ class PredNetState:
     last_token: Int[torch.Tensor, "batch 1"]
 
 
-@jaxtyped
-@beartype
+@jaxtyped(typechecker=beartype)
 @dataclass
 class RNNTState:
     enc_state: EncoderState

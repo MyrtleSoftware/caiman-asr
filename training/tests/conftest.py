@@ -1,10 +1,13 @@
+from argparse import Namespace
 from pathlib import Path
 
 import pytest
-import torch
 import yaml
-from beartype.typing import Callable, Optional, Tuple
+from apex.optimizers import FusedLAMB
+from beartype.typing import Callable, Optional, Tuple, Union
+from torch.nn.parallel import DistributedDataParallel as DDP
 
+from rnnt_train.common.build_optimizer import build_fused_lamb
 from rnnt_train.common.data.text import Tokenizer
 from rnnt_train.common.helpers import Checkpointer
 from rnnt_train.common.seed import set_seed
@@ -22,7 +25,7 @@ def test_data_dir() -> Path:
 
 @pytest.fixture(scope="session")
 def config_fp() -> str:
-    # we test using the testing config
+    # Test using the testing config
     return str(Path(__file__).parent.parent / "configs/testing-1023sp_run.yaml")
 
 
@@ -105,10 +108,13 @@ def checkpointer_tmp_dir(tmp_path) -> Checkpointer:
 
 
 @pytest.fixture()
-def optimizer_factory() -> Callable[[RNNT], torch.optim.SGD]:
-    """Create unique optimizer that is attached to given model each time fixture is called."""
+def optimizer_factory() -> Callable[[Union[RNNT, DDP]], FusedLAMB]:
+    """
+    Create unique optimizer that is attached to given model each time fixture is called.
+    """
+    args = Namespace(lr=0.1, weight_decay=1e-6, beta1=0.999, beta2=0.99, clip_norm=1)
 
     def _create_optimizer(model):
-        return torch.optim.SGD(model.parameters(), lr=0.01)
+        return build_fused_lamb(args=args, model=model, opt_eps=1e-9)
 
     return _create_optimizer

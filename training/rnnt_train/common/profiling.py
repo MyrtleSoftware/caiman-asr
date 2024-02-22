@@ -6,7 +6,7 @@ import yappi
 from beartype import beartype
 from beartype.typing import List
 
-from rnnt_train.common.helpers import get_rank_or_zero
+from rnnt_train.common.helpers import get_rank_or_zero, is_rank_zero
 
 
 @beartype
@@ -39,16 +39,18 @@ def set_up_profiling(
         return []
     yappi.set_clock_type("wall")
     yappi.start()
-    if get_rank_or_zero() == 0:
+    if is_rank_zero():
         system_info_logfile = benchmark_dir / f"system_info_{timestamp}.txt"
-        subprocess.run(["./scripts/profile/record_system_info.sh", system_info_logfile])
+        subprocess.run(
+            ["../training/scripts/profile/record_system_info.sh", system_info_logfile]
+        )
         nvidia_smi_logfile = benchmark_dir / f"nvidia_smi_log_{timestamp}.txt"
         nvidia_smi_process = subprocess.Popen(
-            ["./scripts/profile/record_nvidia_smi.bash", nvidia_smi_logfile]
+            ["../training/scripts/profile/record_nvidia_smi.bash", nvidia_smi_logfile]
         )
         top_logfile = benchmark_dir / f"top_log_{timestamp}.html"
         top_process = subprocess.Popen(
-            ["./scripts/profile/record_top.bash", top_logfile]
+            ["../training/scripts/profile/record_top.bash", top_logfile]
         )
         return [nvidia_smi_process, top_process]
     else:

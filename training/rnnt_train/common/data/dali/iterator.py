@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# modified by rob@myrtle
-
 import numpy as np
 import torch
 from nvidia.dali.plugin.base_iterator import LastBatchPolicy
@@ -49,7 +47,8 @@ class DaliRnntIterator(object):
         self.device_type = device_type
         self.read_from_tar = read_from_tar
 
-        # in train pipeline shard_size is set to divisable by batch_size, so PARTIAL policy is safe
+        # in train pipeline shard_size is set to divisable by batch_size, so
+        # PARTIAL policy is safe
         out_arg_names = ["audio", "audio_shape", "label", "label_lens"]
         reader_name = "Reader" if not self.read_from_tar else None
         if pipeline_type == "val":
@@ -102,11 +101,11 @@ class DaliRnntIterator(object):
             transcripts = self.tr[ids]
             # data['label_lens'] is populated with meaningless values and is not used
             sizes = self.t_sizes[ids]
-        # Tensors are padded with 0. In `sentencepiece` we set it to <unk>,
+        # Tensors are padded with 0. In `sentencepiece` it is set to <unk>,
         # because it cannot be disabled, and is absent in the data.
         # Note this is different from the RNN-T blank token (index 1023).
         transcripts = torch.nn.utils.rnn.pad_sequence(transcripts, batch_first=True)
-        # move to gpu only when requested - rob@myrtle
+        # move to gpu only when requested
         if self.device_type == "gpu":
             transcripts = transcripts.cuda()
             sizes = sizes.cuda()

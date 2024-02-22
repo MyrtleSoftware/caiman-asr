@@ -1,3 +1,5 @@
+// Note: Any modifications to this CUDA code require recompilation for the changes to take effect.
+
 #include <c10/cuda/CUDAStream.h>
 #include <torch/extension.h>
 #include "ATen/cuda/CUDAContext.h"

@@ -1,3 +1,4 @@
+#!/bin/bash
 # Copyright (c) 2019-2020, NVIDIA CORPORATION. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,13 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#!/bin/bash
 
 DATASETS=$1
 CHECKPOINTS=$2
 RESULTS=$3
-
-: ${SNAKEVIZ_PORT:=64546}
 
 # Any additional arguments are treated as volumes to be mounted
 # This allows docker container to follow symlinks in the mounted
@@ -34,6 +32,7 @@ done
 : ${EXTRA_VOLUMES:="-v $PWD:/workspace/training"}
 : ${COMMAND:="bash"}
 : ${TTY=true}
+: ${HF_CACHE:="$HOME/.cache/huggingface"}
 
 DOCKER_ARGS=""
 
@@ -46,9 +45,18 @@ DOCKER_ARGS+="-v $DATASETS:/datasets "
 DOCKER_ARGS+="-v $CHECKPOINTS:/checkpoints/ "
 DOCKER_ARGS+="-v $RESULTS:/results/ "
 DOCKER_ARGS+="-v $PWD:/code "
+
+# Keep cached Hugging Face datasets even when restarting the container
+hf_cache_volume="$HF_CACHE:/root/.cache/huggingface"
+DOCKER_ARGS+=" -v $hf_cache_volume "
+
 DOCKER_ARGS+="$EXTRA_VOLUMES $volumes "
 DOCKER_ARGS+="-e TZ=$(cat /etc/timezone) "
-DOCKER_ARGS+="-e SNAKEVIZ_PORT=$SNAKEVIZ_PORT "
-DOCKER_ARGS+="-p $SNAKEVIZ_PORT:$SNAKEVIZ_PORT " # Expose this port so snakeviz can use it
+
+if [ -n "${SNAKEVIZ_PORT+x}" ]; then
+    DOCKER_ARGS+="-e SNAKEVIZ_PORT=$SNAKEVIZ_PORT "
+  # Expose this port so snakeviz can use it
+    DOCKER_ARGS+="-p $SNAKEVIZ_PORT:$SNAKEVIZ_PORT "
+fi
 
 docker run ${DOCKER_ARGS} ${DOCKER_NAME} sh -c "/workspace/training/scripts/docker/settimezone.sh && $COMMAND"

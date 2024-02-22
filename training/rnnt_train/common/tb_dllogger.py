@@ -77,7 +77,7 @@ def unique_log_fpath(log_fpath):
 
     # Avoid overwriting old logs
     saved = sorted(
-        [int(re.search("\.(\d+)", f).group(1)) for f in glob.glob(f"{log_fpath}.*")]
+        [int(re.search(r"\.(\d+)", f).group(1)) for f in glob.glob(f"{log_fpath}.*")]
     )
 
     log_num = (saved[-1] if saved else 0) + 1
@@ -155,7 +155,7 @@ def log(step, tb_total_steps=None, subset="train", data={}):
         tb_loggers[subset].log(tb_total_steps, data)
 
     if subset != "":
-        # We don't print the per-layer info to stdout because there are a lot of entries
+        # Don't print the per-layer info to stdout because there are a lot of entries
         data = {
             f"{subset}_{key}": v for key, v in data.items() if "per-layer" not in key
         }

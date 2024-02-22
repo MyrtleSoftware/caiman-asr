@@ -28,7 +28,8 @@ input_val:
   audio_dataset: &val_dataset
     sample_rate: &sample_rate 16000
     trim_silence: false
-    normalize_transcripts: false
+    normalize_transcripts: true
+    standardize_wer: true
 
   filterbank_features: &val_features
     normalize: per_feature

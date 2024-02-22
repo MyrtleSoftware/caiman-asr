@@ -1,6 +1,5 @@
 # Copyright (c) 2019, Myrtle Software Limited. All rights reserved.
 # Copyright (c) 2019-2021, NVIDIA CORPORATION. All rights reserved.
-# Copyright (c) 2022-2023, Myrtle Software Limited. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,8 +12,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-# modified by rob@myrtle
 
 from itertools import chain
 
@@ -69,11 +66,11 @@ class RNNT(nn.Module):
             There are two valid non-None values of
             joint_apex_transducer={'pack', 'not_pack'}. 'pack' means that the output
             from the joint, and hence the RNNT model, will have padded elements removed.
-            This is ignored at inference time as we always use the torch version.
+            This is ignored at inference time as the torch version is used.
         joint_apex_relu_dropout: If True, this requires bool(joint_apex_transducer)=True,
             the joint network's relu and dropout calculations take place in the
             TransducerJoint implementation rather than native PyTorch. This is ignored
-            at inference time as we always use the torch version.
+            at inference time as the torch version is used.
     """
 
     def __init__(
@@ -112,7 +109,8 @@ class RNNT(nn.Module):
         super(RNNT, self).__init__()
         if joint_apex_relu_dropout and not joint_apex_transducer:
             raise ValueError(
-                "Can't have joint_apex_relu_dropout=True without bool(joint_apex_transducer)==True"
+                "Can't have joint_apex_relu_dropout=True without "
+                "bool(joint_apex_transducer)==True"
             )
         if joint_apex_transducer is not None:
             assert joint_apex_transducer in {"pack", "not_pack"}
@@ -182,7 +180,7 @@ class RNNT(nn.Module):
 
         self.encoder = torch.nn.ModuleDict(enc_mod)
 
-        # Turn off encoder gradients if enc_freeze == True
+        # Turn off encoder gradients if enc_freeze is True
         self.encoder.requires_grad_(not enc_freeze)
 
         pred_embed = torch.nn.Embedding(n_classes - 1, pred_n_hid)
@@ -219,7 +217,7 @@ class RNNT(nn.Module):
 
         # ReLU & Dropout will be applied in TransducerJoint during training if
         # joint_apex_transducer=joint_apex_relu_dropout=True. However, during
-        # inference we don't use TransducerJoint so we need:
+        # inference TransducerJoint is not used, but the torch version is used.
         self.relu_drop = self.joint_net[:2]
         self.joint_fc = self.joint_net[-1]
 
@@ -248,11 +246,33 @@ class RNNT(nn.Module):
         """
         Returns tuple of tuples of encoder and pred net outputs and their lengths.
         """
+        return self.enc_pred_static(
+            x,
+            x_lens,
+            y,
+            y_lens,
+            self.encode,
+            self.predict,
+            pred_net_state=pred_net_state,
+            enc_state=enc_state,
+        )
+
+    @staticmethod
+    def enc_pred_static(
+        x,
+        x_lens,
+        y,
+        y_lens,
+        encode,
+        predict,
+        pred_net_state: Optional[PredNetState] = None,
+        enc_state: Optional[EncoderState] = None,
+    ):
         y = label_collate(y)
 
-        f, x_lens, new_enc_state = self.encode(x, x_lens, enc_state=enc_state)
+        f, x_lens, new_enc_state = encode(x, x_lens, enc_state=enc_state)
 
-        g, _, all_pred_hid = self.predict(
+        g, _, all_pred_hid = predict(
             y,
             pred_state=pred_net_state.next_to_last_pred_state
             if pred_net_state
@@ -318,8 +338,7 @@ class RNNT(nn.Module):
             new_enc_state = None
         return x, x_lens, new_enc_state
 
-    @jaxtyped
-    @beartype
+    @jaxtyped(typechecker=beartype)
     def predict(
         self,
         y,
@@ -335,8 +354,9 @@ class RNNT(nn.Module):
 
         Args:
             y: (B, U)
-            special_sos: If not None, use this as the "start of sequence" symbol and then embed it.
-                         If None, use a zero vector as the "start of sequence" embedding.
+            special_sos: If not None, use this as the "start of sequence" symbol and
+                then embed it. If None, use a zero vector as the "start of sequence"
+                embedding.
 
         Returns:
             Tuple (g, hid) where:
@@ -368,9 +388,9 @@ class RNNT(nn.Module):
         else:
             start = None  # makes del call later easier
 
-        y = y.transpose(0, 1)  # .contiguous()   # (U + 1, B, H)
+        y = y.transpose(0, 1)  # (U + 1, B, H)
         g, hid, all_hid = self.prediction["dec_rnn"](y, pred_state)
-        g = g.transpose(0, 1)  # .contiguous()   # (B, U + 1, H)
+        g = g.transpose(0, 1)  # (B, U + 1, H)
         del y, start, pred_state
         g = self.joint_pred(g)
         return g, hid, all_hid
@@ -383,9 +403,9 @@ class RNNT(nn.Module):
         returns:
             logits of shape (B, T, U + 1, K + 1) if not self.apex_joint.pack_output. If
             pack_output=True, all padded logits are removed from the output and the
-            returned tensor is of the shape (<number non-padded logits>, K + 1). The number
-            of these non-padded logits ('packed_batch' in call to TransducerJoint) is
-            strictly <= (B * T * (U + 1)).
+            returned tensor is of the shape (<number non-padded logits>, K + 1). The
+            number of these non-padded logits ('packed_batch' in call to
+            TransducerJoint) is strictly <= (B * T * (U + 1)).
         """
         if self.joint_apex_transducer is None or f_len is None or g_len is None:
             h = self.relu_drop(self.torch_transducer_joint(f, g, f_len, g_len))
@@ -416,20 +436,25 @@ class RNNT(nn.Module):
         return h
 
     def param_groups(self, lr, return_module_name=False):
-        chain_params = lambda *layers: chain(*[l.parameters() for l in layers])
-
         out = []
         for name, lr_factor in self._module_to_lr_factor.items():
-            res = {"params": chain_params(getattr(self, name)), "lr": lr * lr_factor}
+            res = {
+                "params": self._chain_params(getattr(self, name)),
+                "lr": lr * lr_factor,
+            }
             if return_module_name:
                 res["module_name"] = name
             out.append(res)
         return out
 
+    def _chain_params(self, *layers):
+        return chain(*[layer.parameters() for layer in layers])
+
     def state_dict(self):
         """
         Return model state dict with joint_fc.weight and joint_fc.bias keys removed,
-        as they are exact duplicates of joint_net.2.weight and joint_net.2.bias, respectively.
+        as they are exact duplicates of joint_net.2.weight and joint_net.2.bias,
+        respectively.
         """
         sd = super().state_dict()
         sd.pop("joint_fc.weight")
@@ -466,7 +491,7 @@ def label_collate(labels):
         raise ValueError(f"`labels` should be a list or tensor not {type(labels)}")
 
     batch_size = len(labels)
-    max_len = max(len(l) for l in labels)
+    max_len = max(len(label) for label in labels)
 
     cat_labels = np.full((batch_size, max_len), fill_value=0.0, dtype=np.int32)
     for e, l in enumerate(labels):

@@ -44,13 +44,13 @@ class WebDatasetReader:
     NOTE: if filenames contain more than one period then webdataset considers filename
     until first period as the key and remaining part as extension. It is generally not
     recommended to use multiple periods in a filename as mentioned here
-    https://github.com/webdataset/webdataset/issues/237. As a workaround we replace the
+    https://github.com/webdataset/webdataset/issues/237. As a workaround, replace the
     `.` with `_` of filename except the extension part.
 
     For more information on the format there is a good description in this third-party
-    library: https://webdataset.github.io/webdataset/ but note that we don't use this
-    webdataset library here, instead we use the torchdata's webdataset reading
-    functionality.
+    library: https://webdataset.github.io/webdataset/ but note that
+    webdataset library is not used here. Instead, torchdata's webdataset reading
+    functionality is used.
 
     Parameters
     ----------
@@ -125,9 +125,10 @@ class WebDatasetReader:
         assert tar_files, "must specify tar_files "
 
         if tokenizer is None and normalize_transcripts:
-            assert (
-                charset is not None
-            ), "charset must be passed if tokenizer is None in order to perform normalization"
+            assert charset is not None, (
+                "charset must be passed if tokenizer is None in order to perform "
+                "normalization"
+            )
 
         self.tar_files = tar_files
         self.file_root = file_root
@@ -149,12 +150,12 @@ class WebDatasetReader:
             file_lister = FileLister(self.tar_files, recursive=True)
         else:
             # self.tar_files must be one or more filenames/file globs within file_root
-            # Note that we don't set recursive=True here so all self.tar_files must be
+            # Note that not setting recursive=True here, means that self.tar_files must be
             # at the top level in the self.file_root directory
             file_lister = FileLister(self.file_root, self.tar_files)
 
         if self.shuffle:
-            # we shuffle twice: once at the tar file level and once at the sample level
+            # shuffle twice: once at the tar file level and once at the sample level
             # this first shuffle is so that each node in a distributed setting reads
             # different tar files each epoch
             file_lister = file_lister.shuffle()
@@ -163,12 +164,12 @@ class WebDatasetReader:
         num_tar_files = len(list(file_lister))
         assert num_tar_files >= world_size, (
             f"Number of tar files ({num_tar_files}) must be greater than or "
-            f"equal to the number of nodes ({world_size}) otherwise we can't shard data "
-            "across nodes"
+            f"equal to the number of nodes ({world_size}) otherwise data "
+            "cannot be sharded across nodes"
         )
-        # We need num_workers * world_size to be at most the number of tar files
-        # so that each worker has a tar file to read. We also want as many
-        # workers per process as possible, up to a maximum of 4.
+        # It is required that num_workers * world_size be at most the number of tar files
+        # so that each worker has a tar file to read. A max number of 4 workers
+        # per process can be used.
         num_workers = min(num_tar_files // world_size, 4)
         # apply sharding across nodes here
         file_lister = file_lister.sharding_filter()
@@ -200,7 +201,8 @@ class WebDatasetReader:
     def _manipulate_key(key):
         """
         This will replace the periods in the last part of the key except the file extension.
-        E.g., The key `/datasets/XYZdata.tar/jobid1234.wav_aligned.attributeABC.<ext>` is changed to
+        E.g., The key `/datasets/XYZdata.tar/jobid1234.wav_aligned.attributeABC.<ext>`
+        is changed to
         `/datasets/XYZdata.tar/jobid1234_wav_aligned_attributeABC.<ext>`.
         """
         key_path = Path(key)
@@ -267,7 +269,7 @@ class WebDatasetReader:
 
     def _bucketing(self, pipe):
         """
-        Apply bucketing to the samples so that similar length samples appear in the same batch.
+        Apply bucketing to the samples so similar length samples appear in the same batch.
 
         See BucketingSampler for more details.
         """
@@ -284,7 +286,7 @@ class WebDatasetReader:
             sort_key=self._sort_bucket_fn,
         )
 
-        # we then unbatch this and dali will re-batch for us w/o a shuffle maintaining
+        # Unbatch this and dali will re-batch it w/o a shuffle maintaining
         # the batching of the samples
         return bucketed_pipe.unbatch()
 
@@ -309,9 +311,9 @@ class WebDatasetReader:
 
         This returns a sample of audio data and its corresponding tokenized transcripts.
 
-        We use the self._webdataset_pipe to do most of the work here.
+        Use of the self._webdataset_pipe will do most of the work here.
         next(self._iter) returns a dictionary with keys corresponding to the file
-        suffixes. In our (audio dataset) case we have something like:
+        suffixes. For example, in this (audio dataset) case the dictionary looks like this:
         {
             ".txt": <transcript>,
             ".flac": <audio samples np array>,
@@ -323,9 +325,10 @@ class WebDatasetReader:
         audio_item = self._get_audio(sample_dict)
 
         if not self.skip_audio:
-            assert (
-                audio_item is not None
-            ), f"No audio files found for sample={key} in dict with keys={sample_dict.keys()}"
+            assert audio_item is not None, (
+                f"No audio files found for sample={key} in dict with "
+                "keys={sample_dict.keys()}"
+            )
 
         transcripts = sample_dict[".txt"]
         return audio_item, transcripts
