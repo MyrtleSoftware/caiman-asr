@@ -16,6 +16,7 @@ compile_commands.json
 .cache/
 .vs/
 .vscode/
+.idea/
 
 # testing
 .hypothesis

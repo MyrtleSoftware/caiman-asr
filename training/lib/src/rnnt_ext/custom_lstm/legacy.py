@@ -215,7 +215,7 @@ class CustomLSTMLayer(nn.Module):
         # setup the quantization functions
         if self.quantize:
             # this is a slow import so will only do it when necessary
-            from rnnt_train.common.quantize import BfpQuantizer, BrainFloatQuantizer
+            from rnnt_ext.custom_lstm.quantize import BfpQuantizer, BrainFloatQuantizer
 
             self.bf16 = BrainFloatQuantizer(
                 fp_exp=8, fp_man=7, forward_rounding="nearest"

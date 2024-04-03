@@ -16,7 +16,7 @@
 
 export OMP_NUM_THREADS=1
 
-: ${PYTHON_COMMAND:="./rnnt_train/val_multiple.py"}
+: ${PYTHON_COMMAND:="./caiman_asr_train/val_multiple.py"}
 
 TIMESTAMP=$(date '+%Y_%m_%d_%H_%M_%S')
 

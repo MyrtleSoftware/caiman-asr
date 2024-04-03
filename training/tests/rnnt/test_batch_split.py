@@ -6,13 +6,13 @@ import torch
 from beartype.typing import Union
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from rnnt_train.common.batch_splitting import train_step_batch_split
-from rnnt_train.common.helpers import unwrap_ddp
-from rnnt_train.common.seed import set_seed
-from rnnt_train.common.train_aux import train_step
-from rnnt_train.rnnt.loss import ApexTransducerLoss
-from rnnt_train.rnnt.model import RNNT
-from rnnt_train.rnnt.sub_models import RNNTSubModels
+from caiman_asr_train.rnnt.loss import ApexTransducerLoss
+from caiman_asr_train.rnnt.model import RNNT
+from caiman_asr_train.rnnt.sub_models import RNNTSubModels
+from caiman_asr_train.train_utils.batch_splitting import train_step_batch_split
+from caiman_asr_train.train_utils.core import train_step
+from caiman_asr_train.train_utils.distributed import unwrap_ddp
+from caiman_asr_train.utils.seed import set_seed
 
 
 @pytest.fixture()

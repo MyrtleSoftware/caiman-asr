@@ -2,8 +2,8 @@ import pytest
 import torch
 from apex.contrib.transducer import TransducerJoint
 
-from rnnt_train.rnnt.loss import get_packing_meta_data
-from rnnt_train.rnnt.model import RNNT
+from caiman_asr_train.rnnt.loss import get_packing_meta_data
+from caiman_asr_train.rnnt.model import RNNT
 
 
 @pytest.fixture()

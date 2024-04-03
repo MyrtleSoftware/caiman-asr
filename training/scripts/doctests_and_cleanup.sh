@@ -1,6 +1,6 @@
 #!/bin/bash
 
-pytest rnnt_train
+pytest caiman_asr_train
 TEST_EXIT_CODE=$?
 
 # cleanup any artefacts created during testing

@@ -30,12 +30,10 @@ export OMP_NUM_THREADS=1
 : ${ALPHA:=0.001}
 : ${DALI_DEVICE:="cpu"}
 : ${CUDNN_BENCHMARK:=true}
-: ${STREAM_NORM:=false}
-: ${RESET_STREAM_STATS:=true}
 : ${DUMP_PREDS:=false}
 : ${NUM_GPUS:=1}
 : ${READ_FROM_TAR:=false}
-: ${PYTHON_COMMAND:="./rnnt_train/val.py"}
+: ${PYTHON_COMMAND:="./caiman_asr_train/val.py"}
 : ${EXTRA_ARGS:=""}
 : ${NO_LOSS:=true}
 : ${CPU:=false}
@@ -49,15 +47,12 @@ ARGS+=" --ckpt=$CHECKPOINT"
 ARGS+=" --val_manifests $VAL_MANIFESTS"
 ARGS+=" --val_batch_size=$VAL_BATCH_SIZE"
 ARGS+=" --seed=$SEED"
-ARGS+=" --alpha=$ALPHA"
 ARGS+=" --dali_device=$DALI_DEVICE"
 ARGS+=" --timestamp=$TIMESTAMP"
 ARGS+=" --num_gpus=$NUM_GPUS"
 
 [ "$CPU" = true ] &&                 ARGS+=" --cpu"
 [ "$CUDNN_BENCHMARK" = false ] &&    ARGS+=" --no_cudnn_benchmark"
-[ "$STREAM_NORM" = true ] &&         ARGS+=" --streaming_normalization"
-[ "$RESET_STREAM_STATS" = false ] && ARGS+=" --dont_reset_stream_stats"
 [ "$DUMP_PREDS" = true ] &&          ARGS+=" --dump_preds"
 [ "$NO_LOSS" = false ] &&            ARGS+=" --calculate_loss"
 [ "$READ_FROM_TAR" = true ] &&       ARGS+=" --read_from_tar"

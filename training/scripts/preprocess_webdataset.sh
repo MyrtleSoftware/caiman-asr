@@ -1,21 +1,17 @@
-: ${DATA_DIR:=}
-: ${TRAIN_TAR_FILES:=}
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
 : ${DATASET_NAME_LOWER_CASE:="librispeech"}
 : ${MAX_DURATION_SECS:=16.7}
 : ${SPM_SIZE:=8703}
 : ${CONFIG_NAME:=base-8703sp}
+: ${TRAIN_TAR_FILES:=}
+: ${DATA_DIR:=}
 
-
-SPM_NAME=$DATASET_NAME_LOWER_CASE$SPM_SIZE
-CONFIG=configs/${CONFIG_NAME}.yaml
-RUN_CONFIG=configs/${CONFIG_NAME}_run.yaml
-
-
-# populate run config
-cat $CONFIG | sed s/SENTENCEPIECE/$SPM_NAME/g | sed s/MAX_DURATION/$MAX_DURATION_SECS/g > $RUN_CONFIG
+. scripts/create_config_set_env.sh
 
 # build spm and move to /datasets/sentencepieces
-python rnnt_train/common/data/webdataset_spm.py \
+python caiman_asr_train/data/webdataset/webdataset_spm.py \
     --dataset_dir $DATA_DIR \
     --train_tar_files $TRAIN_TAR_FILES \
     --spm_size $SPM_SIZE \
@@ -24,3 +20,11 @@ python rnnt_train/common/data/webdataset_spm.py \
 
 mkdir -p /datasets/sentencepieces
 mv $SPM_NAME.* /datasets/sentencepieces/
+
+python caiman_asr_train/utils/generate_mel_stats.py \
+    --output_dir $MEL_STATS_DIR \
+    --model_config $RUN_CONFIG \
+    --dataset_dir $DATA_DIR \
+    --train_tar_files $TRAIN_TAR_FILES \
+    --val_tar_files "<not used but must be set>" \
+    --read_from_tar

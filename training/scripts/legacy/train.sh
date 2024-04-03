@@ -34,7 +34,7 @@ export OMP_NUM_THREADS=1
 : ${NUM_BUCKETS=6} # empty means to use SimpleSampler
 : ${EMA:=0.999}
 : ${SEED=1}
-: ${EPOCHS:=100}
+: ${TRAINING_STEPS:=42000}
 : ${WARMUP_STEPS:=1632}
 : ${HOLD_STEPS:=18000}
 : ${HALF_LIFE_STEPS:=10880}
@@ -58,7 +58,7 @@ export OMP_NUM_THREADS=1
 : ${WEIGHTS_INIT_SCALE=0.5}
 : ${CLIP_NORM:=1}
 : ${SKIP_STATE_DICT_CHECK:=false}
-: ${PYTHON_COMMAND:="./rnnt_train/train.py"}
+: ${PYTHON_COMMAND:="./caiman_asr_train/train.py"}
 : ${EXTRA_ARGS:=""}
 
 TIMESTAMP=$(date '+%Y_%m_%d_%H_%M_%S')
@@ -73,7 +73,7 @@ ARGS+=" --min_lr=$MIN_LEARNING_RATE"
 ARGS+=" --global_batch_size=$GLOBAL_BATCH_SIZE"
 ARGS+=" --num_gpus=$NUM_GPUS"
 ARGS+=" --val_batch_size=$VAL_BATCH_SIZE"
-ARGS+=" --epochs=$EPOCHS"
+ARGS+=" --training_steps=$TRAINING_STEPS"
 ARGS+=" --warmup_steps=$WARMUP_STEPS"
 ARGS+=" --hold_steps=$HOLD_STEPS"
 ARGS+=" --half_life_steps=$HALF_LIFE_STEPS"
@@ -93,7 +93,6 @@ ARGS+=" --timestamp=$TIMESTAMP"
 [ "$FINE_TUNE" = true ] &&           ARGS+=" --fine_tune"
 [ "$CUDNN_BENCHMARK" = false ] &&     ARGS+=" --no_cudnn_benchmark"
 [ "$SAVE_AT_THE_END" = false ] &&     ARGS+=" --dont_save_at_the_end"
-[ "$DUMP_MEL_STATS" = true ] &&      ARGS+=" --dump_mel_stats"
 [ "$READ_FROM_TAR" = true ] &&       ARGS+=" --read_from_tar"
 [ "$SKIP_STATE_DICT_CHECK" = true ] && ARGS+=" --skip_state_dict_check"
 [ "$PROFILER" = true ] &&            ARGS+=" --profiler"

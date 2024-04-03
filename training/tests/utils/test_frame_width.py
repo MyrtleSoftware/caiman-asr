@@ -1,6 +1,9 @@
 import pytest
 
-from rnnt_train.utils.frame_width import encoder_frame_width, input_feat_frame_width
+from caiman_asr_train.utils.frame_width import (
+    encoder_frame_width,
+    input_feat_frame_width,
+)
 
 
 def test_encoder_frame_width(mini_model_factory):

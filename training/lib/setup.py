@@ -28,7 +28,7 @@ modules = list(map(build_ext, ["lstm"]))
 setup(
     name="rnnt_ext",
     version="0.1.0",
-    description="Myrtle's RNN-T training module extensions",
+    description="Myrtle.ai's CAIMAN-ASR training module extensions",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     ext_modules=modules,

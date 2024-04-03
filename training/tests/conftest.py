@@ -2,17 +2,19 @@ from argparse import Namespace
 from pathlib import Path
 
 import pytest
+import torch
 import yaml
 from apex.optimizers import FusedLAMB
 from beartype.typing import Callable, Optional, Tuple, Union
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from rnnt_train.common.build_optimizer import build_fused_lamb
-from rnnt_train.common.data.text import Tokenizer
-from rnnt_train.common.helpers import Checkpointer
-from rnnt_train.common.seed import set_seed
-from rnnt_train.rnnt import config
-from rnnt_train.rnnt.model import RNNT
+from caiman_asr_train.data.tokenizer import Tokenizer
+from caiman_asr_train.export.checkpointer import Checkpointer
+from caiman_asr_train.rnnt import config
+from caiman_asr_train.rnnt.model import RNNT
+from caiman_asr_train.test_utils.dataload_args import gen_dataload_args
+from caiman_asr_train.train_utils.build_optimizer import build_fused_lamb
+from caiman_asr_train.utils.seed import set_seed
 
 
 @pytest.fixture(scope="session")
@@ -39,6 +41,11 @@ def tokenizer_kw(config_fp, test_data_dir):
 
 
 @pytest.fixture()
+def mel_stats_dir(test_data_dir) -> str:
+    return str(test_data_dir)
+
+
+@pytest.fixture()
 def tokenizer(tokenizer_kw) -> Tokenizer:
     return Tokenizer(**tokenizer_kw)
 
@@ -49,7 +56,7 @@ def saved_tokenizer_num_labels(tokenizer) -> int:
 
 
 @pytest.fixture()
-def mini_config_fp_factory(tmp_path, tokenizer_kw):
+def mini_config_fp_factory(tmp_path, tokenizer_kw, mel_stats_dir):
     """
     Load the config file and replace the relevant fields to make it a 'mini' config.
 
@@ -71,6 +78,10 @@ def mini_config_fp_factory(tmp_path, tokenizer_kw):
 
         cfg["rnnt"] = rnnt_config
         cfg["tokenizer"] = tokenizer_kw
+
+        cfg["input_val"]["filterbank_features"]["stats_path"] = mel_stats_dir
+        cfg["input_train"]["filterbank_features"]["stats_path"] = mel_stats_dir
+
         # save the config to a temporary file
         named_tmp_file = str(tmp_path / "mini_config.yaml")
         with open(named_tmp_file, "w") as f:
@@ -79,6 +90,11 @@ def mini_config_fp_factory(tmp_path, tokenizer_kw):
         return named_tmp_file
 
     return _create_mini_config_fp
+
+
+@pytest.fixture()
+def mini_config_fp(mini_config_fp_factory, config_fp) -> str:
+    return mini_config_fp_factory(config_fp)
 
 
 @pytest.fixture()
@@ -118,3 +134,18 @@ def optimizer_factory() -> Callable[[Union[RNNT, DDP]], FusedLAMB]:
         return build_fused_lamb(args=args, model=model, opt_eps=1e-9)
 
     return _create_optimizer
+
+
+@pytest.fixture(scope="session")
+def dataload_args(test_data_dir) -> Namespace:
+    return gen_dataload_args(test_data_dir)
+
+
+@pytest.fixture(scope="session")
+def melmeans(test_data_dir) -> torch.Tensor:
+    return torch.load(test_data_dir / "melmeans.pt")
+
+
+@pytest.fixture(scope="session")
+def melvars(test_data_dir) -> torch.Tensor:
+    return torch.load(test_data_dir / "melvars.pt")

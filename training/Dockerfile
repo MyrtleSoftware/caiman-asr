@@ -40,8 +40,12 @@ WORKDIR /workspace/training
 # This may change when new torchdata releases are available
 RUN pip install --no-dependencies torchdata==0.6.1
 
-COPY requirements.txt .
-RUN pip install --no-cache --disable-pip-version-check -U -r requirements.txt
+WORKDIR /workspace/audio
+RUN git clone https://github.com/pytorch/audio && \
+    cd audio && \
+    git checkout v2.1.0 && \
+    python setup.py install
+WORKDIR /workspace/training
 
 COPY lib lib
 # Setuptool requires we are in the working directory of the package
@@ -53,6 +57,9 @@ RUN python -m pip install .
 # Reset the workspace, needed by following scripts
 WORKDIR /workspace/training
 
-COPY rnnt_train rnnt_train
+COPY requirements.txt .
+RUN pip install --disable-pip-version-check -U -r requirements.txt
+
+COPY caiman_asr_train caiman_asr_train
 COPY setup.py .
 RUN python -m pip install -e .

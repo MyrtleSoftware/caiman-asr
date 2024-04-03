@@ -1,7 +1,7 @@
 import pytest
 
-from rnnt_train.common.seed import set_seed
-from rnnt_train.rnnt.model import RNNT
+from caiman_asr_train.rnnt.model import RNNT
+from caiman_asr_train.utils.seed import set_seed
 
 
 @pytest.fixture()

@@ -2,7 +2,7 @@ import pytest
 import torch
 from apex.contrib.transducer import TransducerJoint
 
-from rnnt_train.rnnt.loss import ApexTransducerLoss
+from caiman_asr_train.rnnt.loss import ApexTransducerLoss
 
 
 @pytest.mark.parametrize("batch_size", [2, 8])

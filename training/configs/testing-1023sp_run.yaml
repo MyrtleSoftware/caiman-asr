@@ -21,6 +21,7 @@ tokenizer:
     sentpiece_model: /datasets/sentencepieces/librispeech1023.model
     labels: [" ", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
              "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "'"]
+    sampling: 0.05
 
 # For validation we don't trim silence: its effect on WER is very small, it pushes WER on clean and noisy speech
 # in different directions, it would be difficult to implement in a streaming system, and a VAD would be better.
@@ -40,6 +41,7 @@ input_val:
     n_fft: 512
     n_filt: &n_filt 80
     dither: 0.00001
+    stats_path: /datasets/stats/librispeech-winsz0.02
   frame_splicing: &val_splicing
     frame_stacking: 3
     frame_subsampling: 3

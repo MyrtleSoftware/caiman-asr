@@ -7,13 +7,14 @@ repos:
     -   id: check-added-large-files
     -   id: check-merge-conflict
     -   id: end-of-file-fixer
+        exclude_types: ["svg"]
     -   id: requirements-txt-fixer
     -   id: trailing-whitespace
 -   repo: https://github.com/pycqa/isort
     rev: 5.12.0
     hooks:
     - id: isort
-      args: [--profile=black, --project=rnnt_train, --project=internal_rnnt_train]
+      args: [--profile=black, --project=caiman_asr_train, --project=myrtle_asr_train]
 -   repo: https://github.com/psf/black
     rev: 23.3.0
     hooks:

@@ -1,0 +1,74 @@
+[
+  {
+    "transcript": "dummy text in the clip 1",
+    "files": [
+      {
+        "fname": "dummy_name_1.flac"
+      }
+    ],
+    "original_duration": 8.89
+  },
+  {
+    "transcript": "dummy text in the clip 2",
+    "files": [
+      {
+        "fname": "dummy_name_2.flac"
+      }
+    ],
+    "original_duration": 8.89
+  },
+  {
+    "transcript": "dummy text in the clip 3",
+    "files": [
+      {
+        "fname": "dummy_name_3.flac"
+      }
+    ],
+    "original_duration": 8.89
+  },
+  {
+    "transcript": "dummy text in the clip 4",
+    "files": [
+      {
+        "fname": "dummy_name_4.flac"
+      }
+    ],
+    "original_duration": 8.89
+  },
+  {
+    "transcript": "dummy text in the clip 5",
+    "files": [
+      {
+        "fname": "dummy_name_5.flac"
+      }
+    ],
+    "original_duration": 8.89
+  },
+  {
+    "transcript": "dummy text in the clip 6",
+    "files": [
+      {
+        "fname": "dummy_name_6.flac"
+      }
+    ],
+    "original_duration": 8.89
+  },
+  {
+    "transcript": "dummy text in the clip 7",
+    "files": [
+      {
+        "fname": "dummy_name_7.flac"
+      }
+    ],
+    "original_duration": 8.89
+  },
+  {
+    "transcript": "dummy text in the clip 8",
+    "files": [
+      {
+        "fname": "dummy_name_8.flac"
+      }
+    ],
+    "original_duration": 8.89
+  }
+]

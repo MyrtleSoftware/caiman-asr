@@ -1,4 +1,4 @@
 RNN-T in PyTorch
 
-This repository includes source code (in "rnnt/") from:
+This repository includes source code (in "training/caiman_asr_train/rnnt") from:
 * https://github.com/keithito/tacotron and https://github.com/ryanleary/patter licensed under MIT license.

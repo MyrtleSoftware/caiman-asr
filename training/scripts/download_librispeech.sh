@@ -22,7 +22,7 @@ if [ ! -d "$DATA_DIR" ]
 then
     mkdir $DATA_DIR
     chmod go+rx $DATA_DIR
-    python rnnt_train/utils/download_librispeech.py rnnt_train/utils/librispeech.csv $DATA_DIR -e ${DATA_ROOT_DIR}/
+    python caiman_asr_train/data/datasets/download_librispeech.py caiman_asr_train/data/datasets/librispeech.csv $DATA_DIR -e ${DATA_ROOT_DIR}/
 else
     echo "Directory $DATA_DIR already exists."
 fi
