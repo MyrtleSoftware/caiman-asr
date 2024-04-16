@@ -37,4 +37,5 @@
     - [Compiling weights](./inference/compiling_weights.md)
     - [Websocket API](./inference/websocket_api.md)
     - [Testing inference performance](./inference/testing_inference_performance.md)
+    - [Live audio demonstration](./inference/live_audio_demonstration.md)
   - [CAIMAN-ASR demo](./inference/caiman-asr_demo.md)

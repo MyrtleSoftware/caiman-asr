@@ -3,6 +3,7 @@ The latest release is available for download from <https://github.com/MyrtleSoft
 
 This provides the following package:
 * ML training repo
+* [Live demo client](./inference/live_audio_demonstration.md)
 
 The following packages can be obtained by contacting Myrtle.ai at [caiman-asr@myrtle.ai](mailto:caiman-asr@myrtle.ai):
 * CAIMAN-ASR server: `caiman-asr-server-<version>.run`
