@@ -1,10 +1,10 @@
 # CAIMAN-ASR demo
-Release name: `myrtle-asr-demo-<version>.run`
+Release name: `caiman-asr-demo-<version>.run`
 
 This software bundle is used for demonstrating the server.
 It includes the asr server and a web interface which shows the live transcriptions and latency of the server.
 This is not the right software to use for production installations; the docker container doesn't expose the server port so external clients cannot connect to it.
-For production installations, use the `myrtle-asr-server-<version>.run` release. See instructions in the [CAIMAN-ASR server](./caiman-asr_server.md) section.
+For production installations, use the `caiman-asr-server-<version>.run` release. See instructions in the [CAIMAN-ASR server](./caiman-asr_server.md) section.
 
 ## Running the CAIMAN-ASR Demo Server
 

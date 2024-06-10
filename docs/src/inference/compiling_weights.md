@@ -1,7 +1,7 @@
 # Convert PyTorch checkpoints to CAIMAN-ASR programs
-Release name: `myrtle-asr-server-<version>/compile-model-checkpoint`
+Release name: `caiman-asr-server-<version>/compile-model-checkpoint`
 
-This is a packaged version of the CAIMAN-ASR model compiler which can be used to convert PyTorch
+This is a packaged version of the CAIMAN-ASR model compiler, which can be used to convert PyTorch
 checkpoints to CAIMAN-ASR checkpoints. The CAIMAN-ASR checkpoint contains the instructions for the model
 to enable CAIMAN-ASR acceleration. These instructions depend on the weights of the model, so when
 the model is changed, the CAIMAN-ASR checkpoint needs to be recompiled.

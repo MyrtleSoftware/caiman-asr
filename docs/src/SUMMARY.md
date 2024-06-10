@@ -38,4 +38,5 @@
     - [Websocket API](./inference/websocket_api.md)
     - [Testing inference performance](./inference/testing_inference_performance.md)
     - [Live audio demonstration](./inference/live_audio_demonstration.md)
+    - [Hardware requirements](./inference/hardware_requirements.md)
   - [CAIMAN-ASR demo](./inference/caiman-asr_demo.md)

@@ -33,7 +33,7 @@ In order to use state resets it is required that the `--val_batch_size` is kept 
 ## At inference time
 
 The user can configure whether to use state resets on the CAIMAN-ASR server.
-State resets are off by default, and enabling them will reduce RTS by 20–25%.
+More information can be found [here](../inference/caiman-asr_server.md#state-resets).
 
 ## See also
 

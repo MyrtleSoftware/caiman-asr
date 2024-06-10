@@ -83,5 +83,5 @@ transcription. We can use this to calculate the latency from sending the audio t
 associated response.
 
 To prevent each connection sending audio at the same time, the client waits a random length of time
-(withing the frame duration) before starting each connection. This provides a better model of real
+(within the frame duration) before starting each connection. This provides a better model of real
 operation where the clients would be connecting independently.

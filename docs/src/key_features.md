@@ -24,15 +24,16 @@ CAIMAN-ASR is provided pre-trained for English language transcription. For appli
 
 The solution supports two model configurations:
 
-| Model   | Parameters | Realtime streams (RTS) | p99 latency at max RTS    | p99 latency at RTS=32 |
-|---------|------------|------------------------|---------------------------|-----------------------|
-| `base`  | 85M        |          2000          |            25 ms          |          15 ms        |
-| `large` | 196M       |           800          |            25 ms          |          15 ms        |
+| Model   | Parameters | Realtime streams (RTS) | RTS with state resets enabled | p99 latency at max RTS | p99 latency at RTS=32 |
+|---------|------------|------------------------|-------------------------------|------------------------|-----------------------|
+| `base`  | 85M        | 2000                   | 1750                          | 70 ms                  | 15 ms                  |
+| `large` | 196M       | 800                    | 600                           |  70 ms                 | 15 ms                  |
 
 where:
 
 * **Realtime streams (RTS)** is the number of concurrent streams that can be serviced by a single accelerator using default settings
 * **p99 latency** is the 99th-percentile latency to process a single 60 ms audio frame and return any predictions. Note that latency increases with the number of concurrent streams.
+* **state resets** is a technique that improves the accuracy on long utterances (over 60s) by resetting the model's hidden state after a fixed duration. This reduces the number of real-time streams that can be supported by around 25%, but for use-cases involving only short utterances it can be switched off.
 
 The **solution scales linearly up to 8 accelerators, and a single server has been measured to support 16000 RTS** with the `base` model.
 

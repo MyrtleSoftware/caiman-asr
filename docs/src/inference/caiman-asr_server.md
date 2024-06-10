@@ -1,5 +1,5 @@
 # CAIMAN-ASR server release bundle
-Release name: `myrtle-asr-server-<version>.run`
+Release name: `caiman-asr-server-<version>.run`
 
 This release bundle contains all the software needed to run the Myrtle.ai CAIMAN-ASR server in a production environment.
 This includes the server docker image, a simple Python client, and scripts to start and stop the server.
@@ -18,8 +18,7 @@ See details [here](../training/model_yaml_configurations.md)
 The CAIMAN-ASR server supports two backends: CPU and FPGA. The CPU backend is not real time, but
 can be useful for testing on a machine without an Achronix Speedster7t PCIe card
 installed. The FPGA backend is able to support 2000 concurrent transcription
-streams per card with the `base` model and 800 with
-the `large` model.
+streams per card with the `base` model and 800 with the `large` model.
 
 ## Quick start: CPU backend
 
@@ -35,7 +34,7 @@ the `large` model.
    ./start_asr_server.sh --rnnt-checkpoint compile-model-checkpoint/hardware_checkpoint.testing.example.pt --cpu-backend
    ```
 
-3. Once the server prints "Starting server on port 3030", you can start the simple client.
+3. Once the server prints "Server started on port 3030", you can start the simple client.
    This will send a librispeech example wav to the CAIMAN-ASR server and print the transcription:
 
    ```
@@ -87,7 +86,7 @@ below). For more details on this process, see the [Compiling weights](./compilin
    ```
    To detach from the running docker container without killing it, use ctrl+p followed by ctrl+q.
 
-4. Once the server prints "Starting server on port 3030", you can start the simple client.
+4. Once the server prints "Server started on port 3030", you can start the simple client.
    This will send a librispeech example wav to the CAIMAN-ASR server and print the transcription:
 
    ```
@@ -103,7 +102,13 @@ below). For more details on this process, see the [Compiling weights](./compilin
    ./kill_asr_servers.sh
    ```
 
+## State resets
+State resets improve the word error rate of the CAIMAN-ASR server on long utterances by resetting the hidden state of the model after a fixed duration.
+This improves the accuracy but reduces the number of real-time streams that can be supported by about 25%.
+If your audio is mostly short utterances (less than 60s), you can disable state resets to increase the number of real-time streams that can be supported.
+State resets are switched on by default, but they can be disabled by passing the `--no-state-resets` flag to the `./start_server` script.
 
+ More information about state resets can be found [here](../training/state_resets.md).
 
 # Connecting to the websocket API
 The websocket endpoint is at `ws://localhost:3030`.

@@ -124,7 +124,7 @@ def create_hardware_ckpt(args) -> dict:
         "melvars": melvars,
         "melalpha": melalpha,
         "sentpiece_model": spmb,  # store the bytes object in the hardware checkpoint
-        "version": "1.10.0",  # add the semantic version number of the hardware checkpoint
+        "version": "1.10.1",  # add the semantic version number of the hardware checkpoint
         "rnnt_config": inference_config,  # copy in inference config
     }
 
