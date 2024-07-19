@@ -13,10 +13,13 @@
 # limitations under the License.
 
 
+import string
+
 from beartype import beartype
 from beartype.typing import List, Tuple
 from levenshtein_rs import levenshtein_list as levenshtein
 
+from caiman_asr_train.data.text.normalizers import lowercase_normalize
 from caiman_asr_train.data.text.whisper_text_normalizer import EnglishTextNormalizer
 
 
@@ -58,8 +61,7 @@ def word_error_rate(
 
     scores = 0
     words = 0
-    len_diff = len(references) - len(hypotheses)
-    if len_diff > 0:
+    if len(references) != len(hypotheses):
         raise ValueError(
             "Unequal number of hypotheses and references: "
             "{0} and {1}".format(len(hypotheses), len(references))
@@ -82,9 +84,10 @@ def word_error_rate(
 @beartype
 def standardize_wer(text: str) -> str:
     """
-    Apply Whisper normalization rules to text.
+    Standardize text in preparation for WER calculation.
 
-    This function applies the Whisper normalization rules on the text of both
+    This function applies the Whisper normalization rules
+    and the train-time normalizer on the text of both
     hypotheses and references in order to minimize
     penalization of non-semantic text differences.
 
@@ -99,7 +102,11 @@ def standardize_wer(text: str) -> str:
     norm_text_list
         string containing standardized text
     """
+    # Hardcode charset, so WER doesn't depend on what charset the user trains with.
+    # Keep <> so that the EnglishTextNormalizer recognizes and removes tags.
+    charset = list(" '<>" + string.ascii_lowercase)
+    norm_text = lowercase_normalize(text, charset=charset)
     standardizer = EnglishTextNormalizer()
-    standard_text = standardizer(text)
+    standard_text = standardizer(norm_text)
 
     return standard_text

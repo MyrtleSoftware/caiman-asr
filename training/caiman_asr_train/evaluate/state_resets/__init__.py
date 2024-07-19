@@ -1,5 +1,4 @@
 from caiman_asr_train.evaluate.state_resets.core import (  # noqa
-    check_state_reset_args,
     extend_feats_with_overlaps,
     get_segmenting_info,
     get_state_resets_feats,

@@ -48,7 +48,7 @@ class EnglishTextNormalizer:
             r"\bain't\b": "aint",
             r"\by'all\b": "you all",
             r"\bwanna\b": "want to",
-            r"\bkinda\b": "king of",
+            r"\bkinda\b": "kind of",
             r"\bgotta\b": "got to",
             r"\blotta\b": "lot of",
             r"\bsorta\b": "sort of",

@@ -3,8 +3,7 @@
 ## Connecting
 
 To start a new stream, the connection must first be set up. A WebSocket
-connection starts with a HTTP `GET` request with header fields `Upgrade:
-websocket` and `Connection: Upgrade` as per
+connection starts with a HTTP `GET` request with header fields `Upgrade: websocket` and `Connection: Upgrade` as per
 [RFC6455](https://datatracker.ietf.org/doc/html/rfc6455).
 
 ```
@@ -43,12 +42,14 @@ Requests can specify the audio format with the `content_type` parameter. If the 
 specified then the server will attempt to infer it. Currently only `audio/x-raw` is supported.
 
 Supported content types are:
-* `audio/x-raw`: Unstructured and uncompressed raw audio data. If raw audio is used then additional parameters must be provided by adding:
-    * `format`: The format of audio samples. Only S16LE is currently supported
-    * `rate`: The sample rate of the audio. Only 16000 is currently supported
-    * `channels`: The number of channels. Only 1 channel is currently supported
+
+- `audio/x-raw`: Unstructured and uncompressed raw audio data. If raw audio is used then additional parameters must be provided by adding:
+  - `format`: The format of audio samples. Only S16LE is currently supported
+  - `rate`: The sample rate of the audio. Only 16000 is currently supported
+  - `channels`: The number of channels. Only 1 channel is currently supported
 
 As a query parameter, this would look like:
+
 ```
 content_type=audio/x-raw;format=S16LE;channels=1;rate=16000
 ```
@@ -91,7 +92,6 @@ The maximum number of alternative transcriptions to provide.
 |:---------|:--------|:--------------------|
 | general  | v1      | en                  |
 
-
 ## Request Frames
 
 For `audio/x-raw` audio, raw audio samples in the format specified in the
@@ -99,7 +99,6 @@ For `audio/x-raw` audio, raw audio samples in the format specified in the
 Frames can be any length greater than zero.
 
 A WebSocket Binary frame of length zero is treated as an end-of-stream (EOS) message.
-
 
 ## Response Frames
 
@@ -119,6 +118,38 @@ Response frames are sent as WebSocket Text frames containing JSON.
 }
 ```
 
+### API during greedy decoding
+
+- `start`: The start time of the transcribed interval in seconds
+- `end`: The end time of the transcribed interval in seconds
+- `is_provisional`: Always false for greedy decoding (but can be true for beam decoding)
+- `alternatives`: Contains at most one alternative for greedy decoding (but can be more for beam decoding)
+  - `transcript`: The model predictions for this audio interval. Not cumulative, so you can get the full transcript by concatenating all the `transcript` fields
+  - `confidence`: Currently unused
+
+### API during beam decoding
+
+When decoding with a beam search, the server will return two types of response, either 'partial' or 'final' where:
+
+- Partial responses are hypotheses that are provisional and may be removed or updated in future frames
+- Final responses are hypotheses that are complete and will not change in future frames
+
+It is recommended to use partials for low-latency streaming applications and finals for the ultimate transcription output. If latency is not a concern you can ignore the partials and concatenate the finals.
+
+Detection of finals is done by checking beam hypotheses for a shared prefix. Typically it takes no more than 1.5 seconds to get finals (and often they are much faster) but it is possible that two similar hypotheses with similar scores are maintained in the beam for a long period of time. As such it is always recommended to use partials with state-resets enabled (see [state-reset docs](../training/state_resets.md)).
+
+When running the asr server, partial responses are marked with `"is_provisional": true` and finals with `"is_provisional": false` and partials can be one of the many `"alternatives: [...]"`.
+During a partial response,
+the alternatives are ordered from most confident to least.
+
+At each frame,
+it's guaranteed that the server will send
+a final or partial response, and perhaps both, as explained
+[`here`](https://github.com/MyrtleSoftware/caiman-asr/blob/main/training/caiman_asr_train/rnnt/response.py):
+
+```
+{{#include ../../../training/caiman_asr_train/rnnt/response.py:finals_partials_in_mdbook}}
+```
 
 ## Closing the Connection
 

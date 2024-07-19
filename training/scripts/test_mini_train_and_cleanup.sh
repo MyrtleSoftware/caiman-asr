@@ -51,6 +51,26 @@ TARFILE_VAL_EXIT_CODE=$?
 
 rm -rf /results/*
 
+
+# Now run a json train with Hugging Face validation
+./scripts/train.sh --model_config=/tmp/testing.yaml --skip_state_dict_check \
+    --data_dir=tests/test_data --train_manifests=peoples-speech-short.json \
+    --use_hugging_face \
+    --hugging_face_val_dataset distil-whisper/librispeech_asr_dummy \
+    --hugging_face_val_split validation[0:2] --num_gpus=1 \
+    --global_batch_size=2 --grad_accumulation_batches=1 --batch_split_factor=2 \
+    --training_steps=4  --prediction_frequency 1
+
+HF_TRAIN_EXIT_CODE=$?
+
+./scripts/val.sh --model_config=/tmp/testing.yaml --use_hugging_face \
+    --hugging_face_val_dataset distil-whisper/librispeech_asr_dummy \
+    --hugging_face_val_split validation[0:2] --num_gpus=1
+
+HF_VAL_EXIT_CODE=$?
+
+rm -rf /results/*
+
 # cleanup any artefacts created during testing
 # This is required because, on the host runner, the files (e.g. .hypothesis) are
 # created inside docker (i.e. with root permissions) so the host runner can't
@@ -59,7 +79,8 @@ rm -rf /results/*
 
 # If any of the above failed, then the script should fail
 if [ $JSON_TRAIN_EXIT_CODE -ne 0 ] || [ $TARFILE_TRAIN_EXIT_CODE -ne 0 ] \
-    || [ $JSON_VAL_EXIT_CODE -ne 0 ] || [ $TARFILE_VAL_EXIT_CODE -ne 0 ]
+    || [ $JSON_VAL_EXIT_CODE -ne 0 ] || [ $TARFILE_VAL_EXIT_CODE -ne 0 ] \
+    || [ $HF_TRAIN_EXIT_CODE -ne 0 ] || [ $HF_VAL_EXIT_CODE -ne 0 ]
 then
     exit 1
 fi

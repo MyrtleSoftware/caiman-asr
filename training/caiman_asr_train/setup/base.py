@@ -11,7 +11,6 @@ import torch
 import torch.distributed as dist
 from beartype import beartype
 from beartype.typing import Callable, Dict, List, Optional, Tuple, Union
-from torch.cuda.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from caiman_asr_train.data import features
@@ -20,60 +19,20 @@ from caiman_asr_train.data.dali import sampler as dali_sampler
 from caiman_asr_train.data.dali.data_loader import DaliDataLoader
 from caiman_asr_train.data.tokenizer import Tokenizer
 from caiman_asr_train.export.checkpointer import Checkpointer
+from caiman_asr_train.lm.kenlm_ngram import NgramInfo, find_ngram_path
 from caiman_asr_train.rnnt import config
+from caiman_asr_train.rnnt.beam import RNNTBeamDecoder
 from caiman_asr_train.rnnt.decoder import RNNTDecoder
 from caiman_asr_train.rnnt.greedy import RNNTGreedyDecoder
 from caiman_asr_train.rnnt.loss import ApexTransducerLoss
 from caiman_asr_train.rnnt.model import RNNT
 from caiman_asr_train.rnnt.sub_models import RNNTSubModels
-from caiman_asr_train.setup.core import PipelineType
+from caiman_asr_train.setup.core import CPU, TRAIN, VAL, PipelineType
 from caiman_asr_train.setup.dali import build_dali_yaml_config
 from caiman_asr_train.setup.mel_normalization import build_mel_feat_normalizer
 from caiman_asr_train.train_utils.distributed import print_once
 from caiman_asr_train.train_utils.grad_noise_scheduler import GradNoiseScheduler
-
-TRAIN = PipelineType.TRAIN
-VAL = PipelineType.VAL
-
-
-CPU = torch.device("cpu")
-CUDA = torch.device("cuda")
-
-
-@beartype
-class OptimizerWrapper:
-    """Wrapper to control the optimizer and AMP scaling during training."""
-
-    def __init__(
-        self,
-        args: Namespace,
-        optimizer,
-        scaler: Optional[GradScaler],
-    ):
-        self.args = args
-        self.optimizer = optimizer
-        self.scaler = scaler
-
-    def zero_grad(self) -> None:
-        self.optimizer.zero_grad()
-
-    def step(self, total_norm: float) -> None:
-        if not self.args.no_amp:
-            self.do_scaler_step()
-            self.scaler.update()
-        else:
-            # when not using AMP test for inf / NaN gradients
-            if np.isfinite(total_norm):
-                self.optimizer.step()
-
-    def do_scaler_step(self) -> None:
-        # pyTorch AMP step function unscales the gradients
-        # if these gradients do not contain infs or NaNs, optimizer.step() is then called
-        self.scaler.step(self.optimizer)
-
-    @property
-    def learning_rate(self) -> float:
-        return self.optimizer.param_groups[0]["lr"]
+from caiman_asr_train.train_utils.optimizer import OptimizerWrapper
 
 
 @beartype
@@ -114,6 +73,9 @@ class BuiltObjects:
 
 @beartype
 class Setup(ABC):
+    def get_model_cls(self, args: Namespace):
+        return RNNT
+
     def run(self, args: Namespace) -> BuiltObjects:
         """Initialise the objects required for each PipelineType."""
         # Must make output directory before the logging starts in initial_setup()
@@ -126,11 +88,11 @@ class Setup(ABC):
             default_tokenizer,
             default_tokenizer_kw,
         ) = self.build_all_tokenizers(args, cfg)
-        decoder, loss_fn = self.build_evaluation_objects(
-            args, cfg, blank_idx, default_tokenizer, default_tokenizer_kw
-        )
         model, ema_model, training_only = self.build_model(
             args, cfg, default_tokenizer, multi_gpu, default_tokenizer_kw
+        )
+        decoder, loss_fn = self.build_evaluation_objects(
+            ema_model, args, cfg, blank_idx, default_tokenizer, default_tokenizer_kw
         )
         data_objects, feat_procs = self.build_data_and_feat_proc(
             args, np_rng, world_size, batch_sizes, cfg, tokenizers, training_only
@@ -178,6 +140,7 @@ class Setup(ABC):
 
     def build_evaluation_objects(
         self,
+        ema_model,
         args: Namespace,
         cfg: dict,
         blank_idx: int,
@@ -186,7 +149,10 @@ class Setup(ABC):
     ) -> Tuple[RNNTDecoder, ApexTransducerLoss]:
         loss_fn = self.build_loss_fn(blank_idx, cfg)
         lm_info = self.build_lm_info(args, default_tokenizer, default_tokenizer_kw)
-        decoder = self.build_decoder(args, blank_idx, default_tokenizer, lm_info)
+        ngram_info = self.build_ngram_info(args, cfg.get("ngram"))
+        decoder = self.build_decoder(
+            ema_model, args, blank_idx, default_tokenizer, lm_info, ngram_info
+        )
         return decoder, loss_fn
 
     @abstractmethod
@@ -228,16 +194,36 @@ class Setup(ABC):
 
     def build_decoder(
         self,
+        ema_model,
         args: Namespace,
         blank_idx: int,
         tokenizer: Tokenizer,
         lm_info: Optional[Tuple],
+        ngram_info: Optional[NgramInfo],
     ) -> RNNTDecoder:
-        return RNNTGreedyDecoder(
-            blank_idx=blank_idx,
-            max_symbol_per_sample=args.max_symbol_per_sample,
-            lm_info=lm_info,
-        )
+        if args.decoder == "greedy":
+            if args.fuzzy_topk_logits:
+                print_once("--fuzzy_topk_logits is not supported with greedy decoding")
+            return RNNTGreedyDecoder(
+                model=ema_model,
+                blank_idx=blank_idx,
+                max_inputs_per_batch=args.max_inputs_per_batch,
+                max_symbol_per_sample=args.max_symbol_per_sample,
+            )
+        else:
+            return RNNTBeamDecoder(
+                model=ema_model,
+                blank_idx=blank_idx,
+                max_inputs_per_batch=args.max_inputs_per_batch,
+                max_symbol_per_sample=args.max_symbol_per_sample,
+                beam_width=args.beam_width,
+                tokenizer=tokenizer,
+                temperature=args.temperature,
+                beam_prune_score_thresh=args.beam_prune_score_thresh,
+                beam_prune_topk_thresh=args.beam_prune_topk_thresh,
+                ngram_info=ngram_info,
+                fuzzy_topk_logits=args.fuzzy_topk_logits,
+            )
 
     def build_lm_info(
         self, args: Namespace, tokenizer: Tokenizer, tokenizer_kw: dict
@@ -317,6 +303,31 @@ class Setup(ABC):
             pipeline_type: builder(pipeline_type, *other_args)
             for pipeline_type in self.pipeline_types()
         }
+
+    def build_ngram_info(
+        self, args: Namespace, ngram_cfg: Optional[dict]
+    ) -> Optional[NgramInfo]:
+        """Build n-gram info if beam search is used and n-gram is not disabled."""
+        if args.decoder == "beam" and not args.skip_ngram and ngram_cfg is not None:
+            ngram_path = args.override_ngram_path or self._find_ngram_file(
+                ngram_cfg["ngram_path"]
+            )
+            return NgramInfo(ngram_path, ngram_cfg["scale_factor"])
+        if ngram_cfg is None:
+            assert (
+                not args.override_ngram_path
+            ), "--override_ngram_path specified but no n-gram config found in model config"
+        return None
+
+    def _find_ngram_file(self, base_path: str) -> str:
+        """Search for ngram file in given directory - if not found, raise error."""
+        file = find_ngram_path(base_path)
+        if file is None:
+            raise FileNotFoundError(
+                f"N-gram not found in {base_path}. Ensure you have a valid n-gram, "
+                "or pass the `--skip_ngram` argument to disable n-grams during validation."
+            )
+        return file
 
     @abstractmethod
     def build_tokenizer(

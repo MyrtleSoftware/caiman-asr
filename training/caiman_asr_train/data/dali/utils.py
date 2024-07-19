@@ -89,7 +89,7 @@ def get_path_files(
 
 @beartype
 def set_predicate(
-    max_duration: float, max_transcript_len: Union[int, float]
+    max_duration: int | float, max_transcript_len: int | float
 ) -> Callable[[dict], bool]:
     """Returns a function that decides whether an utterance is short enough
     for the dataset. Typically in validation this will always return true

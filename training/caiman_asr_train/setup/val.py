@@ -15,14 +15,8 @@ from caiman_asr_train.log.tb_dllogger import init_log
 from caiman_asr_train.log.tee import start_logging_stdout_and_stderr
 from caiman_asr_train.rnnt import config
 from caiman_asr_train.rnnt.model import RNNT
-from caiman_asr_train.setup.base import (
-    CPU,
-    CUDA,
-    VAL,
-    PipelineType,
-    Setup,
-    TrainingOnly,
-)
+from caiman_asr_train.setup.base import Setup, TrainingOnly
+from caiman_asr_train.setup.core import CPU, CUDA, VAL, PipelineType
 from caiman_asr_train.train_utils.distributed import print_once
 from caiman_asr_train.utils.num_weights import num_weights
 from caiman_asr_train.utils.seed import set_seed
@@ -42,7 +36,8 @@ class BaseValSetup(Setup):
     ) -> Tuple[Union[RNNT, DDP], RNNT, None]:
         rnnt_config = config.rnnt(cfg)
         rnnt_config["gpu_unavailable"] = self.preferred_device() == CPU
-        model = RNNT(n_classes=tokenizer.num_labels + 1, **rnnt_config)
+        model_cls = self.get_model_cls(args)
+        model = model_cls(n_classes=tokenizer.num_labels + 1, **rnnt_config)
         model.to(self.preferred_device())
 
         print_once(f"Model size: {num_weights(model) / 10**6:.1f}M params\n")

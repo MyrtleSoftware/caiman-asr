@@ -100,10 +100,9 @@ def evaluate(
     enc_time_reduction = ema_model.enc_stack_time_factor
 
     start_time = time.time()
+    results = {"preds": [], "txts": [], "idx": [], "timestamps": [], "token_probs": []}
     if calculate_loss:
-        results = {"losses": [], "preds": [], "txts": [], "idx": [], "timestamps": []}
-    else:
-        results = {"preds": [], "txts": [], "idx": [], "timestamps": []}
+        results["losses"] = []
 
     try:
         total_loader_len = f"{len(val_loader):<10}"
@@ -124,7 +123,7 @@ def evaluate(
         # note : these variable names are a bit misleading : 'audio' is already features
         # txt is      (batch, max(txt_lens))
         # txt_lens is (batch, )
-        audio, audio_lens, txt, txt_lens = batch
+        audio, audio_lens, txt, txt_lens, raw_transcripts = batch
 
         # move tensors back to gpu, unless cpu is used during validation
         if args.dali_device == "cpu" and not using_cpu:
@@ -153,34 +152,45 @@ def evaluate(
                 args.sr_segment, args.sr_overlap, cfg, feats, feat_lens
             )
 
-        pred, timestamps = decoder.decode(
-            model=ema_model,
-            feats=feats,
-            feat_lens=feat_lens,
-            max_inputs_per_batch=args.max_inputs_per_batch,
-        )
+        pred, timestamps, probs = decoder.decode(feats, feat_lens)
 
         # if state resets is used, merge predictions and timestamps of segments into one
         if args.sr_segment:
-            pred, timestamps = state_resets_merge_segments(
+            pred, timestamps, probs = state_resets_merge_segments(
                 pred,
                 timestamps,
+                probs,
                 enc_time_reduction,
                 sr_segment_frames,
                 sr_overlap_frames,
             )
 
+        # For each predicted sentence, detokenize token into subword
+        subwords = [[detokenize(token) for token in sentence] for sentence in pred]
+        if probs:
+            token_probs = [
+                [
+                    (token, round(prob, 4))
+                    for token, prob in zip(token_list, prob_list, strict=True)
+                ]
+                for token_list, prob_list in zip(subwords, probs, strict=True)
+            ]
+            results["token_probs"] += token_probs
+
         preds = gather_predictions([pred], detokenize)
         results["preds"] += preds
-        results["txts"] += gather_transcripts([txt.cpu()], [txt_lens.cpu()], detokenize)
+        results["txts"] += raw_transcripts
         if timestamps:
-            # For each predicted sentence, detokenize token into subword
-            subwords = [[detokenize(token) for token in sentence] for sentence in pred]
             # convert token timestamps to word timestamps
             word_timestamps = group_timestamps(subwords, timestamps, preds)
             results["timestamps"] += word_timestamps
 
-    wer, loss = process_evaluation_epoch(results, standardize_wer=standardize_wer)
+    wer, loss = process_evaluation_epoch(
+        results,
+        standardize_wer=standardize_wer,
+        breakdown_wer=args.breakdown_wer,
+        breakdown_chars=args.breakdown_chars,
+    )
     results["wer"] = wer
 
     log(

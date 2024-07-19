@@ -13,39 +13,32 @@
 # limitations under the License.
 
 import multiprocessing as mp
-import warnings
 
 import torch.distributed as dist
 from beartype import beartype
 from beartype.typing import List, Optional, Union
 
-from caiman_asr_train.data.text.normalize_file import normalize
+from caiman_asr_train.data.text.normalizers import select_and_normalize
 from caiman_asr_train.data.tokenizer import Tokenizer
+from caiman_asr_train.setup.text_normalization import NormalizeConfig
 
 
 @beartype
 def norm_and_tokenize(
     transcript: str,
+    normalize_config: NormalizeConfig,
     tokenizer: Optional[Tokenizer] = None,
-    normalize_transcripts: bool = True,
     charset: Optional[List[str]] = None,
 ) -> Union[List[int], str]:
     """
     Normalizes and optionally tokenizes a transcript. `Transcript` is a string,
     typically a single utterance.
     """
-    if normalize_transcripts:
-        charset = tokenizer.charset if tokenizer is not None else charset
-        assert (
-            charset is not None
-        ), "Must either pass tokenizer or charset but both are None"
-        transcript_ = normalize(transcript, quiet=False, charset=charset)
-        if not transcript_:
-            warnings.warn(f"Transcript normalization for {transcript=} returned ''")
-            warnings.warn(
-                "Either normalization failed, or the original transcript was empty"
-            )
-        transcript = transcript_
+    charset = tokenizer.charset if tokenizer is not None else charset
+    assert (
+        charset is not None
+    ), "Must either pass tokenizer or charset but both are None"
+    transcript = select_and_normalize(transcript, charset, normalize_config)
 
     if tokenizer is None:
         return transcript
@@ -55,41 +48,40 @@ def norm_and_tokenize(
 @beartype
 def norm_and_tokenize_chunk(
     transcripts: List[str],
+    normalize_config: NormalizeConfig,
     tokenizer: Optional[Tokenizer] = None,
-    normalize_transcripts: bool = True,
     charset: Optional[List[str]] = None,
-) -> List[List[int]]:
+) -> List[List[int] | str]:
     """
     Wrapper around `norm_and_tokenize` for processing many transcripts and
     straightforward parallelization.
     """
     return [
-        norm_and_tokenize(t, tokenizer, normalize_transcripts, charset)
-        for t in transcripts
+        norm_and_tokenize(t, normalize_config, tokenizer, charset) for t in transcripts
     ]
 
 
 @beartype
 def norm_and_tokenize_parallel(
     transcripts: List[str],
+    normalize_config: NormalizeConfig,
     tokenizer: Optional[Tokenizer] = None,
-    normalize_transcripts: bool = True,
     charset: Optional[List[str]] = None,
     min_trans_per_process: int = 50,
-) -> List[List[int]]:
+) -> List[List[int] | str]:
     """
     Parallelized version of `norm_and_tokenize()`.
 
     Args:
     :transcripts: a list of trascripts to tokenize
     :tokenizer: a tokenizer object
-    :normalize_transcripts: normalize transcripts prior to tokenization
+    :normalize_config: Controls how to normalize transcripts prior to tokenization
     :charset: a character set for tokenization in case of a missing tokenizer
     :min_trans_per_process: minimum number of transcripts per process to
         use multiprocessing, otherwise default to single-processing
     """
     # To circumvent overallocating CPUs because each DaliRnntIterator()
-    # runs as a seperate process if we run multi GPU training
+    # runs as a separate process if we run multi GPU training
     if dist.is_initialized():
         world_size = dist.get_world_size()
     else:
@@ -99,7 +91,7 @@ def norm_and_tokenize_parallel(
     trans_num = len(transcripts)
     if min_trans_per_process * num_processes >= trans_num or mp.cpu_count() < 2:
         results = norm_and_tokenize_chunk(
-            transcripts, tokenizer, normalize_transcripts, charset
+            transcripts, normalize_config, tokenizer, charset
         )
     else:
         # Chunk transcripts
@@ -110,9 +102,7 @@ def norm_and_tokenize_parallel(
 
         # spawn processes and collect results
         with mp.get_context("spawn").Pool(processes=num_processes) as pool:
-            args = [
-                (chunk, tokenizer, normalize_transcripts, charset) for chunk in chunks
-            ]
+            args = [(chunk, normalize_config, tokenizer, charset) for chunk in chunks]
             results = pool.starmap(norm_and_tokenize_chunk, args)
 
         # unpack from List[List[List[int]]] -> List[List[int]]

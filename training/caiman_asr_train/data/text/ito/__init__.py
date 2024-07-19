@@ -3,7 +3,7 @@
 """ from https://github.com/keithito/tacotron """
 import string
 
-from . import cleaners
+import caiman_asr_train.data.text.ito.cleaners as cleaners
 
 
 def _clean_text(text, cleaner_names, *args):

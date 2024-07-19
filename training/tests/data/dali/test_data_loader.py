@@ -15,7 +15,7 @@ from caiman_asr_train.rnnt import config
 from caiman_asr_train.setup.core import PipelineType
 from caiman_asr_train.setup.dali import build_dali_yaml_config
 from caiman_asr_train.setup.mel_normalization import build_mel_feat_normalizer
-from caiman_asr_train.test_utils.dataload_args import update_dataload_args
+from caiman_asr_train.unittesting.dataload_args import update_dataload_args
 from caiman_asr_train.utils.seed import set_seed
 
 
@@ -56,7 +56,7 @@ def test_samplers_initialization(
     assert isinstance(dataloader2.sampler, sampler.BucketingSampler)
     txt_list = []
     for idx in range(training_steps // len(dataloader2)):
-        for _, _, txt, _ in dataloader2:
+        for _, _, txt, _, _ in dataloader2:
             txt_list.append(txt)
     assert len(txt_list) == training_steps
     assert torch.allclose(txt_list[0], txt_list[len(dataloader2)]) or torch.allclose(
@@ -178,7 +178,7 @@ def test_dali_dataloader_build(
             len(dataloader)
     samples_seen = 0
     for batch in dataloader:
-        audio, audio_lens, txt, txt_lens = batch
+        audio, audio_lens, txt, txt_lens, _ = batch
         B, H, T = audio.shape
         B2, U = txt.shape
         assert B == B2 == len(audio_lens) == len(txt_lens) == batch_size
@@ -200,7 +200,7 @@ def test_dali_dataloader_build(
         return
     samples_seen = 0
     for batch in dataloader:
-        audio, _, _, _ = batch
+        audio, _, _, _, _ = batch
         B, H, T = audio.shape
         samples_seen += B
 
@@ -224,7 +224,7 @@ def test_shuffle_train_webdataset(
     prev_txt = None
     shuffle_seen = False
     for idx in range(n_epochs):
-        for _, _, txt, _ in dataloader:
+        for _, _, txt, _, _ in dataloader:
             print(idx, txt)
             if prev_txt is None or torch.allclose(prev_txt, txt):
                 prev_txt = txt
@@ -250,7 +250,7 @@ def test_no_shuffle_val_webdataset(
     # shuffling has happened
     prev_txt = None
     for _ in range(n_epochs):
-        for _, _, txt, _ in dataloader:
+        for _, _, txt, _, _ in dataloader:
             if prev_txt is None or torch.allclose(prev_txt, txt):
                 prev_txt = txt
                 continue
@@ -303,7 +303,7 @@ def test_dali_equivalence(
         tokenizer,
         deterministic_ex_noise=True,
     )
-    for audio, _, _, _ in dali_dataloder_deterministic:
+    for audio, _, _, _, _ in dali_dataloder_deterministic:
         assert torch.allclose(audio, saved_tensor_no_noise, atol=2e-04)
 
 

@@ -5,19 +5,9 @@ import torch
 
 from caiman_asr_train.args.norm_stats_generation import update_args_stats_generation
 from caiman_asr_train.data.decide_on_loader import DataSource
-from caiman_asr_train.test_utils.dataload_args import update_dataload_args
-from caiman_asr_train.utils.generate_mel_stats import generate_stats
+from caiman_asr_train.data.generate_mel_stats import generate_stats
+from caiman_asr_train.unittesting.dataload_args import update_dataload_args
 from caiman_asr_train.utils.seed import set_seed
-
-REASON = "HF training not supported. Train dataloader is required for stats generation."
-DATASOURCES = [
-    (
-        pytest.param(x, marks=pytest.mark.xfail(reason=REASON))
-        if x == DataSource.HUGGINGFACE
-        else x
-    )
-    for x in DataSource
-]
 
 
 def update_args(args: Namespace, format: DataSource, batch_size: int = 1) -> Namespace:
@@ -26,7 +16,7 @@ def update_args(args: Namespace, format: DataSource, batch_size: int = 1) -> Nam
     return args
 
 
-@pytest.mark.parametrize("format", DATASOURCES)
+@pytest.mark.parametrize("format", DataSource)
 def test_generate_mel_stats(dataload_args, format, tmpdir):
     args = update_args(dataload_args, format, batch_size=1)
 
@@ -39,7 +29,7 @@ def test_generate_mel_stats(dataload_args, format, tmpdir):
     assert (tmpdir / "meln.pt").exists()
 
 
-@pytest.mark.parametrize("format", DATASOURCES)
+@pytest.mark.parametrize("format", DataSource)
 def test_gen_stats_no_augmentation(dataload_args, tmpdir, format):
     """
     Even when seed is different.
@@ -69,6 +59,19 @@ def test_gen_stats_no_augmentation(dataload_args, tmpdir, format):
     assert torch.allclose(melmeans, melmeans2)
     assert torch.allclose(melvars, melvars2)
     assert torch.allclose(meln, meln2)
+
+
+REASON = """HF training is not supported. When training with format=HF,
+            the training code uses json files for training and HF
+            for validation. Hence there are no HF reference stats"""
+DATASOURCES = [
+    (
+        pytest.param(x, marks=pytest.mark.xfail(reason=REASON))
+        if x == DataSource.HUGGINGFACE
+        else x
+    )
+    for x in DataSource
+]
 
 
 @pytest.mark.parametrize("format", DATASOURCES)

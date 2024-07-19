@@ -1,7 +1,9 @@
 # Introduction
+
 CAIMAN-ASR provides high-throughput and low-latency automatic speech recognition (ASR).
 
 This document outlines the following:
+
 - [Installation](installation.md)
 - [Key Features](key_features.md)
 - [Product Overview](product_overview.md)

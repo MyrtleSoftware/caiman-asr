@@ -13,15 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import sentencepiece as spm
-from beartype.typing import List, Optional
+from beartype import beartype
+from beartype.typing import List
 from numpy import random
 
 
+@beartype
 class Tokenizer:
     def __init__(
         self,
         labels: List[str],
-        sentpiece_model: Optional[str] = None,
+        sentpiece_model: str,
         sampling: float = 0.0,
     ):
         """Converts transcript to a sequence of tokens.
@@ -32,18 +34,12 @@ class Tokenizer:
             sampling (float): probability of random sampling from
                              tokens when encoding text.
         """
-        # For labels use vocab or load wordpieces
+        # Other code reads this attribute:
         self.charset = labels
-        self.use_sentpiece = sentpiece_model is not None
 
-        if self.use_sentpiece:
-            self.sentpiece = spm.SentencePieceProcessor(model_file=sentpiece_model)
-            self.num_labels = len(self.sentpiece)
-            self.sampling = sampling
-        else:
-            self.num_labels = len(self.charset)
-            self.label2ind = {lab: i for i, lab in enumerate(self.charset)}
-            self.sampling = sampling
+        self.sentpiece = spm.SentencePieceProcessor(model_file=sentpiece_model)
+        self.num_labels = len(self.sentpiece)
+        self.sampling = sampling
 
     def tokenize(self, transcript: str) -> List[int]:
         """
@@ -58,19 +54,11 @@ class Tokenizer:
         if self.sampling > 0.0:
             do_sampling = random.random_sample() < self.sampling
 
-        if self.use_sentpiece:
-            inds = self.sentpiece.encode(
-                transcript, out_type=int, enable_sampling=do_sampling
-            )
-            assert (
-                0 not in inds
-            ), f"<unk> found during tokenization (OOV?)\n{transcript}"
-        else:
-            inds = [self.label2ind[x] for x in transcript if x in self.label2ind]
+        inds = self.sentpiece.encode(
+            transcript, out_type=int, enable_sampling=do_sampling
+        )
+        assert 0 not in inds, f"<unk> found during tokenization (OOV?)\n{transcript}"
         return inds
 
-    def detokenize(self, inds: List[int]) -> str:
-        if self.use_sentpiece:
-            return self.sentpiece.decode(inds)
-        else:
-            return "".join(self.charset[i] for i in inds)
+    def detokenize(self, inds: int | List[int]) -> str:
+        return self.sentpiece.decode(inds)

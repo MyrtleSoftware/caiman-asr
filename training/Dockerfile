@@ -26,12 +26,22 @@ RUN apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/
 # need to set the tzdata time noninteractively
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata && \
-    apt-get install -y libsndfile1 sox git cmake jq ffmpeg && \
+    apt-get install -y libsndfile1 sox libsox-fmt-mp3 git cmake jq ffmpeg fish && \
     apt-get install -y --no-install-recommends numactl && \
     apt-get install -y iproute2 && \
     # Used for logging CPU usage:
     apt-get install -y aha && \
+    # Install Boost and Eigen3 dependencies for kenlm:
+    apt-get install -y libboost-all-dev libeigen3-dev && \
     rm -rf /var/lib/apt/lists/*
+
+# Install KenLM
+WORKDIR /workspace
+RUN wget -O - https://kheafield.com/code/kenlm.tar.gz | tar xz && \
+    mkdir kenlm/build && \
+    cd kenlm/build && \
+    cmake .. && \
+    make -j2
 
 WORKDIR /workspace/training
 
@@ -63,3 +73,6 @@ RUN pip install --disable-pip-version-check -U -r requirements.txt
 COPY caiman_asr_train caiman_asr_train
 COPY setup.py .
 RUN python -m pip install -e .
+
+# Set the library path to prevent UCX error after installing KenLM
+ENV LD_LIBRARY_PATH=/opt/hpcx/ucx/lib:$LD_LIBRARY_PATH

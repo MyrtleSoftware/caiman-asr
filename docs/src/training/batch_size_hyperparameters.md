@@ -2,9 +2,9 @@
 
 If you are training on an `8 x A100 (80GB)` or `8 x A5000 (24GB)` machine, the recommended batch size hyper-parameters are given [here](training_times.md). Otherwise, this page gives guidance on how to select them. For a training command on `num_gpus` there are three command line args:
 
-* `global_batch_size`
-* `grad_accumulation_batches`
-* `batch_split_factor`
+- `global_batch_size`
+- `grad_accumulation_batches`
+- `batch_split_factor`
 
 The [Summary](#summary) section at the bottom of this page describes how to select them.
 Before that, hyper-parameters and the motivation behind their selection are provided.
@@ -58,7 +58,7 @@ When comparing throughputs it is better to compare the `avg train utts/s` from t
 
 There is some constant VRAM overhead attached to batch splitting so for some machines, when you try step 3. above you will see OOMs. In this case you should:
 
-* Take the `grad_accumulation_batches` from step 2. and increase by *=2
-* Then perform step 3.
+- Take the `grad_accumulation_batches` from step 2. and increase by \*=2
+- Then perform step 3.
 
 In this case it's not a given that your highest throughput setup with `batch_split_factor` > 1 will be higher than the throughput from step 2. with `--batch_size-factor=1` so you should use whichever settings give a higher throughput.

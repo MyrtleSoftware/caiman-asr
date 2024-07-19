@@ -24,7 +24,7 @@ source training/install_docker.sh
 sudo usermod -a -G docker [user]
 ```
 
-   Run the following in the same terminal window, and you might not have to log out and in again:
+Run the following in the same terminal window, and you might not have to log out and in again:
 
 ```bash
 newgrp docker
@@ -44,7 +44,6 @@ cd training
 ./scripts/docker/launch.sh <DATASETS> <CHECKPOINTS> <RESULTS>
 ```
 
-
 ### Requirements
 
 Currently, the reference uses CUDA-12.2.
@@ -63,7 +62,6 @@ The following table shows the mappings between directories on a host machine and
 | `<DATASETS>` | /datasets |
 | `<CHECKPOINTS>` | /checkpoints |
 | `<RESULTS>` | /results |
-
 
 ```admonish
 The host directories passed to `./scripts/docker/launch.sh` must have absolute paths.

@@ -1,4 +1,5 @@
 # Testing Inference Performance
+
 Release name: `caiman-asr-client-<version>.run`
 
 This is a simple client for testing and reporting the latency of the CAIMAN-ASR server. It spins up a configurable number

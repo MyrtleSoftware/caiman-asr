@@ -36,9 +36,9 @@ def add_basic_hugging_face_args(parser: ArgumentParser) -> None:
         type=str,
         default="validation",
         help="""The split to use for validation. Defaults to 'validation'.
-        This supports the TensorFlow Slicing API, e.g. 'validation[25%:75%]'
+        This supports the TensorFlow Slicing API, e.g. 'validation[25%%:75%%]'
         will validate on the middle two quarters of the validation set.
-        See https://www.tensorflow.org/datasets/splits for more
+        See https://www.tensorflow.org/datasets/splits for more info
         """,
     )
     hf.add_argument(

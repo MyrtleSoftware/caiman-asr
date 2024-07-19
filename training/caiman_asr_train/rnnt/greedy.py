@@ -2,6 +2,8 @@
 # Copyright (c) 2023, Myrtle Software Limited, www.myrtle.ai. All rights reserved.
 
 
+import torch.nn.functional as F
+
 from caiman_asr_train.rnnt.decoder import RNNTDecoder
 
 
@@ -19,16 +21,18 @@ class RNNTGreedyDecoder(RNNTDecoder):
 
     def __init__(
         self,
+        model,
         blank_idx,
+        max_inputs_per_batch,
         max_symbols_per_step=30,
         max_symbol_per_sample=None,
-        lm_info=None,
     ):
         super().__init__(
+            model=model,
             blank_idx=blank_idx,
+            max_inputs_per_batch=max_inputs_per_batch,
             max_symbol_per_sample=max_symbol_per_sample,
             max_symbols_per_step=max_symbols_per_step,
-            lm_info=lm_info,
         )
 
     def prepare_lm(self):
@@ -39,8 +43,7 @@ class RNNTGreedyDecoder(RNNTDecoder):
         self,
         label,
         logits,
-        model,
-        f,
+        f_t,
         g,
         lm_hidden,
         device,
@@ -49,14 +52,17 @@ class RNNTGreedyDecoder(RNNTDecoder):
         """Is a no-op because language models not currently supported."""
         return k, lm_hidden
 
-    def _inner_decode(self, model, x, x_len):
-        # x     is shape (time, 1, enc_dim)
-        # x_len is shape ()
+    def _inner_decode(self, f, f_len):
+        """
+        Run decoding loop given encoder features.
 
-        device = x.device
+        f is shape (time, 1, enc_dim)
+        """
 
-        training_state = model.training
-        model.eval()
+        device = f.device
+
+        training_state = self.model.training
+        self.model.eval()
 
         lm_hidden = self.prepare_lm()
 
@@ -64,13 +70,14 @@ class RNNTGreedyDecoder(RNNTDecoder):
 
         label = []
         timestamps = []
-        for time_idx in range(x_len):
+        label_probs = []
+        for time_idx in range(f_len):
             if (
                 self.max_symbol_per_sample is not None
                 and len(label) > self.max_symbol_per_sample
             ):
                 break
-            f = x[time_idx, :, :].unsqueeze(0)
+            f_t = f[time_idx, :, :].unsqueeze(0)
 
             not_blank = True
             symbols_added = 0
@@ -80,11 +87,13 @@ class RNNTGreedyDecoder(RNNTDecoder):
             ):
                 # run the RNNT prediction network on one step
                 g, hidden_prime, _ = self._pred_step(
-                    model, self._SOS if label == [] else label[-1], hidden, device
+                    self._SOS if label == [] else label[-1], hidden, device
                 )
 
                 # use the RNNT joint network to compute logits, for speed
-                logits = self._joint_step(model, f, g, log_normalize=False)[0, :]
+                logits = self._joint_step(f_t, g, log_normalize=False, fuzzy=False)[
+                    0, :
+                ]
 
                 # get index k, of max logit (ie. argmax)
                 v, k = logits.max(0)
@@ -97,12 +106,14 @@ class RNNTGreedyDecoder(RNNTDecoder):
                     hidden = hidden_prime
 
                     k, lm_hidden = self.apply_lm(
-                        label, logits, model, f, g, lm_hidden, device, k
+                        label, logits, f_t, g, lm_hidden, device, k
                     )
 
                     label.append(k)
                     timestamps.append(time_idx)
+                    probs = F.softmax(logits, dim=0)
+                    label_probs.append(probs[k].item())
                 symbols_added += 1
 
-        model.train(training_state)
-        return label, timestamps
+        self.model.train(training_state)
+        return label, timestamps, label_probs

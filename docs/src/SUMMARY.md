@@ -1,11 +1,17 @@
 # Summary
 
 [Introduction](introduction.md)
+
 - [Installation](installation.md)
+
 - [Key Features](key_features.md)
+
 - [Product overview](product_overview.md)
 
+- [Performance](performance.md)
+
 - [ML training flow](training/ml_training_flow.md)
+
   - [Installation](training/installation.md)
   - [Model YAML configurations](training/model_yaml_configurations.md)
   - [Training times](training/training_times.md)
@@ -22,15 +28,18 @@
     - [Challenging target data](training/challenging_target_data.md)
     - [Resuming and fine-tuning](training/resuming_and_fine_tuning.md)
     - [Profiling](training/profiling.md)
+    - [Changing the character set](training/changing_the_character_set.md)
   - [Validation](training/validation.md)
     - [WER calculation](training/wer_calculation.md)
     - [State resets](training/state_resets.md)
+    - [Beam search decoding](training/beam_decoder.md)
+    - [N-gram language model](training/ngram_lm.md)
     - [Automatic batch size reduction](training/automatic_batch_size_reduction.md)
     - [Saving predictions](training/saving_predictions.md)
   - [Export inference checkpoint](training/export_inference_checkpoint.md)
-  - [Training datasets](training/training_datasets.md)
 
 - [Inference flow](./inference/inference_flow.md)
+
   - [Licensing](./inference/licensing.md)
   - [Programming the FPGA](./inference/programming_the_fpga.md)
   - [CAIMAN-ASR server](./inference/caiman-asr_server.md)

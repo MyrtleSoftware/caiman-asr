@@ -14,8 +14,13 @@ from torchdata.dataloader2 import (
 )
 from torchdata.datapipes.iter import BucketBatcher, FileLister, FileOpener
 
+from caiman_asr_train.data.external_source.core import str_to_numpy_unicode
 from caiman_asr_train.data.text.preprocess import norm_and_tokenize
 from caiman_asr_train.data.tokenizer import Tokenizer
+from caiman_asr_train.setup.text_normalization import (
+    IDENTITY_NORMALIZE_CONFIG,
+    NormalizeConfig,
+)
 
 
 class LengthUnknownError(Exception):
@@ -74,8 +79,8 @@ class WebDatasetReader:
     charset
         Optional List of strings containing the supported characters. This is passed as
         an alternative to Tokenizer when the transcripts are not tokenized.
-    normalize_transcripts
-        Whether to normalize the transcripts.
+    normalize_config
+        Config that controls transcript normalization
     shuffle_buffer_size
         The size of the sample shuffle buffer. This must be larger than the number of
         samples in a shard so that cross-shard shuffling is performed. The larger this
@@ -112,7 +117,7 @@ class WebDatasetReader:
         file_root: Optional[str],
         tar_files: List[str],
         charset: Optional[List[str]] = None,
-        normalize_transcripts: bool = False,
+        normalize_config: NormalizeConfig = IDENTITY_NORMALIZE_CONFIG,
         shuffle_buffer_size: int = 20000,
         max_duration=float("inf"),
         max_transcript_len=float("inf"),
@@ -124,7 +129,7 @@ class WebDatasetReader:
     ) -> None:
         assert tar_files, "must specify tar_files "
 
-        if tokenizer is None and normalize_transcripts:
+        if tokenizer is None:
             assert charset is not None, (
                 "charset must be passed if tokenizer is None in order to perform "
                 "normalization"
@@ -134,7 +139,7 @@ class WebDatasetReader:
         self.file_root = file_root
         self.charset = charset
         self.tokenizer = tokenizer
-        self.normalize_transcripts = normalize_transcripts
+        self.normalize_config = normalize_config
         self.shuffle = shuffle
         self.shuffle_buffer_size = shuffle_buffer_size
         self.max_duration = max_duration
@@ -181,6 +186,7 @@ class WebDatasetReader:
         )
 
         self._webdataset_pipe = self._webdataset_pipe.filter(self._filter_fn)
+        self._webdataset_pipe = self._webdataset_pipe.map(self._norm_and_tokenize)
         if self.shuffle:
             # shuffle the samples
             self._webdataset_pipe = self._webdataset_pipe.shuffle(
@@ -201,9 +207,10 @@ class WebDatasetReader:
     def _manipulate_key(key):
         """
         This will replace the periods in the last part of the key except the file extension.
-        E.g., The key `/datasets/XYZdata.tar/jobid1234.wav_aligned.attributeABC.<ext>`
-        is changed to
-        `/datasets/XYZdata.tar/jobid1234_wav_aligned_attributeABC.<ext>`.
+        Example:
+        >>> key = '/datasets/XYZdata.tar/jobid1234.wav_aligned.attributeABC.<ext>'
+        >>> WebDatasetReader._manipulate_key(key)
+        '/datasets/XYZdata.tar/jobid1234_wav_aligned_attributeABC.<ext>'
         """
         key_path = Path(key)
         new_key = str(
@@ -235,17 +242,25 @@ class WebDatasetReader:
             transcript = value.read().decode("utf-8")
             if len(transcript) > self.max_transcript_len:
                 return key, None
-            transcript = norm_and_tokenize(
-                transcript,
-                self.tokenizer,
-                self.normalize_transcripts,
-                self.charset,
-            )
-            if self.tokenizer is not None:
-                transcript = np.array(transcript, dtype=np.int32)
             return key, transcript
         else:
             raise ValueError(f"Unknown file type: {key}")
+
+    def _norm_and_tokenize(self, item):
+        raw_transcript = item[".txt"]
+        norm_transcript = norm_and_tokenize(
+            transcript=raw_transcript,
+            tokenizer=self.tokenizer,
+            normalize_config=self.normalize_config,
+            charset=self.charset,
+        )
+        item[".txt"] = (
+            norm_transcript
+            if self.tokenizer is None
+            else np.array(norm_transcript, dtype=np.int32)
+        )
+        item["raw_transcript_array"] = str_to_numpy_unicode(raw_transcript)
+        return item
 
     def _filter_fn(self, item):
         """
@@ -331,4 +346,4 @@ class WebDatasetReader:
             )
 
         transcripts = sample_dict[".txt"]
-        return audio_item, transcripts
+        return audio_item, transcripts, sample_dict["raw_transcript_array"]

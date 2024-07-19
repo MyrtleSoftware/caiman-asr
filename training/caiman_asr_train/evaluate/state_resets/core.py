@@ -8,7 +8,6 @@ from caiman_asr_train.evaluate.state_resets.overlap_processing import (
     get_unique_predictions,
     process_time,
 )
-from caiman_asr_train.train_utils.distributed import print_once
 from caiman_asr_train.utils.frame_width import input_feat_frame_width
 
 
@@ -66,10 +65,11 @@ def state_resets_reshape_feats(
 def state_resets_merge_segments(
     pred: List[List[int]],
     timestamps: List[List[int]],
+    probs: List[List[float]],
     enc_time_reduction: int,
     sr_segment_frames: int,
     sr_overlap_frames: int,
-) -> Tuple[List[List[int]], List[List[Union[int, float]]]]:
+) -> Tuple[List[List[int]], List[List[Union[int, float]]], Optional[List[List[float]]]]:
     """Return prediction tokens and timestamps for all segments concatenated.
 
     This function will return the prediction tokens and the timestamps without
@@ -82,6 +82,8 @@ def state_resets_merge_segments(
         list with lists of tokens per segment
     timestamps
         list with lists of decoder timestamps per segment
+    probs
+        list of lists of per-token probabilities for each segment
     enc_time_reduction
         factor for time reduction in the encoder
     sr_segment_frames
@@ -95,23 +97,28 @@ def state_resets_merge_segments(
         list with list of tokens for concatenated segments
     timestamps
         list with list of decoder timestamps for concatenated segments
+    probs
+        list of list of per-token probabilities for concatenated segments or None
     """
-    pred, timestamps = get_unique_predictions(
+    pred, timestamps, probs = get_unique_predictions(
         pred,
         timestamps,
+        probs,
         enc_time_reduction,
         sr_overlap_frames,
         lookahead=3,
     )
     # combine segments into single list
     pred = combine_predictions(pred)
+    if probs:
+        probs = combine_predictions(probs)
 
     # transform timestamps to reflect continues decoding
     timestamps = process_time(
         timestamps, enc_time_reduction, sr_segment_frames, sr_overlap_frames
     )
 
-    return pred, [timestamps]
+    return pred, [timestamps], probs
 
 
 @beartype
@@ -393,16 +400,3 @@ def get_segmenting_info(
         n_segments += 1
         padding = segment_frames - overlap_frames - remaining
     return n_segments, padding
-
-
-@beartype
-def check_state_reset_args(
-    sr_segment: Optional[float], sr_overlap: float, val_batch_size: int
-):
-    """require validation batch size = 1 if state resets is used"""
-    if sr_segment:
-        print_once(
-            f"Evaluating with state resets every {sr_segment} seconds with overlap of "
-            f"{sr_overlap} seconds."
-        )
-        assert val_batch_size == 1, "Please set --val_batch_size=1 to use state resets."

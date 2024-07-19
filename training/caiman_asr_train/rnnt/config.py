@@ -95,7 +95,9 @@ def input(conf_yaml, split="train"):
 
     # Validate outer classes
     conf_dataset = validate_and_fill(
-        PipelineParams, conf_dataset, optional=["standardize_wer"]
+        PipelineParams,
+        conf_dataset,
+        optional=["standardize_wer", "replacements", "remove_tags"],
     )
 
     conf_splicing = validate_and_fill(features.FrameSplicing, conf_splicing)
@@ -129,9 +131,7 @@ def rnnt(conf) -> Dict:
 
 def tokenizer(conf) -> Dict:
     # First assert arguments are correctly parsed
-    config = validate_and_fill(
-        Tokenizer, conf["tokenizer"], optional=["sentpiece_model", "sampling"]
-    )
+    config = validate_and_fill(Tokenizer, conf["tokenizer"], optional=["sampling"])
 
     # assert optional arguments have valid values
     if "sampling" in config:

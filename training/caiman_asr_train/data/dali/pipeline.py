@@ -37,15 +37,18 @@ from caiman_asr_train.data.decide_on_loader import DataSource
 from caiman_asr_train.data.hugging_face.core import HuggingFaceReader
 from caiman_asr_train.data.webdataset import WebDatasetReader
 from caiman_asr_train.setup.dali import DaliYAMLConfig
+from caiman_asr_train.setup.text_normalization import NormalizeLevel
 
 
 class PipelineParams:
     def __init__(
         self,
+        replacements,
+        remove_tags,
         sample_rate=16000,
         max_duration=float("inf"),
         max_transcript_len=float("inf"),
-        normalize_transcripts=False,
+        normalize_transcripts=NormalizeLevel.IDENTITY,
         standardize_wer=True,
         trim_silence=False,
         speed_perturbation=None,
@@ -196,7 +199,7 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
             assert sampler is None, "Sampler not required for WebDataset/Hugging Face"
             self.read = ops.ExternalSource(
                 source=external_reader,
-                num_outputs=2,
+                num_outputs=3,
                 batch=False,
                 parallel=False,
                 cycle="raise",
@@ -223,6 +226,7 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
             )
         else:
             self.speed_perturbation_coeffs = None
+        self.prob_speed_perturbation = dali_yaml_config.prob_speed_perturbation
 
         self.decode = ops.decoders.Audio(
             device="cpu",
@@ -300,7 +304,12 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
         return out
 
     def read_data_in(self, resample_scale):
-        audio, label = self.read()
+        if self.data_source is DataSource.JSON:
+            audio, label = self.read()
+            # This value is not used, but number of outputs is fixed
+            raw_transcript = 42
+        else:
+            audio, label, raw_transcript = self.read()
 
         # 1) deal with labels and their lengths
         if self.data_source is not DataSource.JSON:
@@ -317,15 +326,24 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
         if resample_scale is not None:
             audio = self.resample(audio, scale=resample_scale)
 
-        return audio, label, label_len
+        return audio, label, label_len, raw_transcript
 
     def define_graph(self):
-        if self.train and self.speed_perturbation_coeffs is not None:
-            resample_scale = self.speed_perturbation_coeffs()
+        if (
+            self.train
+            and self.speed_perturbation_coeffs is not None
+            and self.prob_speed_perturbation > 0
+        ):
+            candidate_scale = self.speed_perturbation_coeffs()
+            resample_on = nvidia.dali.fn.random.coin_flip(
+                probability=self.prob_speed_perturbation
+            )
+            # Not using an if statement because DALI would trace only one branch
+            resample_scale = (1.0 - resample_on) * 1.0 + resample_on * candidate_scale
         else:
             resample_scale = None
 
-        audio, label, label_lens = self.read_data_in(resample_scale)
+        audio, label, label_lens, raw_transcript = self.read_data_in(resample_scale)
 
         if self.do_background_noise_aug:
             noise, target_snr, ratio_start = self.noise_source()
@@ -396,10 +414,12 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
 
         audio = self.pad(audio)
 
+        raw_transcript = nvidia.dali.fn.pad(raw_transcript, fill_value=-1)
+
         # When modifying DALI pipeline returns, make sure you update `output_map`
         # in DALIGenericIterator invocation
         # modified to return args on the preprocessing device
-        return audio, audio_len, label, label_lens
+        return audio, audio_len, label, label_lens, raw_transcript
 
 
 def save_audio_factory(pipeline_type, shard_id, output_dir: Path):

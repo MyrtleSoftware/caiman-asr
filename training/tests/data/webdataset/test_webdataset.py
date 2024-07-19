@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from caiman_asr_train.data.webdataset import WebDatasetReader
+from caiman_asr_train.setup.text_normalization import NormalizeConfig, NormalizeLevel
 
 
 @pytest.fixture()
@@ -14,7 +15,7 @@ def webdataset_reader(test_data_dir, tokenizer) -> WebDatasetReader:
         batch_size=2,
         shuffle=True,
         tokenizer=tokenizer,
-        normalize_transcripts=True,
+        normalize_config=NormalizeConfig(NormalizeLevel.LOWERCASE, [], True),
         num_buckets=2,
     )
 
@@ -27,16 +28,18 @@ def webdataset_reader_periods(test_data_dir, tokenizer) -> WebDatasetReader:
         batch_size=2,
         shuffle=True,
         tokenizer=tokenizer,
-        normalize_transcripts=True,
+        normalize_config=NormalizeConfig(NormalizeLevel.LOWERCASE, [], True),
         num_buckets=2,
     )
 
 
 def test_webdataset_returns_samples(webdataset_reader):
     seen_samples = 0
-    for audio, transcript in webdataset_reader:
+    for audio, transcript, raw_transcript in webdataset_reader:
         assert isinstance(transcript, np.ndarray)
         assert transcript.dtype == np.int32
+        assert isinstance(raw_transcript, np.ndarray)
+        assert raw_transcript.dtype == np.int32
         assert isinstance(audio, np.ndarray)
         assert audio.dtype == np.float32
         seen_samples += 1
@@ -48,9 +51,11 @@ def test_webdataset_returns_samples(webdataset_reader):
 
 def test_webdataset_periods_returns_samples(webdataset_reader_periods):
     seen_samples = 0
-    for audio, transcript in webdataset_reader_periods:
+    for audio, transcript, raw_transcript in webdataset_reader_periods:
         assert isinstance(transcript, np.ndarray)
         assert transcript.dtype == np.int32
+        assert isinstance(raw_transcript, np.ndarray)
+        assert raw_transcript.dtype == np.int32
         assert isinstance(audio, np.ndarray)
         assert audio.dtype == np.float32
         seen_samples += 1

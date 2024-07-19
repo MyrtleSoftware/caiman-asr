@@ -18,6 +18,8 @@ def mock_args(test_data_dir, tmp_path):
         "melvars": str(test_data_dir / "melvars.pt"),
         "melalpha": 0.0,
         "output_ckpt": str(test_data_dir / "hardware_ckpt.pt"),
+        "skip_ngram": False,
+        "override_ngram_path": None,
     }
 
     return MagicMock(**args)
@@ -74,6 +76,7 @@ def test_create_hardware_ckpt(
         "melvars",
         "melalpha",
         "sentpiece_model",
+        "ngram",
         "version",
         "rnnt_config",
     ]
@@ -90,12 +93,18 @@ def test_create_hardware_ckpt(
     compare_models(model, model_2)
 
     # Compare contents of loaded hardware checkpoint to newly generated hardware checkpoint
+    assert set(hardcp.keys()) == set(
+        loaded_hardcp.keys()
+    ), "Hardware checkpoint keys do not match keys from loaded hardware checkpoint."
     assert hardcp["epoch"] == loaded_hardcp["epoch"]
     assert hardcp["step"] == loaded_hardcp["step"]
     assert hardcp["best_wer"] == loaded_hardcp["best_wer"]
     assert torch.allclose(hardcp["melmeans"], loaded_hardcp["melmeans"])
     assert torch.allclose(hardcp["melvars"], loaded_hardcp["melvars"])
     assert hardcp["sentpiece_model"] == loaded_hardcp["sentpiece_model"]
+    assert hardcp["ngram"]["binary"] == loaded_hardcp["ngram"]["binary"]
+    assert hardcp["ngram"]["scale_factor"] == loaded_hardcp["ngram"]["scale_factor"]
+    assert isinstance(hardcp["ngram"]["binary"], bytes)
 
     # the window size changes depending on the model size so exclude it from comparison
     hardcp["rnnt_config"]["input_val"]["filterbank_features"].pop("window_size")

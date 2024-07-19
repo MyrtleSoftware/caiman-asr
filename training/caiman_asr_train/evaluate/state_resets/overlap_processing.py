@@ -1,7 +1,8 @@
+import warnings
 from math import ceil
 
 from beartype import beartype
-from beartype.typing import List, Tuple, Union
+from beartype.typing import List, Optional, Tuple, Union
 
 
 @beartype
@@ -10,7 +11,7 @@ def process_time(
     enc_time_reduction: int,
     segment_frames: int,
     overlap_frames: int,
-) -> List[Union[int, float]]:
+) -> List[int]:
     """Adjusts segmented decoder timestamps to simulate continuous decoding.
 
     This function converts segmented timestamps to a continuous timeline by
@@ -22,7 +23,7 @@ def process_time(
     For example:
     >>> process_time([[1, 3, 5, 6, 10], [2, 3, 5, 7, 8], [3, 4]],
     ... enc_time_reduction=2, segment_frames=26, overlap_frames=6)
-    [1, 3, 5, 6, 10, 12.0, 13.0, 15.0, 17.0, 18.0, 23.0, 24.0]
+    [1, 3, 5, 6, 10, 12, 13, 15, 17, 18, 23, 24]
 
     Parameters
     ----------
@@ -38,9 +39,15 @@ def process_time(
     Returns
     -------
     time_shifted
-        List of floats representing the adjusted, continuous timestamps.
+        List of ints representing the adjusted, continuous timestamps.
     """
-    max_time_per_segment = (segment_frames - overlap_frames) / enc_time_reduction
+    if (segment_frames - overlap_frames) % enc_time_reduction != 0:
+        warnings.warn(
+            f"{segment_frames=} - {overlap_frames=} "
+            f"must be divisible by {enc_time_reduction=} "
+            "in order to have accurate integer timestamps"
+        )
+    max_time_per_segment = (segment_frames - overlap_frames) // enc_time_reduction
     time_shifted = timestamps[0]
 
     for itm, lst in enumerate(timestamps[1:]):
@@ -54,10 +61,11 @@ def process_time(
 def get_unique_predictions(
     pred: List[List[int]],
     timestamps: List[List[int]],
+    probs: List[List[float]],
     enc_time_reduction: int,
     overlap_frames: int,
     lookahead: int = 3,
-) -> Tuple[List[List[int]], List[List[int]]]:
+) -> Tuple[List[List[int]], List[List[int]], Optional[List[List[float]]]]:
     """Return transcripts without the overlapping segment.
 
     This function receives the segments of the transcripts and their corresponding
@@ -67,6 +75,9 @@ def get_unique_predictions(
     overlapping region. Furthermore, the first "lookahead" number of
     tokens is scanned, and if any of these tokens are among the last few tokens
     of the previous segment, they are dropped.
+
+    If per-token probabilities are provided, then the corresponding probabilities are
+    also removed.
 
     For example, assume the following example input:
     pred:        [[7, 2, 3, 6, 5], [2, 6, 5, 9, 7]]
@@ -93,6 +104,8 @@ def get_unique_predictions(
         Segmented transcript tokens, grouped per segment.
     timestamps
         Corresponding timestamps for the tokens, grouped per segment.
+    probs
+        Per-token probabilities, grouped per segment.
     enc_time_reduction
         Time stacking factor.
     overlap_frames
@@ -106,6 +119,7 @@ def get_unique_predictions(
     Tuple containing:
     - List of transcript segments with overlap removed.
     - List of adjusted timestamps corresponding to the transcripts.
+    - List of adjusted probabilities corresponding to the transcripts or None
     """
 
     # alter the duration to match the stack time
@@ -113,6 +127,7 @@ def get_unique_predictions(
 
     unique_pred = [pred[0]]
     unique_timestamps = [timestamps[0]]
+    unique_probs = [probs[0]] if probs else None
 
     for seg, (curr_pred, curr_timestamps) in enumerate(
         zip(pred[1:], timestamps[1:], strict=True), start=1
@@ -129,35 +144,49 @@ def get_unique_predictions(
         # calculated number of elements
         unique_pred.append(curr_pred[to_omit:])
         unique_timestamps.append(curr_timestamps[to_omit:])
+        if probs:
+            unique_probs.append(probs[seg][to_omit:])
 
     # after removing overlap, scan for common tokens at the boundary
-    remove_common, adjusted_timestamps = [unique_pred[0]], [unique_timestamps[0]]
+    remove_common, adjusted_timestamps, adjusted_probs = (
+        [unique_pred[0]],
+        [unique_timestamps[0]],
+        [unique_probs[0]] if unique_probs else None,
+    )
 
     for seg in range(1, len(unique_pred)):
         trusted_list = unique_pred[seg - 1][-lookahead:]
 
         # Remove the trusted tokens from the current segment
-        unique_pred_segm, unique_pred_time = manage_boundary_common_tokens(
+        (
+            unique_pred_segm,
+            unique_pred_time,
+            unique_prob_segm,
+        ) = manage_boundary_common_tokens(
             segm=unique_pred[seg],
             t_st=unique_timestamps[seg],
+            probs=unique_probs[seg] if unique_probs else None,
             trusted_list=trusted_list,
             lookahead=lookahead,
         )
         remove_common.append(unique_pred_segm)
         adjusted_timestamps.append(unique_pred_time)
+        if probs:
+            adjusted_probs.append(unique_prob_segm)
 
-    return remove_common, adjusted_timestamps
+    return remove_common, adjusted_timestamps, adjusted_probs
 
 
 @beartype
 def manage_boundary_common_tokens(
     segm: List[int],
     t_st: List[int],
+    probs: Optional[List[float]],
     trusted_list: List[int],
     lookahead: int,
-) -> Tuple[List[int], List[int]]:
+) -> Tuple[List[int], List[int], Optional[List[float]]]:
     """
-    Return segment tokens and timestamps without duplicates from previous segment.
+    Return segment tokens, timestamps, and probs without duplicates from previous segment.
 
     This function cleans the duplicate tokens in the current segment, based on the
     last lookahead number of tokens found in the previous segment.
@@ -170,6 +199,8 @@ def manage_boundary_common_tokens(
         list of tokens in the current segment
     t_st
         timestamps for tokens in the current segment
+    probs
+        probabilities for tokens in the current segment
     trusted_list
         list of up to lookahead number of tokens from previous segment
     lookahead
@@ -179,15 +210,19 @@ def manage_boundary_common_tokens(
         if token in trusted_list:
             # remove token & timestamp from the segment list & timestamp list respectively
             t_st.pop(segm.index(token))
+            if probs:
+                probs.pop(segm.index(token))
             segm.remove(token)
             # get the token index in the trusted list and update it
             index_trusted = trusted_list.index(token)
             trusted_list = trusted_list[index_trusted + 1 :]
-    return segm, t_st
+    return segm, t_st, probs
 
 
 @beartype
-def combine_predictions(pred_list: List[List[int]]) -> List[List[int]]:
+def combine_predictions(
+    pred_list: List[List[Union[float, int]]]
+) -> List[List[Union[float, int]]]:
     """Flatten a list of lists.
 
     When state resets during inference is used, the

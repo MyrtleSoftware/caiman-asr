@@ -9,8 +9,14 @@ from caiman_asr_train.args.train import train_arg_parser, verify_train_args
 @beartype
 def stats_generation_parse_args() -> Namespace:
     parser = train_arg_parser()
+    parser.add_argument(
+        "--dump_mel_stats_batch_size",
+        type=int,
+        default=128,
+        help="Batch size for dumping mel stats. Will override the global batch size",
+    )
     args = parser.parse_args()
-    args = update_args_stats_generation(args)
+    args = update_args_stats_generation(args, args.dump_mel_stats_batch_size)
 
     verify_train_args(args)
     check_shared_args(args)
@@ -18,7 +24,7 @@ def stats_generation_parse_args() -> Namespace:
     return args
 
 
-def update_args_stats_generation(args: Namespace, batch_size: int = 128) -> Namespace:
+def update_args_stats_generation(args: Namespace, batch_size) -> Namespace:
     """
     This function overrides training arg defaults for stats generation.
     """

@@ -1,4 +1,5 @@
 # CAIMAN-ASR demo
+
 Release name: `caiman-asr-demo-<version>.run`
 
 This software bundle is used for demonstrating the server.
@@ -15,14 +16,16 @@ the bitstream will already be flashed.
 See the [Programming the card](./programming_the_fpga.md) section for instructions on flashing the FPGA.
 
 1. Load the CAIMAN-ASR Demo Server Docker image:
-    ```
-    docker load -i docker-asr-demo.tgz
-    ```
+
+   ```
+   docker load -i docker-asr-demo.tgz
+   ```
 
 2. Start the server with:
-    ```
-    ./start_server <license directory> [card index]...
-    ```
+
+   ```
+   ./start_server <license directory> [card index]...
+   ```
 
    where `<license directory>` is the path to the directory containing your Myrtle.ai licence
    and `[card index]` is an optional integer list argument specifying which card indices to use, e.g. `0 1 2 3`.

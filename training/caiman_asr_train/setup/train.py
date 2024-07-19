@@ -19,15 +19,8 @@ from caiman_asr_train.log.tee import start_logging_stdout_and_stderr
 from caiman_asr_train.rnnt import config
 from caiman_asr_train.rnnt.model import RNNT
 from caiman_asr_train.rnnt.sub_models import RNNTSubModels
-from caiman_asr_train.setup.base import (
-    CUDA,
-    TRAIN,
-    VAL,
-    OptimizerWrapper,
-    PipelineType,
-    Setup,
-    TrainingOnly,
-)
+from caiman_asr_train.setup.base import Setup, TrainingOnly
+from caiman_asr_train.setup.core import CUDA, TRAIN, VAL, PipelineType
 from caiman_asr_train.train_utils.batch_splitting import train_step_batch_split
 from caiman_asr_train.train_utils.build_optimizer import build_optimizer
 from caiman_asr_train.train_utils.core import train_step
@@ -37,6 +30,7 @@ from caiman_asr_train.train_utils.grad_noise_scheduler import (
     switch_on_grad_noise_scheduler,
 )
 from caiman_asr_train.train_utils.lr import lr_policy
+from caiman_asr_train.train_utils.optimizer import OptimizerWrapper
 from caiman_asr_train.utils.num_weights import num_weights
 from caiman_asr_train.utils.seed import set_seed
 
@@ -57,7 +51,8 @@ class TrainSetup(Setup):
             rnnt_config["weights_init_scale"] = args.weights_init_scale
         if args.hidden_hidden_bias_scale is not None:
             rnnt_config["hidden_hidden_bias_scale"] = args.hidden_hidden_bias_scale
-        model = RNNT(n_classes=tokenizer.num_labels + 1, **rnnt_config)
+        model_cls = self.get_model_cls(args)
+        model = model_cls(n_classes=tokenizer.num_labels + 1, **rnnt_config)
         model.cuda()
 
         check_schema_training(model.state_dict(), args.skip_state_dict_check)
@@ -113,6 +108,11 @@ class TrainSetup(Setup):
                 args.ckpt, model, ema_model, optimizer, meta
             )
 
+        assert meta["step"] < args.training_steps, (
+            f"Model already trained for steps={meta['step']} and "
+            f"training_steps={args.training_steps}. No training to do. Exiting."
+        )
+
         # fine-tuning involves taking a trained model and re-training it after some
         # change in model / data
         # when fine-tuning, a specified checkpoint is expected
@@ -147,6 +147,7 @@ class TrainSetup(Setup):
             optimizer_wrapper=optimizer_wrapper,
             train_step_fn=self.get_train_step_fn(args),
         )
+
         return model, ema_model, training_only
 
     def build_optimizer(self, args: Namespace, model: RNNT) -> FusedLAMB:

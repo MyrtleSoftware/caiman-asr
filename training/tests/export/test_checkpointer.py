@@ -1,8 +1,11 @@
 import collections
 import os
+import pathlib
 
 import pytest
 import torch
+
+from caiman_asr_train.export.checkpointer import Checkpointer
 
 
 def compare_models(model1, model2, equal=True, epsilon=1e-6):
@@ -125,3 +128,27 @@ def test_checkpointer_structure(
     assert isinstance(state["optimizer"], dict)
     assert isinstance(state["tokenizer_kw"], dict)
     assert isinstance(state["logmel_norm_weight"], float)
+
+
+def test_tracked(
+    mini_model_factory,
+    optimizer_factory,
+):
+    tmp_3000 = "/tmp/rnnt_step3000_checkpoint.pt"
+    tmp_4000 = "/tmp/rnnt_step4000_checkpoint.pt"
+    pathlib.Path(tmp_3000).touch()
+    pathlib.Path(tmp_4000).touch()
+    cp = Checkpointer(save_dir="/tmp", model_name="rnnt")
+    assert len(cp.tracked) == 2
+    assert cp.tracked == {
+        3000: "/tmp/rnnt_step3000_checkpoint.pt",
+        4000: "/tmp/rnnt_step4000_checkpoint.pt",
+    }
+    #
+    model, _ = mini_model_factory(seed=1)
+    optimizer = optimizer_factory(model)
+    cp.save(model, None, optimizer, 5, 5000, 10, {}, 1, False)
+    assert len(cp.tracked) == 3
+    os.remove(tmp_3000)
+    os.remove(tmp_4000)
+    os.remove("/tmp/rnnt_step5000_checkpoint.pt")

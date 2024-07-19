@@ -33,7 +33,7 @@ from caiman_asr_train.log.profiling import (
     set_up_profiling,
 )
 from caiman_asr_train.log.tb_dllogger import flush_log, log
-from caiman_asr_train.setup.base import TRAIN, VAL
+from caiman_asr_train.setup.core import TRAIN, VAL
 from caiman_asr_train.setup.train import TrainSetup
 from caiman_asr_train.train_utils.core import calculate_epoch, log_end_of_epoch
 from caiman_asr_train.train_utils.distributed import print_once
@@ -116,10 +116,6 @@ def main(args, train_objects):
         # update epoch if next step is a new epoch
         epoch = calculate_epoch(step, steps_per_epoch)
 
-    assert (
-        initial_step < args.training_steps
-    ), f"{initial_step=} and {args.training_steps=}. No training to do. Exiting."
-
     train_standardize_wer = train_objects.data_objects[TRAIN].dataset_kw[
         "standardize_wer"
     ]
@@ -200,7 +196,7 @@ def main(args, train_objects):
                     noise_schedule.adjust_snrs(step)
                 mel_feat_norm.step(step)
 
-            audio, audio_lens, txt, txt_lens = batch
+            audio, audio_lens, txt, txt_lens, _ = batch
 
             # audio is (batch, meldim, max_len)
             # audio_lens is (batch,)
@@ -270,9 +266,7 @@ def main(args, train_objects):
                         args.prediction_frequency is None
                         or step % args.prediction_frequency == 0
                     ):
-                        preds, _ = decoder.decode(
-                            model, feats, feat_lens, args.max_inputs_per_batch
-                        )
+                        preds, _, _ = decoder.decode(feats, feat_lens)
                         wer, pred_utt, ref = calculate_wer(
                             preds,
                             txt,
@@ -348,7 +342,7 @@ def main(args, train_objects):
                         cfg=cfg,
                         args=args,
                         standardize_wer=val_standardize_wer,
-                        calculate_loss=True,
+                        calculate_loss=not args.skip_val_loss,
                         using_cpu=False,
                     )["wer"]
 

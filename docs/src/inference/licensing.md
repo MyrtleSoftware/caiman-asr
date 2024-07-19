@@ -1,4 +1,5 @@
 # Licensing
+
 Licenses are required for each FPGA, and each license is tied to a particular FPGA's unique identifier.
 Licenses may also have a maximum version number and release date that they support.
 Additional or replacement licenses can be purchased by contacting Myrtle.ai or Achronix.

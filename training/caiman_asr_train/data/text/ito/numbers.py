@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """ from https://github.com/keithito/tacotron
-Modifed to add support for time and slight tweaks to _expand_number
+Modified to add support for time and slight tweaks to _expand_number
 """
 
 import re

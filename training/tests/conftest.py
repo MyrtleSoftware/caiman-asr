@@ -12,8 +12,9 @@ from caiman_asr_train.data.tokenizer import Tokenizer
 from caiman_asr_train.export.checkpointer import Checkpointer
 from caiman_asr_train.rnnt import config
 from caiman_asr_train.rnnt.model import RNNT
-from caiman_asr_train.test_utils.dataload_args import gen_dataload_args
 from caiman_asr_train.train_utils.build_optimizer import build_fused_lamb
+from caiman_asr_train.unittesting.dataload_args import gen_dataload_args
+from caiman_asr_train.unittesting.tokenizer import load_tokenizer_kw
 from caiman_asr_train.utils.seed import set_seed
 
 
@@ -33,11 +34,7 @@ def config_fp() -> str:
 
 @pytest.fixture()
 def tokenizer_kw(config_fp, test_data_dir):
-    cfg = config.load(config_fp)
-    tokenizer_kw = config.tokenizer(cfg)
-    # replace the spm with the one in the test data dir
-    tokenizer_kw["sentpiece_model"] = str(test_data_dir / "librispeech29.model")
-    return tokenizer_kw
+    return load_tokenizer_kw(config_fp, test_data_dir)
 
 
 @pytest.fixture()
@@ -56,7 +53,7 @@ def saved_tokenizer_num_labels(tokenizer) -> int:
 
 
 @pytest.fixture()
-def mini_config_fp_factory(tmp_path, tokenizer_kw, mel_stats_dir):
+def mini_config_fp_factory(tmp_path, tokenizer_kw, mel_stats_dir, ngram_subdir):
     """
     Load the config file and replace the relevant fields to make it a 'mini' config.
 
@@ -81,6 +78,8 @@ def mini_config_fp_factory(tmp_path, tokenizer_kw, mel_stats_dir):
 
         cfg["input_val"]["filterbank_features"]["stats_path"] = mel_stats_dir
         cfg["input_train"]["filterbank_features"]["stats_path"] = mel_stats_dir
+
+        cfg["ngram"]["ngram_path"] = ngram_subdir
 
         # save the config to a temporary file
         named_tmp_file = str(tmp_path / "mini_config.yaml")
@@ -149,3 +148,13 @@ def melmeans(test_data_dir) -> torch.Tensor:
 @pytest.fixture(scope="session")
 def melvars(test_data_dir) -> torch.Tensor:
     return torch.load(test_data_dir / "melvars.pt")
+
+
+@pytest.fixture(scope="session")
+def ngram_subdir(test_data_dir):
+    return str(test_data_dir / "ngram")
+
+
+@pytest.fixture(scope="session")
+def ngram_path(test_data_dir) -> str:
+    return str(test_data_dir / "ngram/ngram.binary")

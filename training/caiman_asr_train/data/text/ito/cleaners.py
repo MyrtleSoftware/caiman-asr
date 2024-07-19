@@ -33,7 +33,7 @@ import re
 
 from text_unidecode import unidecode
 
-from .numbers import normalize_numbers
+from caiman_asr_train.data.text.ito.numbers import normalize_numbers
 
 # Regular expression matching whitespace:
 _whitespace_re = re.compile(r"\s+")
@@ -86,8 +86,7 @@ def convert_to_ascii(text):
     return unidecode(text)
 
 
-def remove_punctuation(text, table):
-    text = text.translate(table)
+def expand_punctuation(text):
     text = re.sub(r"&", " and ", text)
     text = re.sub(r"\+", " plus ", text)
     text = re.sub(r"%", " percent ", text)
@@ -95,23 +94,14 @@ def remove_punctuation(text, table):
     return text
 
 
-def remove_tags(text):
-    """
-    Remove tags or codes inside angled brackets
-    >>> remove_tags('testing <unk> <inaudible> one <foreign_word> three')
-    'testing one three'
-    """
-    return re.sub("<[a-z_]+> ", "", text)
-
-
 def english_cleaners(text, table=None):
     """Pipeline for English text, including number and abbreviation expansion."""
     text = convert_to_ascii(text)
     text = lowercase(text)
-    text = remove_tags(text)
     text = expand_numbers(text)
     text = expand_abbreviations(text)
     if table is not None:
-        text = remove_punctuation(text, table)
+        text = text.translate(table)
+    text = expand_punctuation(text)
     text = collapse_whitespace(text)
     return text

@@ -11,18 +11,18 @@ This page describes data augmentations that may help with these problems:
 
 ### Page contents
 
-* [Background Noise](#background_noise) for training with background noise
-* [Babble Noise](#babble_noise) for training with babble noise
-* [Narrowband](#narrowband) for training with narrowband conversion
-* [Inspecting Augmentations](#inspect_audio) to listen to the effects of augmentations
-* [Random State Passing](#random_state_passing) for training on long sequences
-* [Tokens Sampling](#tokens_sampling) for training with random tokens sampling
-* [Gradient Noise](#gradient_noise) for training with gradient noise
-
+- [Background Noise](#background_noise) for training with background noise
+- [Babble Noise](#babble_noise) for training with babble noise
+- [Narrowband](#narrowband) for training with narrowband conversion
+- [Inspecting Augmentations](#inspect_audio) to listen to the effects of augmentations
+- [Random State Passing](#random_state_passing) for training on long sequences
+- [Tokens Sampling](#tokens_sampling) for training with random tokens sampling
+- [Gradient Noise](#gradient_noise) for training with gradient noise
 
 ## Example Command
 
 The following command will train the base model on the LibriSpeech dataset on an `8 x A100 (80GB)` system with these settings:
+
 - applying background noise to 25% of samples
 - applying babble noise to 10% of samples
 - downsampling 50% of samples to 8 kHz
@@ -30,19 +30,17 @@ The following command will train the base model on the LibriSpeech dataset on an
   - initial values 30–60dB
   - noise delay of 4896 steps
   - noise ramp of 4896 steps
+
 ```bash
 ./scripts/train.sh --model_config=configs/base-8703sp_run.yaml --num_gpus=8 \
     --grad_accumulation_batches=1 --batch_split_factor=8 \
     --training_steps=42000 --prob_background_noise=0.25 \
     --prob_babble_noise=0.1 --prob_train_narrowband=0.5 \
-    --val_manifests=/datasets/LibriSpeech/librispeech-dev-other-wav.json
+    --val_manifests=/datasets/LibriSpeech/librispeech-dev-other.json
 ```
-
 
 These augmentations are applied independently,
 so some samples will have all augmentation types applied.
-
-
 
 ## Background noise training <a name="background_noise"></a>
 
@@ -79,7 +77,6 @@ The training script will use all the audios in the noise dataset's `train` split
 If you instead wish to train with local noise files, make sure your noise is organized in the Hugging Face [AudioFolder](https://huggingface.co/docs/datasets/en/audio_dataset#audiofolder) format.
 Then set `--noise_dataset` to be the path to the directory containing your noise data (i.e. the parent of the `data` directory), and pass `--use_noise_audio_folder`.
 
-
 ## Babble noise training <a name="babble_noise"></a>
 
 Babble noise is set via the `--prob_babble_noise` argument.
@@ -94,7 +91,6 @@ arguments are shared between background noise and babble noise.
 
 The only difference is that the final range of babble noise is 15–30dB.
 
-
 ## Narrowband training <a name="narrowband"></a>
 
 For some target domains, data is recorded at (or compressed to) 8 kHz (narrowband). For models trained with audio >8 kHz (16 kHz is the default) the audio will be upsampled to the higher sample rate before inference. This creates a mismatch between training and inference, since the model will partly rely on information from the higher frequency bands.
@@ -103,11 +99,9 @@ This can be partly mitigated by resampling a part of the training data to narrow
 
 To apply this downsampling on-the-fly to a random half of batches, set `--prob_train_narrowband=0.5` in your training command.
 
-
 ## Inspecting augmentations <a name="inspect_audio"></a>
 
 To listen to the effects of augmentations, pass `--inspect_audio`. All audios will then be saved to `/results/augmented_audios` after augmentations have been applied. This is intended for debugging only—DALI is slower with this option, and a full epoch of saved audios will use as much disk space as the training dataset.
-
 
 ## Random State Passing <a name="random_state_passing"></a>
 
@@ -120,9 +114,9 @@ On in-house validation data, this reduces WERs on long (~1 hour) utterances by r
 
 Experiments indicated:
 
-* It was better to apply RSP 1% of the time, instead of 50% as in the paper.
-* Applying RSP from the beginning of training raised WERs, so RSP is only applied after `--rsp_delay` steps
-  * `--rsp_delay` can be set on the command line but, by default, is set to the step at which the learning rate has decayed to 1/8 of its initial value (i.e. after x3 `half_life_steps` have elapsed). To see the benefits from RSP, it is recommended that >=5k updates are done after the RSP is switched on, so this heuristic will not be appropriate if you intend to cancel training much sooner than this. See [docstring of `set_rsp_delay_default` function](https://github.com/MyrtleSoftware/caiman-asr/blob/main/training/caiman_asr_train/train_utils/rsp.py) for more details.
+- It was better to apply RSP 1% of the time, instead of 50% as in the paper.
+- Applying RSP from the beginning of training raised WERs, so RSP is only applied after `--rsp_delay` steps
+  - `--rsp_delay` can be set on the command line but, by default, is set to the step at which the learning rate has decayed to 1/8 of its initial value (i.e. after x3 `half_life_steps` have elapsed). To see the benefits from RSP, it is recommended that >=5k updates are done after the RSP is switched on, so this heuristic will not be appropriate if you intend to cancel training much sooner than this. See [docstring of `set_rsp_delay_default` function](https://github.com/MyrtleSoftware/caiman-asr/blob/main/training/caiman_asr_train/train_utils/rsp.py) for more details.
 
 RSP is on by default, and can be modified via the `--rsp_seq_len_freq` argument, e.g. `--rsp_seq_len_freq 99 0 1`.
 This parameter controls RSP's frequency and amount; see the `--rsp_seq_len_freq` docstring in [`args/train.py`](https://github.com/MyrtleSoftware/caiman-asr/blob/main/training/caiman_asr_train/args/train.py).
@@ -148,16 +142,16 @@ that have lower score.
 
 Utilising the random tokens sampling is a form of data augmentation and it is applied on a percentage of the
 training data, and not on the validation data.
-This can be done with setting the sampling parameter into a real value in the range [0.0, 1.0]
+This can be done with setting the sampling parameter into a real value in the range \[0.0, 1.0\]
 in the configuration file, e.g.:
 
 ```yaml
 sampling: 0.05
 ```
+
 A value of 0.05 (default) means that 5% of the training data will be tokenized with random tokens sampling.
 A value of 0.0 means no use of tokens sampling, whereas a value of 1.0 applies random
 tokens sampling in the whole text.
-
 
 ## Gradient Noise <a name="gradient_noise"></a>
 
@@ -167,11 +161,11 @@ the noise level is sampled from a Gaussian distribution with \\(mean=0.0\\) and 
 the following formula:
 
 $$
-\sigma(t)=\frac{noise}{{(1 + t - t_{start})}^{decay}},
+\\sigma(t)=\\frac{noise}{{(1 + t - t\_{start})}^{decay}},
 $$
 
 \\(noise\\) is the initial noise level, \\(decay=0.55\\) is the decay constant, \\(t\\) is the step,
-and \\(t_{start}\\) is the step when the gradient noise is switched on.
+and \\(t\_{start}\\) is the step when the gradient noise is switched on.
 
 Training with gradient noise is switched off by default. It can be switched on by setting the noise level
 to be a positive value in the config file.

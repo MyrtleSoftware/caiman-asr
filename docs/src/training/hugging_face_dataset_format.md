@@ -1,7 +1,11 @@
-# Loading a dataset from the Hugging Face Hub
+# Hugging Face Dataset Format
+
+## Validating directly on a dataset from the Hugging Face Hub
 
 ```admonish
-This format is supported in `val.sh` but not in `train.sh`.
+Validating on a Hugging Face dataset is supported in `val.sh` and `train.sh`.
+To train on a Hugging Face dataset, you will need to convert it to JSON format,
+as described in the next section.
 ```
 
 This command will run validation on distil-whisper's [version](https://huggingface.co/datasets/distil-whisper/librispeech_asr) of LibriSpeech dev-other:
@@ -31,3 +35,17 @@ For some datasets, you may need to set more options. The following command will 
 ```
 
 See the [docstrings](https://github.com/MyrtleSoftware/caiman-asr/blob/main/training/caiman_asr_train/args/hugging_face.py) for more information.
+
+## Converting a Hugging Face dataset to JSON format
+
+The following command will download the `train.clean.100` split of
+[distil-whisper/librispeech_asr](https://huggingface.co/datasets/distil-whisper/librispeech_asr)
+and convert it to JSON format,
+putting the result in `/datasets/LibriSpeechHuggingFace`:
+
+```bash
+python caiman_asr_train/data/make_datasets/hugging_face_to_json.py \
+  --hugging_face_dataset distil-whisper/librispeech_asr \
+  --data_dir /datasets/LibriSpeechHuggingFace \
+  --hugging_face_split train.clean.100
+```

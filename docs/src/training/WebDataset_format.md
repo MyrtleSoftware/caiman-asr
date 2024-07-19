@@ -39,6 +39,7 @@ This script accepts the following arguments:
 - `MAX_DURATION_SECS`: The maximum duration in seconds that you want to train on. Defaults to `16.7` as per LibriSpeech.
 - `CONFIG_NAME`: Model name to use for the config [from this table](model_yaml_configurations.md). Defaults to `base-8703sp`.
 - `SPM_SIZE`: Sentencepiece model size. Must match `CONFIG_NAME`. Defaults to `8703`.
+- `NGRAM_ORDER`: Order of n-gram language model. Defaults to 4.
 
 ## Training and validation
 

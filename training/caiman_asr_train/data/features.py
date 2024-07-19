@@ -34,7 +34,7 @@ class BaseFeatures(nn.Module):
 class SpecAugment(BaseFeatures):
     """Regularize by masking entire time steps/frequency bands.
 
-    Implementes SpecAugment (https://arxiv.org/abs/1904.08779)
+    Implements SpecAugment (https://arxiv.org/abs/1904.08779)
     with adaptive masking (https://arxiv.org/abs/1912.05533), without time
     warping.
 
@@ -113,30 +113,6 @@ class SpecAugment(BaseFeatures):
             noise = 0
 
         return x.masked_fill(mask, 0) + noise, x_lens
-
-
-@torch.jit.script
-def normalize_batch(x, x_lens, normalize_type: str):
-    if normalize_type == "per_feature":
-        mean = x.new_zeros(x.size(0), x.size(1))
-        std = x.new_zeros(x.size(0), x.size(1))
-
-        for i in range(x.size(0)):
-            mean[i, :] = x[i, :, : x_lens[i]].mean(dim=1)
-            std[i, :] = x[i, :, : x_lens[i]].std(dim=1)
-        # make sure std is not zero
-        return (x - mean.unsqueeze(2)) / (std.unsqueeze(2) + 1e-5)
-
-    elif normalize_type == "all_features":
-        mean = x.new_zeros(x.size(0))
-        std = x.new_zeros(x.size(0))
-        for i in range(x.size(0)):
-            mean[i] = x[i, :, : x_lens[i]].mean()
-            std[i] = x[i, :, : x_lens[i]].std()
-        # make sure x_std is not zero
-        return (x - mean.view(-1, 1, 1)) / (std.view(-1, 1, 1) + 1e-5)
-    else:
-        return x
 
 
 def stack_subsample_frames(x, x_lens, stacking=1, subsampling=1):

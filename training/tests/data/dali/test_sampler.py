@@ -32,7 +32,7 @@ def test_process_output_files(gbs):
         "f2": {"duration": 100, "label": "l2"},
         "f3": {"duration": 2, "label": "l3"},
         "f4": {"duration": 10, "label": "l4"},
-        "f5": {"duration": 3, "label": "l4"},
+        "f5": {"duration": 3, "label": "l5"},
     }
     shuffled_list = sampler.process_output_files(output_files)
     num_epochs = math.ceil(gbs * training_steps / len(output_files))

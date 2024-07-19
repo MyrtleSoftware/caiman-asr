@@ -6,6 +6,7 @@ import sentencepiece as spm
 
 from caiman_asr_train.data.webdataset import WebDatasetReader
 from caiman_asr_train.rnnt import config
+from caiman_asr_train.setup.text_normalization import normalize_config_from_full_yaml
 
 
 def parse_args() -> Namespace:
@@ -41,11 +42,11 @@ def create_webdataset_spm(args):
         shuffle=False,
         file_root=args.dataset_dir,
         tar_files=args.train_tar_files,
-        normalize_transcripts=True,
+        normalize_config=normalize_config_from_full_yaml(cfg),
         skip_audio=True,
     )
     with NamedTemporaryFile("w", suffix=".txt") as f:
-        for _, transcript in wds:
+        for _, transcript, _ in wds:
             f.write(transcript + "\n")
 
         spm.SentencePieceTrainer.train(

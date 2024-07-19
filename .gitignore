@@ -17,6 +17,7 @@ compile_commands.json
 .vs/
 .vscode/
 .idea/
+.mypy_cache/
 
 # testing
 .hypothesis

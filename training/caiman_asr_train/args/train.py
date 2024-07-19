@@ -5,7 +5,7 @@ from argparse import Namespace
 
 from caiman_asr_train.args.noise_augmentation import add_noise_augmentation_args
 from caiman_asr_train.args.shared import add_shared_args
-from caiman_asr_train.evaluate.state_resets import check_state_reset_args
+from caiman_asr_train.data.make_datasets.librispeech import LIBRISPEECH_TRAIN960H
 
 
 def train_arg_parser() -> argparse.ArgumentParser:
@@ -202,11 +202,7 @@ def train_arg_parser() -> argparse.ArgumentParser:
         "--train_manifests",
         type=str,
         required=False,
-        default=[
-            "/datasets/LibriSpeech/librispeech-train-clean-100-wav.json",
-            "/datasets/LibriSpeech/librispeech-train-clean-360-wav.json",
-            "/datasets/LibriSpeech/librispeech-train-other-500-wav.json",
-        ],
+        default=LIBRISPEECH_TRAIN960H,
         nargs="+",
         help="Paths of the training dataset manifest file"
         "Ignored if --read_from_tar=True",
@@ -215,7 +211,7 @@ def train_arg_parser() -> argparse.ArgumentParser:
         "--val_manifests",
         type=str,
         required=False,
-        default=["/datasets/LibriSpeech/librispeech-dev-clean-wav.json"],
+        default=["/datasets/LibriSpeech/librispeech-dev-clean.json"],
         nargs="+",
         help="Paths of the evaluation datasets manifest files"
         "Ignored if --read_from_tar=True",
@@ -320,17 +316,17 @@ def train_arg_parser() -> argparse.ArgumentParser:
         "server and is intended for experimentation only.",
     )
     io.add_argument(
-        "--profiler",
-        action="store_true",
-        help="""Enable profiling with yappi and save top/nvidia-smi logs.
-        This may slow down training""",
-    )
-    io.add_argument(
         "--prob_train_narrowband",
         type=float,
         default=0.0,
         help="Probability that a batch of training audio gets downsampled to 8kHz"
         " and then upsampled to original sample rate",
+    )
+    io.add_argument(
+        "--skip_val_loss",
+        action="store_true",
+        help="""Only calculate WER, not loss, on validation set.
+        Saves VRAM when validation set contains long utterances""",
     )
     add_noise_augmentation_args(parser)
     add_shared_args(parser)
@@ -338,7 +334,6 @@ def train_arg_parser() -> argparse.ArgumentParser:
 
 
 def verify_train_args(args: Namespace) -> Namespace:
-    check_state_reset_args(args.sr_segment, args.sr_overlap, args.val_batch_size)
     # check data path args
     if not args.read_from_tar:
         assert (

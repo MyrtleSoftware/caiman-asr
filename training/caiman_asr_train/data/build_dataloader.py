@@ -28,7 +28,6 @@ class DataLoaderArgs:
 
     grad_accumulation_batches: int
     json_names: List[str]
-    shuffle: bool
     num_buckets: Optional[int]
     prob_narrowband: float
     noise_augmentation_args: NoiseAugmentationArgs
@@ -46,7 +45,6 @@ class DataLoaderArgs:
             grad_accumulation_batches = args.grad_accumulation_batches
             json_names = args.train_manifests
             tar_files = args.train_tar_files
-            shuffle = True
             num_buckets = args.num_buckets
             prob_narrowband = args.prob_train_narrowband
             noise_augmentation_args = NoiseAugmentationArgs(
@@ -62,7 +60,6 @@ class DataLoaderArgs:
             grad_accumulation_batches = 1
             json_names = args.val_manifests
             tar_files = args.val_tar_files
-            shuffle = False
             num_buckets = 1
             prob_narrowband = args.prob_val_narrowband
             noise_augmentation_args = NoiseAugmentationArgs(
@@ -72,22 +69,18 @@ class DataLoaderArgs:
                 prob_background_noise=0.0,
                 prob_babble_noise=0.0,
             )
-            if getattr(args, "use_hugging_face", False):
-                hugging_face_args = build_hugging_face_args(
-                    use_hugging_face=args.use_hugging_face,
-                    dataset=args.hugging_face_val_dataset,
-                    split=args.hugging_face_val_split,
-                    transcript_key=args.hugging_face_val_transcript_key,
-                    config=args.hugging_face_val_config,
-                )
-            else:
-                hugging_face_args = None
+            hugging_face_args = build_hugging_face_args(
+                use_hugging_face=args.use_hugging_face,
+                dataset=args.hugging_face_val_dataset,
+                split=args.hugging_face_val_split,
+                transcript_key=args.hugging_face_val_transcript_key,
+                config=args.hugging_face_val_config,
+            )
 
         return cls(
             noise_augmentation_args=noise_augmentation_args,
             grad_accumulation_batches=grad_accumulation_batches,
             json_names=json_names,
-            shuffle=shuffle,
             num_buckets=num_buckets,
             tar_files=tar_files,
             prob_narrowband=prob_narrowband,
@@ -122,10 +115,12 @@ def build_dali_loader(
         no_logging: bool. If True, then silence the DALI debugging log.
         mel_feat_normalizer: class to normalize mel features.
     """
+    dataload_args = DataLoaderArgs.from_namespace(args, pipeline_type)
+
     data_source = decide_on_loader(
         val_from_dir=args.val_from_dir,
         read_from_tar=args.read_from_tar,
-        use_hugging_face=getattr(args, "use_hugging_face", False),
+        use_hugging_face=dataload_args.hugging_face_args is not None,
     )
 
     if data_source is not DataSource.JSON:
@@ -135,7 +130,6 @@ def build_dali_loader(
     else:
         sampler = train_sampler
 
-    dataload_args = DataLoaderArgs.from_namespace(args, pipeline_type)
     return DaliDataLoader(
         gpu_id=args.local_rank
         if not cpu

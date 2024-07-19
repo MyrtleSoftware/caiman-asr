@@ -33,6 +33,7 @@ done
 : ${COMMAND:="bash"}
 : ${TTY=true}
 : ${HF_CACHE:="$HOME/.cache/huggingface"}
+: ${PORTS:=""}
 
 DOCKER_ARGS=""
 
@@ -57,6 +58,10 @@ if [ -n "${SNAKEVIZ_PORT+x}" ]; then
     DOCKER_ARGS+="-e SNAKEVIZ_PORT=$SNAKEVIZ_PORT "
   # Expose this port so snakeviz can use it
     DOCKER_ARGS+="-p $SNAKEVIZ_PORT:$SNAKEVIZ_PORT "
+fi
+
+if [ -n "${PORTS}" ]; then
+    DOCKER_ARGS+="-p $PORTS "
 fi
 
 docker run ${DOCKER_ARGS} ${DOCKER_NAME} sh -c "/workspace/training/scripts/docker/settimezone.sh && $COMMAND"

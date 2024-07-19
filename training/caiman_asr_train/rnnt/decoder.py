@@ -21,6 +21,7 @@ import torch.nn.functional as F
 from beartype import beartype
 from beartype.typing import List, Tuple
 
+from caiman_asr_train.rnnt.fuzzy_logits import get_topk_logits
 from caiman_asr_train.rnnt.model import label_collate
 from caiman_asr_train.rnnt.sub_models import RNNTSubModels
 from caiman_asr_train.rnnt.unbatch_encoder import encode_lower_batch_size
@@ -29,31 +30,37 @@ from caiman_asr_train.rnnt.unbatch_encoder import encode_lower_batch_size
 class RNNTDecoder(ABC):
     def __init__(
         self,
+        model,
         blank_idx,
         max_symbol_per_sample,
         max_symbols_per_step,
-        lm_info,
-        temperature=1.0,
+        max_inputs_per_batch: int = int(1e7),
+        temperature=1.4,
     ):
+        model = model.rnnt if isinstance(model, RNNTSubModels) else model
+        model = getattr(model, "module", model)
+        self.model = model
         self.blank_idx = blank_idx
         assert max_symbols_per_step is None or max_symbols_per_step > 0
         self.max_symbols = max_symbols_per_step
         assert max_symbol_per_sample is None or max_symbol_per_sample > 0
         self.max_symbol_per_sample = max_symbol_per_sample
+        self.max_inputs_per_batch = max_inputs_per_batch
         self._SOS = -1  # start of sequence token
-        self.lm_info = lm_info
         self.temperature = temperature
 
-    def _pred_step(self, model, label, hidden, device):
+    def _pred_step(self, label, hidden, device):
         if label == self._SOS:
-            return model.predict(None, hidden, add_sos=False)
+            return self.model.predict(None, hidden, add_sos=False)
 
         label = label_collate([[label]]).to(device)
-        return model.predict(label, hidden, add_sos=False)
+        return self.model.predict(label, hidden, add_sos=False)
 
-    def _joint_step(self, model, enc, pred, log_normalize=False):
-        logits = model.joint(enc, pred)[:, 0, 0, :]
+    def _joint_step(self, enc, pred, log_normalize=False, fuzzy=False):
+        logits = self.model.joint(enc, pred)[:, 0, 0, :]
 
+        if fuzzy:
+            logits = get_topk_logits(logits)
         if log_normalize:
             logprobs = F.log_softmax(
                 logits / self.temperature, dim=len(logits.shape) - 1
@@ -64,44 +71,48 @@ class RNNTDecoder(ABC):
 
     @beartype
     def decode(
-        self, model, feats, feat_lens, max_inputs_per_batch: int
-    ) -> Tuple[List[List[int]], List[List[int]]]:
+        self,
+        feats,
+        feat_lens,
+    ) -> Tuple[List[List[int]], List[List[int]], List[List[float]]]:
         """
-        Returns a list of tokenized sentences and list of timestamps given an input batch.
-
-        If timestamps are not returned output_timestamps is empty.
+        Returns a list of tokenized sentences, a list of timestamps,
+        and a list of token probabilities given an input batch.
 
         Args:
-            model     : RNN-T model to use for decoding
             feats     : a tensor of logmels, shape (seq_len, batch, feat_dim)
             feat_lens : list of int representing the length of each sequence of
                 features, shape (batch,)
 
         Returns:
             list of lists of decoded tokens, one sequence for each member of the batch
-            list of lists of per-token timestamps or an empty list
+            list of lists of per-token timestamps
+            list of lists of per-token probabilities or an empty list
         """
-        model = model.rnnt if isinstance(model, RNNTSubModels) else model
-        model = getattr(model, "module", model)
         with torch.no_grad():
             # encs     is shape (batch, time, enc_dim)
             # enc_lens is shape (batch,)
             encs, enc_lens = encode_lower_batch_size(
-                model, feats, feat_lens, max_inputs_per_batch
+                self.model, feats, feat_lens, self.max_inputs_per_batch
             )
 
             output = []
             output_timestamps = []
+            output_probs = []
             for batch_idx in range(encs.size(0)):
                 # this_enc is shape (time, 1, enc_dim)
                 this_enc = encs[batch_idx, :, :].unsqueeze(1)
                 this_len = enc_lens[batch_idx]
-                sentence, timestamps = self._inner_decode(model, this_enc, this_len)
+                sentence, timestamps, label_probs = self._inner_decode(
+                    this_enc, this_len
+                )
                 output.append(sentence)
                 if timestamps is not None:
                     output_timestamps.append(timestamps)
-        return output, output_timestamps
+                if label_probs is not None:
+                    output_probs.append(label_probs)
+        return output, output_timestamps, output_probs
 
     @abstractmethod
-    def _inner_decode(self, model, x, x_len) -> tuple:
+    def _inner_decode(self, f, f_len) -> tuple:
         pass

@@ -18,10 +18,10 @@ class TokenizerResultsIgnored(Tokenizer):
     """
 
     def __init__(self):
-        pass
+        self.charset = list("abc")
 
     def tokenize(self, transcript):
-        return [0]
+        return [1]
 
 
 def generate_stats(args: Namespace):
@@ -59,7 +59,7 @@ def generate_stats(args: Namespace):
             f"({train_loader.pipeline_type} evaluation: {i:>10}/{total_loader_len}",
             end="\r",
         )
-        logmel, logmel_lens, _, _ = batch
+        logmel, logmel_lens, _, _, _ = batch
         melsum = melsum.to(logmel.device)
         melss = melss.to(logmel.device)
         meln = meln.to(logmel.device)

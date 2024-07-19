@@ -7,24 +7,9 @@ from caiman_asr_train.rnnt.config import grad_noise_scheduler, tokenizer
     "ex_input, expected",
     [
         (
-            {"tokenizer": {"labels": "labs", "sentpiece_model": None, "sampling": 0.0}},
-            {"labels": "labs", "sentpiece_model": None, "sampling": 0.0},
-        ),
-        #
-        (
-            {"tokenizer": {"labels": "labs"}},
-            {"labels": "labs", "sentpiece_model": None, "sampling": 0.0},
-        ),
-        #
-        (
             {"tokenizer": {"labels": "labs", "sentpiece_model": "foo"}},
             {"labels": "labs", "sentpiece_model": "foo", "sampling": 0.0},
-        ),
-        #
-        (
-            {"tokenizer": {"labels": "labs", "sentpiece_model": None, "sampling": 0.6}},
-            {"labels": "labs", "sentpiece_model": None, "sampling": 0.0},
-        ),
+        )
     ],
 )
 def test_tokenizer(ex_input, expected):

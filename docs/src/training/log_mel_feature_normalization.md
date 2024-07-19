@@ -4,11 +4,11 @@ We normalize the acoustic log mel features based on the global mean and variance
 
 ## Record dataset stats
 
-The script [`generate_mel_stats.py`](https://github.com/MyrtleSoftware/caiman-asr/blob/main/training/caiman_asr_train/utils/generate_mel_stats.py) computes these statistics
+The script [`generate_mel_stats.py`](https://github.com/MyrtleSoftware/caiman-asr/blob/main/training/caiman_asr_train/data/generate_mel_stats.py) computes these statistics
 and stores them in `/datasets/stats/<dataset_name+window_size>` as PyTorch tensors. For example usage see:
 
-* `scripts/preprocess_librispeech.sh`
-* `scripts/preprocess_webdataset.sh`
+- `scripts/make_json_artifacts.sh`
+- `scripts/preprocess_webdataset.sh`
 
 ## Training stability
 
@@ -26,4 +26,4 @@ When running validation, the dataset global mean and variance are always used fo
 ### Backwards compatibility
 
 Prior to v1.9.0, the per-utterance stats were used for normalization during training (and then streaming normalization was used during inference).
-To evaluate a model trained on <=v1.8.0, use the `--norm_over_utterance` flag to the `val.sh` script.
+To evaluate a model trained on \<=v1.8.0, use the `--norm_over_utterance` flag to the `val.sh` script.

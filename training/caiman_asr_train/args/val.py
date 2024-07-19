@@ -4,7 +4,6 @@ from argparse import ArgumentParser, Namespace
 
 from beartype import beartype
 
-from caiman_asr_train.args.hugging_face import add_basic_hugging_face_args
 from caiman_asr_train.args.shared import add_shared_args
 from caiman_asr_train.train_utils.distributed import print_once
 
@@ -45,7 +44,8 @@ def val_arg_parser() -> ArgumentParser:
         "--checkpoint",
         default="/results/RNN-T_best_checkpoint.pt",
         type=str,
-        help="Path to the checkpoint to use",
+        help="""Path to the checkpoint to use, or directory containing
+        checkpoints to validate all .pt files within.""",
     )
     io.add_argument(
         "--model_config",
@@ -57,7 +57,7 @@ def val_arg_parser() -> ArgumentParser:
         "--val_manifests",
         type=str,
         required=False,
-        default=["/datasets/LibriSpeech/librispeech-dev-clean-wav.json"],
+        default=["/datasets/LibriSpeech/librispeech-dev-clean.json"],
         nargs="+",
         help="Paths of the evaluation datasets manifest files. "
         "Ignored if --read_from_tar=True",
@@ -133,7 +133,6 @@ def val_arg_parser() -> ArgumentParser:
         help="""Run validation on the CPU. It supports additional functionality
         """,
     )
-    add_basic_hugging_face_args(parser)
     add_shared_args(parser)
     return parser
 

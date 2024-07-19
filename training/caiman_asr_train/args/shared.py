@@ -5,6 +5,8 @@ from pathlib import Path
 from beartype import beartype
 from beartype.typing import Optional
 
+from caiman_asr_train.args.decoder import add_decoder_args
+from caiman_asr_train.args.hugging_face import add_basic_hugging_face_args
 from caiman_asr_train.args.mel_feat_norm import (
     add_mel_feat_norm_args,
     check_mel_feat_norm_args,
@@ -58,8 +60,8 @@ def add_shared_args(parser: ArgumentParser) -> None:
         "--max_inputs_per_batch",
         default=int(1e7),
         type=int,
-        help="During decoding, the encoder will try to keep the number of inputs "
-        "in the batch below this, to prevent the GPU running out of memory. "
+        help="During decoding, the encoder will try to reduce the batch size to keep "
+        "torch.numel(audio_features) below this value, to lower GPU memory usage. "
         "Note this default is for an 11GB GPU",
     )
     parser.add_argument(
@@ -98,8 +100,35 @@ def add_shared_args(parser: ArgumentParser) -> None:
         "If you are running two different trains on the same machine, with the GPUs "
         "partitioned between them, setting this to 0.5 may speed up DALI",
     )
+    parser.add_argument(
+        "--profiler",
+        action="store_true",
+        help="""Enable profiling with yappi and save top/nvidia-smi logs.
+        This may slow down training/validation""",
+    )
     add_state_reset_args(parser)
     add_mel_feat_norm_args(parser)
+    add_basic_hugging_face_args(parser)
+    add_wer_analysis_args(parser)
+    add_decoder_args(parser)
+
+
+@beartype
+def add_wer_analysis_args(parser: ArgumentParser) -> None:
+    wer_args = parser.add_argument_group("WER analysis")
+    wer_args.add_argument(
+        "--breakdown_wer",
+        action="store_true",
+        help="""Print an analysis of how much casing and punctuation affect WER.
+        Most useful when the reference text contains casing and punctuation""",
+    )
+    default_punctuation = ",.?!;:-"
+    wer_args.add_argument(
+        "--breakdown_chars",
+        type=str,
+        default=default_punctuation,
+        help=f"Which characters to analyze. Default is '{default_punctuation}'",
+    )
 
 
 @beartype
@@ -121,6 +150,19 @@ def add_state_reset_args(parser: ArgumentParser) -> None:
 
 
 @beartype
+def check_state_reset_args(args: Namespace) -> None:
+    """require validation batch size = 1 if state resets is used"""
+    if args.sr_segment:
+        assert (
+            args.val_batch_size == 1
+        ), "Please set --val_batch_size=1 to use state resets."
+        print_once(
+            f"If running validation: state resets are used every {args.sr_segment} "
+            f"seconds with overlap of {args.sr_overlap} seconds."
+        )
+
+
+@beartype
 def check_shared_args(args: Namespace) -> None:
     if args.val_from_dir:
         assert validation_directories_provided(
@@ -137,17 +179,18 @@ def check_shared_args(args: Namespace) -> None:
             f"and {args.val_txt_dir=}. The {args.val_manifests=} argument will be ignored."
         )
 
-    if args.read_from_tar or getattr(args, "use_hugging_face", False):
+    if args.read_from_tar or args.use_hugging_face:
         assert (
             args.n_utterances_only is None
         ), "n_utterances_only is not supported when reading from tar files or hugging face"
     else:
         assert (
             args.val_manifests is not None
-        ), "Must provide {val_manifests=} if not reading from tar files"
+        ), f"Must provide {args.val_manifests=} if not reading from tar files"
         "or not reading audio and transcripts from directories"
 
     check_mel_feat_norm_args(args)
+    check_state_reset_args(args)
 
 
 @beartype

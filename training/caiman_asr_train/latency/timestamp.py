@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from beartype import beartype
-from beartype.typing import List, Union
+from beartype.typing import List
 
 
 @beartype
@@ -10,8 +10,8 @@ class PerWordTimestamp:
     """Word and corresponding model timestamps."""
 
     word: str
-    start_frame: Union[int, float]
-    end_frame: Union[int, float]
+    start_frame: int
+    end_frame: int
 
 
 @beartype
@@ -22,6 +22,7 @@ class SequenceTimestamp:
     seqs: List[PerWordTimestamp]
 
 
+@beartype
 def group_timestamps(
     subwords_list: List[List[str]],
     timestamps_list: List[List[int]],

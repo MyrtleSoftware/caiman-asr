@@ -1,12 +1,14 @@
-# CAIMAN-ASR Speech Recognition
+# CAIMAN-ASR <img align="right" src="docs/src/assets/caiman-asr-favicon.png">
 
-This repository contains code for CAIMAN-ASR: an Automatic Speech Recognition (ASR)
+CAIMAN-ASR is an Automatic Speech Recognition (ASR)
 product designed to run on Myrtle.ai’s acceleration solutions for FPGA hardware.
-The solution is designed for low-latency realtime streaming ASR workloads.
+The solution is designed for **low-latency realtime streaming ASR workloads**.
 
-See the key features page ([browser](https://caiman-asr.myrtle.ai/key_features.html), [markdown](docs/src/key_features.md)) for information on
-inference performance and word error rates.
-See this page ([browser](https://caiman-asr.myrtle.ai/training/training_times.html), [markdown](docs/src/training/training_times.md)) for information on training times.
+## See next
 
-The code is located in the [./training](training/README.md) directory.
-See the documentation ([browser](https://caiman-asr.myrtle.ai/introduction.html), [markdown](docs/src/introduction.md)) for how to get started.
+- Performance figures (Real-time streams, latency): [\[docs\]](https://caiman-asr.myrtle.ai/key_features.html#model-configurations) [\[markdown\]](docs/src/key_features.md#model-configurations)
+- WERs: [\[docs\]](https://caiman-asr.myrtle.ai/key_features.html#word-error-rates-wers) [\[markdown\]](docs/src/key_features.md#word-error-rates-wers)
+- Training speeds: [\[docs\]](https://caiman-asr.myrtle.ai/training/training_times.html) [\[markdown\]](docs/src/training/training_times.md)
+- Getting started: [\[docs\]](https://caiman-asr.myrtle.ai/introduction.html) [\[markdown\]](docs/src/introduction.md)
+
+![CAIMAN-ASR Logo](docs/src/assets/CAIMAN-ASR-wordmark.png)

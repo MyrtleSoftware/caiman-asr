@@ -1,4 +1,5 @@
 # Inference flow
+
 The CAIMAN-ASR server provides low-latency, real-time streaming ASR workloads behind a convenient WebSocket API.
 This section describes how to set up the CAIMAN-ASR server for inference.
 

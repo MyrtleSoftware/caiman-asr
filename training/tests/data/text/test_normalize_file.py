@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
+
 import pytest
 
-from caiman_asr_train.data.text.normalize_file import normalize, normalize_by_line
+from caiman_asr_train.data.text.normalize_file import normalize_by_line
+from caiman_asr_train.data.text.normalizers import lowercase_normalize
 
 
-@pytest.mark.parametrize("n", [normalize, normalize_by_line])
-def test_wishlist(n):
+@pytest.mark.parametrize("norm", [lowercase_normalize, normalize_by_line])
+def test_wishlist(norm, default_charset):
     """It would be nice if normalize handled these cases better. But
     also changing normalize will cause the LM datasets' caches to need
     rebuilding"""
+
+    def n(x):
+        return norm(x, charset=default_charset)
+
     assert (
         n("$ 124,758") == "one hundred twenty four thousand seven hundred fifty eight"
     )
@@ -23,8 +29,11 @@ def test_wishlist(n):
     assert n("$6.2\nmillion") == "six dollars two cents million"
 
 
-@pytest.mark.parametrize("n", [normalize, normalize_by_line])
-def test_both(n):
+@pytest.mark.parametrize("norm", [lowercase_normalize, normalize_by_line])
+def test_both(norm, default_charset):
+    def n(x):
+        return norm(x, charset=default_charset)
+
     # Tests for dollars and percentages
     assert (
         n("$124,758")
@@ -89,17 +98,21 @@ def test_both(n):
     assert n("new\nline") == "new line"
     assert n("1\n2\n3") == "one two three"
     assert n("Mr. and Mrs. Lincoln") == "mister and missus lincoln"
-    assert n("<tags> <like_these> are removed") == "are removed"
-    assert normalize("\n") == ""
+    # test_variants in test_normalizers.py demonstrates how tags are either
+    # removed or kept. The following "detagging" behavior isn't how tags are
+    # handled in training; it's just a quirk of this function.
+    assert n("<tags> <like_these> are detagged") == "tags like these are detagged"
+    assert lowercase_normalize("\n", default_charset) == ""
 
 
-def test_normalize_by_line():
+def test_normalize_by_line(default_charset):
     # A single "\n" becomes " "
-    assert normalize_by_line("\n") == " "
-    # Unparseable lines are skipped:
+    assert normalize_by_line("\n", default_charset) == " "
+    # Unparsable lines are skipped:
     assert (
         normalize_by_line(
             "$11.00 is parseable\n$12.,00is not parseable\n$13.01 is parseable",
+            default_charset,
             quiet=True,
         )
         == "eleven dollars is parseable  thirteen dollars one cent is parseable"

@@ -175,7 +175,7 @@ class DaliDataLoader:
                 shuffle=pipeline_type == "train",
                 batch_size=self.batch_size,
                 tokenizer=tokenizer,
-                normalize_transcripts=dali_yaml_config.normalize_transcripts,
+                normalize_config=dali_yaml_config.normalize_config,
                 max_duration=max_duration,
                 max_transcript_len=max_transcript_len,
                 num_buckets=self.num_buckets,
@@ -190,7 +190,7 @@ class DaliDataLoader:
                 shard_id=dist.get_rank() if dist.is_initialized() else 0,
                 sample_rate=dali_yaml_config.sample_rate,
                 tokenizer=tokenizer,
-                normalize_transcripts=dali_yaml_config.normalize_transcripts,
+                normalize_config=dali_yaml_config.normalize_config,
                 max_duration=max_duration,
                 max_transcript_length=max_transcript_len,
             )
@@ -222,11 +222,10 @@ class DaliDataLoader:
             [self.pipeline],
             transcripts=transcripts,
             tokenizer=tokenizer,
-            batch_size=self.batch_size,
             shard_size=shard_size,
             pipeline_type=pipeline_type,
             device_type=self.device_type,
-            normalize_transcripts=dali_yaml_config.normalize_transcripts,
+            normalize_config=dali_yaml_config.normalize_config,
             data_source=self.data_source,
         )
 

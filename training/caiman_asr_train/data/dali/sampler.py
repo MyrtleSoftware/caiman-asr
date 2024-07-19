@@ -76,6 +76,7 @@ class BucketingSampler(SimpleSampler):
         resume_step,
     ):
         super(BucketingSampler, self).__init__()
+        # Shuffle the data in the same way across all processes:
         self.rng = rng
         self.num_buckets = num_buckets
         self.num_training_steps = training_steps
@@ -118,13 +119,41 @@ class BucketingSampler(SimpleSampler):
         for epoch in epochs_iters_batch:
             self.rng.shuffle(epoch, axis=0)
 
+        # start 0th epoch with 10 batches of randomly shuffled longest utterances
+        valid_len_ids = epochs_iters_batch[0, :, :].flatten()
+        if len(valid_len_ids) > 10 * gbs:
+            long_utt_ids = len_ids[-10 * gbs :]
+            self.rng.shuffle(long_utt_ids)
+            long_utt_ids = np.array([v for v in long_utt_ids if v in valid_len_ids])
+            epochs_iters_batch = self.prepend_subset(
+                epochs_iters_batch, long_utt_ids, 0
+            )
+
+        # reshape to final form
         epochs_iters_batch_worker = np.reshape(
             epochs_iters_batch, [num_epochs, -1, self.batch_size, self.num_workers]
         )
         workers_epochs_iters_batch = np.moveaxis(epochs_iters_batch_worker, -1, 0)
         flatten_labels = workers_epochs_iters_batch.flatten()
         flatten_labels = flatten_labels[self.resume_step * self.global_batch_size :]
+
         return [(names[i], labels[i]) for i in flatten_labels]
 
     def is_sampler_random(self):
         return True
+
+    def prepend_subset(self, array: np.ndarray, subset: np.ndarray, epoch: int = 0):
+        """
+        Prepend items defined in `subset` to the beginning of randomly shuffled `array`.
+        The `array` is of shape (epoch, epoch_batches, batch_items) and prepending works
+        for epoch specific by `epoch` argument. The use is to have longest utterances at
+        the beginning of 0th epoch to scan for possible CUDA OOMs.
+        """
+        # Flatten the array and find indexes of subset elements
+        epoch_array = array[epoch, :, :]
+        flat_array = epoch_array.flatten()
+        remainder = np.array([x for x in flat_array if x not in subset])
+        out_array = np.concatenate((subset, remainder), axis=0)
+        array[epoch, :, :] = out_array.reshape(epoch_array.shape)
+
+        return array

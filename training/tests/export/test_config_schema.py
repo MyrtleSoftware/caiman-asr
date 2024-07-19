@@ -101,6 +101,10 @@ class TestConfigSchema(unittest.TestCase):
                 "labels": ["a", "b"],
                 "sentpiece_model": "/datasets/sentencepieces/50k-ls+cv+mls+ps17407.model",
             },
+            "ngram": {
+                "ngram_path": "/datasets/ngrams/NGRAM_SUBDIR",
+                "scale_factor": 0.05,
+            },
         }
         inference_config = RNNTInferenceConfigSchema(**cfg_data)
 

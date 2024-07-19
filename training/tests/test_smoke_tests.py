@@ -8,7 +8,7 @@ def test_all_submodule_imports():
         log,
         rnnt,
         setup,
-        test_utils,
+        unittesting,
     )
 
 
@@ -25,5 +25,5 @@ def test_val_multiple_import():
 
 
 def test_other_imports():
+    from caiman_asr_train.data import generate_mel_stats
     from caiman_asr_train.export.hardware_ckpt import create_hardware_ckpt
-    from caiman_asr_train.utils import generate_mel_stats

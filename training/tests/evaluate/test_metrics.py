@@ -52,7 +52,6 @@ def levenshtein_ref(a, b):
     [
         (["hello world"], ["hello world"], True, (0.0, 0, 2)),
         (["hello world"], ["hi everyone"], True, (1.0, 2, 2)),
-        (["hello world", "good morning"], ["hello world"], True, (0.0, 0, 2)),
         ([], [], True, (float("inf"), 0, 0)),
         (["hello world"], ["hello new world"], True, (1 / 3, 1, 3)),
         (["good morning earth"], ["good morning mars good morning"], True, (0.6, 3, 5)),

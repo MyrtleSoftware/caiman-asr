@@ -67,7 +67,7 @@ class Checkpointer(object):
             )
 
         # Checkpoint already saved
-        if not is_best and epoch in self.tracked:
+        if not is_best and step in self.tracked:
             print_once(f"WARNING: Overwriting previous checkpoint {fpath}")
 
         state = {
@@ -87,7 +87,7 @@ class Checkpointer(object):
         torch.save(state, fpath)
 
         if not is_best:
-            self.tracked[epoch] = fpath
+            self.tracked[step] = fpath
 
     def last_checkpoint(self):
         tracked = list(self.tracked.values())

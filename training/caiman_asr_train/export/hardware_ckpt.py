@@ -2,14 +2,17 @@
 
 import argparse
 import math
+import os
 from argparse import Namespace
 from pathlib import Path
 
 import torch
-from beartype.typing import Tuple
+from beartype.typing import Optional, Tuple
 
+from caiman_asr_train.args.decoder import add_ngram_args
 from caiman_asr_train.export.config_schema import RNNTInferenceConfigSchema
 from caiman_asr_train.export.model_schema import check_model_schema, return_schemas
+from caiman_asr_train.lm.kenlm_ngram import find_ngram_path
 from caiman_asr_train.rnnt import config
 
 
@@ -43,6 +46,7 @@ def parse_arguments() -> Namespace:
         default="/results/hardware_ckpt.pt",
         help="name of the output hardware checkpoint file",
     )
+    add_ngram_args(parser)
     args = parser.parse_args()
 
     assert args.melalpha == 0.0, "melalpha is deprecated and should be 0.0."
@@ -91,6 +95,38 @@ def read_sentencepiece_model(fname):
         return f.read()
 
 
+def read_ngram_lm(
+    args: Namespace, cfg: dict
+) -> Tuple[Optional[bytes], Optional[float]]:
+    """Read the binary n-gram file as bytes if n-gram is not skipped."""
+    if not args.skip_ngram:
+        ngram_cfg = cfg["ngram"]
+        ngram_path = args.override_ngram_path or find_ngram_file(
+            ngram_cfg["ngram_path"]
+        )
+        _, ext = os.path.splitext(ngram_path)
+        assert ext == ".binary", (
+            f"Invalid file format: {ngram_path}. Please provide a binary n-gram file. "
+            "See `docs/src/training/ngram_lm.md` for instructions on generating a binary "
+            "file from an ARPA file."
+        )
+        with open(ngram_path, "rb") as f:
+            return (f.read(), ngram_cfg["scale_factor"])
+    return (None, None)
+
+
+def find_ngram_file(base_path: str) -> str:
+    """Search for ngram file in given directory - if not found, raise error."""
+    file = find_ngram_path(base_path)
+    if file is None:
+        raise FileNotFoundError(
+            f"N-gram not found in {base_path}. Ensure you have a valid binary n-gram, "
+            "or pass the `--skip_ngram` argument to skip adding an ngram to your "
+            "hardware checkpoint."
+        )
+    return file
+
+
 def inference_only_config(config_fp: str) -> dict:
     """Return the minimal config required to run inference.
 
@@ -111,6 +147,8 @@ def create_hardware_ckpt(args) -> dict:
     assert spm_fn, "Sentencepiece model file not found in config."
     spmb = read_sentencepiece_model(spm_fn)
 
+    ngram_lm, ngram_sf = read_ngram_lm(args, train_cfg)
+
     inference_config = inference_only_config(args.config)
     # It is useful to be able to run these hardware checkpoints using val.py in Python.
     # So ema_state_dict is renamed to state_dict in the hardware checkpoint which
@@ -124,7 +162,11 @@ def create_hardware_ckpt(args) -> dict:
         "melvars": melvars,
         "melalpha": melalpha,
         "sentpiece_model": spmb,  # store the bytes object in the hardware checkpoint
-        "version": "1.10.1",  # add the semantic version number of the hardware checkpoint
+        "ngram": {
+            "binary": ngram_lm,  # optional binary KenLM ngram
+            "scale_factor": ngram_sf,
+        },
+        "version": "1.11.0",  # add the semantic version number of the hardware checkpoint
         "rnnt_config": inference_config,  # copy in inference config
     }
 

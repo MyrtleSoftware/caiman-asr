@@ -107,4 +107,5 @@ class RNNTInferenceConfigSchema(Schema):
     _allow_ignore = {
         "input_train",
         "grad_noise_scheduler",
+        "ngram",
     }

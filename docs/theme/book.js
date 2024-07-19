@@ -321,13 +321,13 @@ function playground_text(playground) {
 
         let newLogo;
         if(theme === 'light'){
-            newLogo = "url('/assets/CAIMAN-ASR-wordmark.png')";
+            newLogo = "/assets/CAIMAN-ASR-wordmark.png";
         }
         else {
-            newLogo = "url('/assets/CAIMAN-ASR-wordmark-white.png')";
+            newLogo = "/assets/CAIMAN-ASR-wordmark-white.png";
         }
         let logoElement = document.querySelector(".sidebar .sidebar-scrollbox .sidebar-logo");
-        logoElement.style.backgroundImage= newLogo;
+        logoElement.src = newLogo;
 
         if (theme == 'coal' || theme == 'navy') {
             stylesheets.ayuHighlight.disabled = true;

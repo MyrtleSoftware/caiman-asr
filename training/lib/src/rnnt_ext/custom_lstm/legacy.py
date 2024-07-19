@@ -187,10 +187,10 @@ def identity_func(x):
 # variable types in the CustomLSTM code above and is not likely to bring any speedup anyway
 # since all the compute is in the CustomLSTMLayer below.
 
-# I've tried many versions of CustomLSTMLayer, including those which pass model weights to
+# Myrtle tried many versions of CustomLSTMLayer, including those which pass model weights to
 # the init() and those which pass layer_input_size and hidden_size (marked Final) to the
 # init() and define and register all weight Parameters locally.  These bring no speedup,
-# and also conflict with the use of deepcopy elsewhere.  I've also tried PyTorch 1.13
+# and also conflict with the use of deepcopy elsewhere.  Myrtle also tried PyTorch 1.13
 # FuncTorch which also doesn't help.  For now, this is probably as good as it gets.
 
 

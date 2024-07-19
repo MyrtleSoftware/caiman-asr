@@ -1,4 +1,5 @@
 # CAIMAN-ASR server release bundle
+
 Release name: `caiman-asr-server-<version>.run`
 
 This release bundle contains all the software needed to run the Myrtle.ai CAIMAN-ASR server in a production environment.
@@ -6,9 +7,9 @@ This includes the server docker image, a simple Python client, and scripts to st
 Additionally, it contains a script to compile a hardware checkpoint into a CAIMAN-ASR checkpoint.
 Three model architectures are supported:
 
-* `testing`
-* `base`
-* `large`
+- `testing`
+- `base`
+- `large`
 
 ```admonish
 The `testing` config is not recommended for production use.
@@ -31,8 +32,16 @@ streams per card with the `base` model and 800 with the `large` model.
 2. Start the CAIMAN-ASR server with the hardware checkpoint:
 
    ```
-   ./start_asr_server.sh --rnnt-checkpoint compile-model-checkpoint/hardware_checkpoint.testing.example.pt --cpu-backend
+   ./start_asr_server.sh --rnnt-checkpoint compile-model-checkpoint/hardware_checkpoint.testing.example.pt --cpu-backend --no-beam-decoder
    ```
+
+```admonish
+This example turns off beam decoding
+because it's unsupported by the CPU backend.
+If you want to calculate WER using beam search without an FPGA,
+please use the ML training repository
+as described [here](../training/beam_decoder.md).
+```
 
 3. Once the server prints "Server started on port 3030", you can start the simple client.
    This will send a librispeech example wav to the CAIMAN-ASR server and print the transcription:
@@ -43,6 +52,7 @@ streams per card with the `base` model and 800 with the `large` model.
    ./run.sh
    cd ..
    ```
+
    To detach from the running docker container without killing it, use ctrl+p followed by ctrl+q.
 
 4. Stop the CAIMAN-ASR server(s)
@@ -71,12 +81,12 @@ below). For more details on this process, see the [Compiling weights](./compilin
 
 2. Compile an example hardware checkpoint to a CAIMAN-ASR checkpoint
 
-    ```
-    cd compile-model-checkpoint
-    ./build_docker.sh
-    ./run_docker.sh hardware_checkpoint.testing.example.pt caiman_asr_checkpoint.testing.example.pt
-    cd ..
-    ```
+   ```
+   cd compile-model-checkpoint
+   ./build_docker.sh
+   ./run_docker.sh hardware_checkpoint.testing.example.pt caiman_asr_checkpoint.testing.example.pt
+   cd ..
+   ```
 
 3. Start the CAIMAN-ASR server with the CAIMAN-ASR checkpoint (use `--card-id 1` to use the second card).
    `--license-dir` should point to the directory containing your license files. See the [Licensing](./licensing.md) section for more information.
@@ -84,6 +94,7 @@ below). For more details on this process, see the [Compiling weights](./compilin
    ```
    ./start_asr_server.sh --rnnt-checkpoint compile-model-checkpoint/caiman_asr_checkpoint.testing.example.pt --license-dir "./licenses/" --card-id 0
    ```
+
    To detach from the running docker container without killing it, use ctrl+p followed by ctrl+q.
 
 4. Once the server prints "Server started on port 3030", you can start the simple client.
@@ -103,14 +114,31 @@ below). For more details on this process, see the [Compiling weights](./compilin
    ```
 
 ## State resets
+
 State resets improve the word error rate of the CAIMAN-ASR server on long utterances by resetting the hidden state of the model after a fixed duration.
 This improves the accuracy but reduces the number of real-time streams that can be supported by about 25%.
 If your audio is mostly short utterances (less than 60s), you can disable state resets to increase the number of real-time streams that can be supported.
 State resets are switched on by default, but they can be disabled by passing the `--no-state-resets` flag to the `./start_server` script.
 
- More information about state resets can be found [here](../training/state_resets.md).
+More information about state resets can be found [here](../training/state_resets.md).
+
+## Beam decoding
+
+Beam decoding improves WER but reduces RTS;
+see [here](../performance.md) for more details.
+Beam search is switched on by default,
+but it can be disabled by passing the `--no-beam-decoder` flag.
+More information about beam decoding is [here](../training/beam_decoder.md).
+
+When decoding with beam search, the server will return two types of response, either 'partial' or 'final'.
+For more details, see [here](../inference/websocket_api.md).
+
+```admonish
+The CPU backend is not compatible with beam decoding.
+```
 
 # Connecting to the websocket API
+
 The websocket endpoint is at `ws://localhost:3030`.
 See [Websocket API](./websocket_api.md) for full documentation of the websocket interface.
 
@@ -118,6 +146,7 @@ The code in `simple_client/simple_client.py` is a simple example of how to conne
 The code snippets below are taken from this file, and demonstrate how to connect to the server in Python.
 
 Initially the client needs to open a websocket connection to the server.
+
 ```python
 ws = websocket.WebSocket()
 ws.connect(
@@ -126,6 +155,7 @@ ws.connect(
 ```
 
 Then the client can send audio data to the server.
+
 ```python
 for i in range(0, len(samples), samples_per_frame):
     payload = samples[i : i + samples_per_frame].tobytes()
@@ -133,12 +163,14 @@ for i in range(0, len(samples), samples_per_frame):
 ```
 
 The client can receive the server's response on the same websocket connection. Sending and receiving can be interleaved.
+
 ```python
 msg = ws.recv()
 print(json.loads(msg)["alternatives"][0]["transcript"], end="", flush=True)
 ```
 
 When the audio stream is finished the client should send a blank frame to the server to signal the end of the stream.
+
 ```python
 ws.send("", websocket.ABNF.OPCODE_BINARY)
 ```

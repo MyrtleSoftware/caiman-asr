@@ -13,7 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from argparse import Namespace
+from glob import glob
 
 import torch
 from beartype.typing import Any, Dict
@@ -21,9 +23,10 @@ from beartype.typing import Any, Dict
 from caiman_asr_train.args.shared import check_shared_args
 from caiman_asr_train.args.val import check_val_arguments, val_arg_parser
 from caiman_asr_train.evaluate import evaluate
-from caiman_asr_train.evaluate.state_resets import check_state_reset_args
+from caiman_asr_train.log.profiling import finish_profiling, set_up_profiling
 from caiman_asr_train.log.tb_dllogger import flush_log
-from caiman_asr_train.setup.base import VAL, BuiltObjects
+from caiman_asr_train.setup.base import BuiltObjects
+from caiman_asr_train.setup.core import VAL
 from caiman_asr_train.setup.val import ValCPUSetup, ValSetup
 from caiman_asr_train.train_utils.distributed import print_once
 from caiman_asr_train.train_utils.torchrun import maybe_restart_with_torchrun
@@ -45,8 +48,6 @@ def validate(
 
     if val_objects.multi_gpu:
         assert args.nth_batch_only is None, "nth_batch_only not supported in multi-gpu"
-
-    check_state_reset_args(args.sr_segment, args.sr_overlap, args.val_batch_size)
 
     epoch = 1
     step = None  # Switches off logging of val data results to TensorBoard
@@ -98,7 +99,41 @@ def validate(
     return results
 
 
-def main(args, val_objects):
+def build_objects(args):
+    profilers = set_up_profiling(args.profiler, args.output_dir, args.timestamp)
+    val_objects = ValCPUSetup().run(args) if args.cpu else ValSetup().run(args)
+    return val_objects, profilers
+
+
+def validation_routine(args, build_objects_func, validation_func):
+    if os.path.isdir(args.ckpt):
+        # If directory, iterate over all ckpts in given dir
+        ckpt_directory = args.ckpt
+        ckpt_files = glob(os.path.join(ckpt_directory, "*.pt"))
+        if not ckpt_files:
+            raise ValueError(f"No checkpoint files found in {args.ckpt}")
+        wers = {}
+        for i, ckpt_file in enumerate(ckpt_files):
+            if i > 0:
+                args.skip_init = True
+            args.ckpt = ckpt_file
+            if args.local_rank == 0:
+                print(f"{i+1}/{len(ckpt_files)} Validating checkpoint: {ckpt_file}")
+            val_objects, profilers = build_objects_func(args)
+            results = validation_func(args, val_objects)
+            wers[ckpt_file] = round(results["wer"] * 100, 3)
+            finish_profiling(args.profiler, args.output_dir, profilers, args.timestamp)
+        print_once(f"WERs: {wers}")
+
+    else:
+        if args.local_rank == 0:
+            print(f"Validating checkpoint: {args.ckpt}")
+        val_objects, profilers = build_objects_func(args)
+        validation_func(args, val_objects)
+        finish_profiling(args.profiler, args.output_dir, profilers, args.timestamp)
+
+
+def run_validate(args: Namespace, val_objects: BuiltObjects):
     check_shared_args(args)
     check_val_arguments(args)
     # check data path args
@@ -112,14 +147,10 @@ def main(args, val_objects):
 if __name__ == "__main__":
     parser = val_arg_parser()
     args = parser.parse_args()
-    if args.cpu:
-        val_objects = ValCPUSetup().run(args)
-    else:
+    if not args.cpu:
         maybe_restart_with_torchrun(
             args.num_gpus,
             args.called_by_torchrun,
             "/workspace/training/caiman_asr_train/val.py",
         )
-        val_objects = ValSetup().run(args)
-
-    main(args, val_objects)
+    validation_routine(args, build_objects, run_validate)

@@ -378,7 +378,7 @@ class RNNT(nn.Module):
                 device=self.joint_enc.weight.device, dtype=self.joint_enc.weight.dtype
             )
 
-        # preprend blank "start of sequence" symbol
+        # prepend blank "start of sequence" symbol
         if add_sos:
             B, U, H = y.shape
             sos_embedding = (

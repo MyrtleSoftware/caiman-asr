@@ -34,10 +34,13 @@ def set_rsp_delay_default(args) -> None:
     rsp_delay = args.warmup_steps + args.hold_steps + args.half_life_steps * 3
 
     print_once(
-        f"WARNING: --rsp_delay not set. Setting {rsp_delay=} based on a learning "
-        "rate schedule heuristic. To see the benefit of RSP you should train for at "
-        f"least >5k more steps (so for >={rsp_delay + 5000} steps)."
+        f"--rsp_delay not set. Setting {rsp_delay=} based on a learning rate schedule heuristic."
     )
+    if args.training_steps < rsp_delay + 5000:
+        print_once(
+            f"WARNING: Training too short (steps = {args.training_steps}) to see a "
+            f"benefit from RSP. Set --training_steps to >= {rsp_delay + 5000}."
+        )
     args.rsp_delay = rsp_delay
 
 

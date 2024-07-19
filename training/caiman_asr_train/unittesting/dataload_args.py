@@ -40,6 +40,7 @@ def gen_dataload_args(test_data_dir) -> Namespace:
         val_txt_dir=None,
         dali_processes_per_cpu=1,
         use_hugging_face=False,
+        hugging_face_val_dataset=None,
         hugging_face_val_config=None,
         hugging_face_val_split="validation",
         hugging_face_val_transcript_key="text",

@@ -28,20 +28,20 @@ def joint_and_loss(
     """
     Run joint and loss.
     """
-    log_probs = model.joint(
-        f, g, f_lens, g_lens, batch_offset=meta_data["batch_offset"]
-    )
+    logits = model.joint(f, g, f_lens, g_lens, batch_offset=meta_data["batch_offset"])
+
     loss = loss_fn(
-        log_probs,
+        logits,
         f_lens,
         txt,
         txt_lens,
         meta_data["batch_offset"],
         meta_data["max_f_len"],
     )
+
     loss /= args.grad_accumulation_batches * args.batch_split_factor
 
-    del log_probs
+    del logits
     return loss
 
 
@@ -85,7 +85,7 @@ def train_step_batch_split(
         )
         meta_data.append(meta_entry)
 
-    loss_item, loss_nan = 0, False
+    loss_item, loss_nan = 0.0, False
 
     (f, f_lens), (g, g_lens), new_rnnt_state = enc_pred_fn(
         feats,
