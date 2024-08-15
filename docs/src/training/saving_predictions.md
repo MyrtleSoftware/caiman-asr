@@ -1,14 +1,13 @@
 # Saving Predictions
 
-To dump the predicted text for a list of input wav files, pass the `--dump_preds` argument and call `val.sh`:
+`val.sh` dumps the predicted text for a list of input wav files
+to `/results/preds[rank]_[timestamp].txt`, as in this command:
 
 ```
-./scripts/val.sh --dump_preds --val_manifests=/results/your-inference-list.json
+./scripts/val.sh --val_manifests /results/your-inference-list.json
 ```
 
-Predicted text will be written to `/results/preds[rank].txt`
-
-The argument `--dump_preds` can be used whether or not there are ground-truth transcripts in the json file.  If there are,
+`val.sh` works whether or not there are correct ground-truth transcripts in `your-inference-list.json`.  If there are,
 then the word error rate reported by val will be accurate; if not, then it will be nonsense and should
 be ignored.  The minimal json file for inference (with 2 wav files) looks like this:
 

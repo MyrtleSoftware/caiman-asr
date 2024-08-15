@@ -1,9 +1,9 @@
-*.egg-info
+**/*.egg-info
 
 checkpoints/
 tb_*/
 results/
-__pycache__
+**/__pycache__
 _legacy/
 lightning_logs/
 
@@ -12,3 +12,7 @@ lightning_logs/
 
 # logs
 *.log
+
+lib/build
+
+lib/README.md

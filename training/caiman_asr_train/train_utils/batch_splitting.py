@@ -10,7 +10,6 @@ from caiman_asr_train.rnnt.loss import ApexTransducerLoss, get_packing_meta_data
 from caiman_asr_train.rnnt.state import RNNTState
 from caiman_asr_train.rnnt.sub_models import RNNTSubModels
 from caiman_asr_train.train_utils.core import is_loss_nan, maybe_autocast
-from caiman_asr_train.train_utils.distributed import print_once
 
 
 def joint_and_loss(
@@ -24,6 +23,7 @@ def joint_and_loss(
     txt: torch.Tensor,
     txt_lens: torch.Tensor,
     meta_data: dict,
+    delay_penalty: float,
 ) -> torch.Tensor:
     """
     Run joint and loss.
@@ -37,6 +37,7 @@ def joint_and_loss(
         txt_lens,
         meta_data["batch_offset"],
         meta_data["max_f_len"],
+        delay_penalty=delay_penalty,
     )
 
     loss /= args.grad_accumulation_batches * args.batch_split_factor
@@ -56,6 +57,7 @@ def train_step_batch_split(
     txt_lens: torch.Tensor,
     scaler: Optional[GradScaler],
     rnnt_state: Optional[RNNTState],
+    delay_penalty: float,
 ) -> Tuple[float, bool, Optional[RNNTState]]:
     """
     Run a step of training when batch_split_factor > 1.
@@ -85,8 +87,6 @@ def train_step_batch_split(
         )
         meta_data.append(meta_entry)
 
-    loss_item, loss_nan = 0.0, False
-
     (f, f_lens), (g, g_lens), new_rnnt_state = enc_pred_fn(
         feats,
         feat_lens,
@@ -102,6 +102,9 @@ def train_step_batch_split(
     f_2, g_2 = f.detach(), g.detach()
     f_2.requires_grad = True
     g_2.requires_grad = True
+
+    loss_item, batch_has_nan = 0.0, False
+
     for i in range(args.batch_split_factor):
         loss = joint_fn(
             model=model,
@@ -114,20 +117,19 @@ def train_step_batch_split(
             txt=txt[i * b_split : (i + 1) * b_split],
             txt_lens=txt_lens[i * b_split : (i + 1) * b_split],
             meta_data=meta_data[i],
+            delay_penalty=delay_penalty,
         )
 
-        loss_nan = is_loss_nan(loss, args.num_gpus)
-        if loss_nan:
-            print_once("WARNING: loss is NaN; skipping update")
-            # exit this train_step early
-            return loss_item, loss_nan, None
+        if is_loss_nan(loss, args.num_gpus):
+            batch_has_nan = True
 
-        # run backwards in joint network only and accumulate gradients in f_2 and g_2
+        # Run backwards in joint network only and accumulate gradients in f_2 and g_2
         if not args.no_amp:
-            # scale losses w/ pytorch AMP to prevent underflowing before backward pass
+            # Scale losses w/ pytorch AMP to prevent underflowing before backward pass
             scaler.scale(loss).backward()
         else:
             loss.backward()
+
         loss_item += loss.item()
 
     # We now have accumulated gradients in f_2 and g_2 which we can use to backpropagate
@@ -135,4 +137,4 @@ def train_step_batch_split(
     f.backward(f_2.grad)
     g.backward(g_2.grad)
 
-    return loss_item, loss_nan, new_rnnt_state
+    return loss_item, batch_has_nan, None if batch_has_nan else new_rnnt_state

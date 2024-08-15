@@ -166,7 +166,7 @@ def create_hardware_ckpt(args) -> dict:
             "binary": ngram_lm,  # optional binary KenLM ngram
             "scale_factor": ngram_sf,
         },
-        "version": "1.11.0",  # add the semantic version number of the hardware checkpoint
+        "version": "1.12.0",  # add the semantic version number of the hardware checkpoint
         "rnnt_config": inference_config,  # copy in inference config
     }
 

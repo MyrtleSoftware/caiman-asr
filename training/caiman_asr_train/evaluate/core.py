@@ -22,9 +22,10 @@ from caiman_asr_train.data.webdataset import LengthUnknownError
 from caiman_asr_train.evaluate.distributed import process_evaluation_epoch
 from caiman_asr_train.evaluate.metrics import word_error_rate
 from caiman_asr_train.evaluate.state_resets import (
-    state_resets_merge_segments,
-    state_resets_reshape_feats,
+    state_resets_merge_batched_segments,
+    state_resets_reshape_batched_feats,
 )
+from caiman_asr_train.latency.ctm import get_reference_ctms, manage_ctm_export
 from caiman_asr_train.latency.timestamp import group_timestamps
 from caiman_asr_train.log.tb_dllogger import log
 from caiman_asr_train.rnnt.model_forward import model_loss_forward_val
@@ -92,6 +93,7 @@ def evaluate(
     calculate_loss=False,
     nth_batch_only=None,
     using_cpu=False,
+    skip_logging=False,
 ) -> Dict[str, Any]:
     """
     Perform evaluation.
@@ -100,6 +102,11 @@ def evaluate(
     enc_time_reduction = ema_model.enc_stack_time_factor
 
     start_time = time.time()
+
+    # Potentially get reference CTMs for emission latency evalation
+    if args.calculate_emission_latency:
+        reference_ctms = get_reference_ctms(args)
+
     results = {"preds": [], "txts": [], "idx": [], "timestamps": [], "token_probs": []}
     if calculate_loss:
         results["losses"] = []
@@ -126,7 +133,7 @@ def evaluate(
         audio, audio_lens, txt, txt_lens, raw_transcripts = batch
 
         # move tensors back to gpu, unless cpu is used during validation
-        if args.dali_device == "cpu" and not using_cpu:
+        if args.dali_val_device == "cpu" and not using_cpu:
             audio = audio.cuda()
             audio_lens = audio_lens.cuda()
             txt = txt.cuda()
@@ -143,12 +150,7 @@ def evaluate(
 
         # if state resets is on, prepare the feats
         if args.sr_segment:
-            (
-                feats,
-                feat_lens,
-                sr_segment_frames,
-                sr_overlap_frames,
-            ) = state_resets_reshape_feats(
+            (feats, feat_lens, meta) = state_resets_reshape_batched_feats(
                 args.sr_segment, args.sr_overlap, cfg, feats, feat_lens
             )
 
@@ -156,13 +158,8 @@ def evaluate(
 
         # if state resets is used, merge predictions and timestamps of segments into one
         if args.sr_segment:
-            pred, timestamps, probs = state_resets_merge_segments(
-                pred,
-                timestamps,
-                probs,
-                enc_time_reduction,
-                sr_segment_frames,
-                sr_overlap_frames,
+            pred, timestamps, probs = state_resets_merge_batched_segments(
+                pred, timestamps, probs, enc_time_reduction, meta
             )
 
         # For each predicted sentence, detokenize token into subword
@@ -185,6 +182,8 @@ def evaluate(
             word_timestamps = group_timestamps(subwords, timestamps, preds)
             results["timestamps"] += word_timestamps
 
+    end_time = time.time()
+
     wer, loss = process_evaluation_epoch(
         results,
         standardize_wer=standardize_wer,
@@ -193,18 +192,28 @@ def evaluate(
     )
     results["wer"] = wer
 
-    log(
-        (epoch,),
-        step,
-        "dev_ema",
-        {"loss": loss, "wer": 100.0 * wer, "took": time.time() - start_time},
-    )
+    latency_metrics = {}
+    if args.calculate_emission_latency:
+        if args.read_from_tar:
+            flist = None
+        else:
+            with open(val_loader.sampler.get_file_list_path(), "r") as fh:
+                flist = [line.strip().split(" ")[0] for line in fh.readlines()]
+        latency_metrics = manage_ctm_export(
+            args, results["timestamps"], reference_ctms, flist
+        )
 
-    if args.dump_preds:
-        with open(f"{args.output_dir}/preds{get_rank_or_zero()}.txt", "w") as f:
-            for line in results["preds"]:
-                f.write(str(line))
-                f.write("\n")
+    data = {"loss": loss, "wer": 100.0 * wer, "took": end_time - start_time}
+    data.update(latency_metrics)
+    if not skip_logging:
+        log((epoch,), step, "dev_ema", data)
+
+    with open(
+        f"{args.output_dir}/preds{get_rank_or_zero()}_{args.timestamp}_{step}.txt", "w"
+    ) as f:
+        for line in results["preds"]:
+            f.write(str(line))
+            f.write("\n")
 
     ema_model.train()
     return results

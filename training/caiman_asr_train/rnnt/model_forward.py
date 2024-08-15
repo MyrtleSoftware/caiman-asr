@@ -19,6 +19,7 @@ def model_loss_forward(
     txt: torch.Tensor,
     txt_lens: torch.Tensor,
     rnnt_state: Optional[RNNTState],
+    delay_penalty: float,
 ) -> Tuple[torch.Tensor, Optional[RNNTState]]:
     """
     Run model and get loss
@@ -29,8 +30,7 @@ def model_loss_forward(
         txt_lens=txt_lens,
         enc_time_reduction=unwrap_ddp(model).enc_stack_time_factor,
     )
-    # note : more misleading variable names : 'log_prob*' are actually logits
-    log_probs, log_prob_lens, new_rnnt_state = model(
+    logits, logits_lens, new_rnnt_state = model(
         feats,
         feat_lens,
         txt,
@@ -39,15 +39,18 @@ def model_loss_forward(
         enc_state=rnnt_state.enc_state if rnnt_state else None,
         pred_net_state=rnnt_state.pred_net_state if rnnt_state else None,
     )
+
     loss = loss_fn(
-        log_probs,
-        log_prob_lens,
+        logits,
+        logits_lens,
         txt,
         txt_lens,
         meta_data["batch_offset"],
         meta_data["max_f_len"],
+        delay_penalty=delay_penalty,
     )
-    del log_probs, log_prob_lens
+
+    del logits, logits_lens
 
     return loss, new_rnnt_state
 
@@ -61,10 +64,11 @@ def model_loss_forward_train(
     txt: torch.Tensor,
     txt_lens: torch.Tensor,
     rnnt_state: Optional[RNNTState],
+    delay_penalty: float,
 ) -> Tuple[torch.Tensor, Optional[RNNTState]]:
     """ """
     loss, new_rnnt_state = model_loss_forward(
-        model, loss_fn, feats, feat_lens, txt, txt_lens, rnnt_state
+        model, loss_fn, feats, feat_lens, txt, txt_lens, rnnt_state, delay_penalty
     )
     loss /= args.grad_accumulation_batches
     return loss, new_rnnt_state
@@ -80,6 +84,13 @@ def model_loss_forward_val(
     txt_lens: torch.Tensor,
 ):
     loss, _ = model_loss_forward(
-        model, loss_fn, feats, feat_lens, txt, txt_lens, rnnt_state=None
+        model,
+        loss_fn,
+        feats,
+        feat_lens,
+        txt,
+        txt_lens,
+        rnnt_state=None,
+        delay_penalty=0.0,
     )
     return loss

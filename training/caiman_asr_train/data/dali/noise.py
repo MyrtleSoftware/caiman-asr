@@ -1,40 +1,42 @@
-import os
-from abc import ABC, abstractmethod
-
 import numpy as np
-from beartype.typing import List, Optional
+from beartype.typing import List
 from numba import jit
 
-from caiman_asr_train.data.dali.hugging_face_utils import make_noise_dataset_for_dali
 
-
-class NoiseAugmentationIterator(ABC):
-    def __init__(self, batch_size: int):
+class NoiseAugmentationIterator:
+    def __init__(
+        self,
+        batch_size: int,
+        prob_noise,
+    ):
         self.low = 30
         self.high = 60
         self.no_noise = 200  # i.e. the SNR is so high that there is 'no noise'
         self.batch_size = batch_size
+        self.prob_noise = prob_noise
 
     def set_range(self, low: int, high: int):
         self.low = low
         self.high = high
 
-    @abstractmethod
     def __iter__(self):
-        ...
+        return self
 
-    @abstractmethod
     def __next__(self):
-        ...
+        target_snrs = self._target_snrs(self.prob_noise)
+        start_ratios = self._start_ratios()
+        return (target_snrs, start_ratios)
 
     def _target_snrs(self, probability_apply: float) -> List[np.array]:
         """
         Generate array of target SNRs, used to determine the volume of noise to add.
         """
         return [
-            np.array([np.random.uniform(self.low, self.high)], dtype=np.float32)
-            if np.random.uniform() < probability_apply
-            else np.array([self.no_noise], dtype=np.float32)
+            (
+                np.array([np.random.uniform(self.low, self.high)], dtype=np.float32)
+                if np.random.uniform() < probability_apply
+                else np.array([self.no_noise], dtype=np.float32)
+            )
             for _ in range(self.batch_size)
         ]
 
@@ -46,76 +48,6 @@ class NoiseAugmentationIterator(ABC):
             np.array([np.random.uniform(0, 1)], dtype=np.float32)
             for _ in range(self.batch_size)
         ]
-
-
-class BackgroundNoiseIterator(NoiseAugmentationIterator):
-    """
-    This class provides an infinite input iterator to supply background
-    noise augmentation data to the DALI pipeline.  The noise
-    data is divided among shards to prevent disk access con-
-    flicts.  The class also supplies the high and low SNR
-    values used to blend the speech and noise together.
-    """
-
-    def __init__(
-        self,
-        batch_size,
-        shard_id,
-        n_shards,
-        noise_dataset: str,
-        use_noise_audio_folder: bool,
-        prob_background_noise,
-        noise_config: Optional[str],
-        sample_rate: int,
-    ):
-        super().__init__(batch_size=batch_size)
-        assert (
-            noise_dataset is not None
-        ), "noise_dataset must be set when using noise augmentation"
-        self.shard_id = shard_id
-        self.n_shards = n_shards
-        self.prob_background_noise = prob_background_noise
-        self.noise_dir, self.files = make_noise_dataset_for_dali(
-            use_noise_audio_folder, noise_dataset, noise_config, sample_rate
-        )
-
-    def __iter__(self):
-        self.i = self.shard_id
-        self.n = len(self.files)
-        return self
-
-    def __next__(self):
-        batch = []
-        target_snrs = self._target_snrs(self.prob_background_noise)
-        start_ratios = self._start_ratios()
-
-        for _ in range(self.batch_size):
-            noise_filename = self.files[self.i]
-            with open(os.path.join(self.noise_dir, noise_filename), "rb") as f:
-                batch.append(np.frombuffer(f.read(), dtype=np.uint8))
-            self.i += self.n_shards
-            if self.i >= self.n:
-                self.i = self.shard_id
-        return (batch, target_snrs, start_ratios)
-
-
-class BabbleNoiseIterator(NoiseAugmentationIterator):
-    """
-    This class is an infinite iterator to supply the randomness needed
-    for babble noise augmentation.
-    """
-
-    def __init__(self, batch_size: int, prob_babble_noise: float):
-        super().__init__(batch_size=batch_size)
-        self.prob_babble_noise = prob_babble_noise
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        target_snrs = self._target_snrs(self.prob_babble_noise)
-        start_ratios = self._start_ratios()
-        return (target_snrs, start_ratios)
 
 
 class NoiseSchedule(object):

@@ -12,8 +12,7 @@ librosa==0.8.0
 more-itertools==10.2.0
 numpy==1.23
 pandas==1.5.3
-protobuf==3.20.1
-pydantic==1.10.6
+pydantic==2.8.2
 pytest==7.2.1
 qtorch==0.3.0
 ruamel.yaml==0.18.6

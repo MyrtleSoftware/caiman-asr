@@ -118,7 +118,7 @@ def test_create_hardware_ckpt(
         If you have added or removed a field, please note that this is liable to break
         the downstream inference server. Many additions to the yaml configs aren't needed
         at inference time as they are training-specific. If this applies to your case
-        you can add the field to the _allow_ignore set in the relevant Schema class and
+        you can add the field to the allow_ignore set in the relevant Schema class and
         this test will pass unchanged.
         If your change doesn't fall under the above exception (and it was intentional),
         please edit the test_data hardware checkpoint in order to make this test pass

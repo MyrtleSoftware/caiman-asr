@@ -1,5 +1,5 @@
 #! /usr/bin/env python3
-
+# Note: Any modifications to this code require recompilation for the changes to take effect.
 
 import torch
 from qtorch import BlockFloatingPoint, FloatingPoint

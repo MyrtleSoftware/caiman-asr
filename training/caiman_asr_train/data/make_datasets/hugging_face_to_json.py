@@ -160,7 +160,6 @@ def make_json(
     manifest = prepare_manifest(
         path_transcript_list,
         args.num_jobs_manifest_preparation,
-        use_relative_path=True,
         data_dir=args.data_dir,
     )
     timeprint("Writing json...")

@@ -14,7 +14,7 @@
 # limitations under the License.
 
 import torch
-from apex.contrib.transducer import TransducerLoss
+from rnnt_ext.transducer.loss import TransducerLoss
 
 
 class ApexTransducerLoss(torch.nn.Module):
@@ -22,14 +22,28 @@ class ApexTransducerLoss(torch.nn.Module):
     NVIDIA apex RNNT implementation from the apex module transducer_loss_cuda.
     """
 
-    def __init__(self, blank_idx, packed_input, validate_first_n_remaining=10):
+    def __init__(
+        self,
+        blank_idx,
+        packed_input,
+        validate_first_n_remaining=10,
+    ):
         super().__init__()
         self.t_loss = TransducerLoss(packed_input=packed_input)
         self.packed_input = packed_input
         self.blank_idx = blank_idx
         self.validate_first_n_remaining = validate_first_n_remaining
 
-    def forward(self, logits, logit_lens, y, y_lens, batch_offset, max_f_len):
+    def forward(
+        self,
+        logits,
+        logit_lens,
+        y,
+        y_lens,
+        batch_offset,
+        max_f_len,
+        delay_penalty,
+    ):
         """
         Computes the RNNT loss function
 
@@ -71,7 +85,9 @@ class ApexTransducerLoss(torch.nn.Module):
             self.blank_idx,
             batch_offset=batch_offset,
             max_f_len=max_f_len,
+            delay_penalty=delay_penalty,
         ).mean()
+
         return loss
 
     def _validate_inputs(self, logits, batch_offset, y) -> None:

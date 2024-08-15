@@ -28,12 +28,12 @@ def val_arg_parser() -> ArgumentParser:
 
     optim = parser.add_argument_group("optimization setup")
     optim.add_argument(
-        "--val_batch_size", default=1, type=int, help="Evaluation time batch size"
+        "--val_batch_size", default=256, type=int, help="Evaluation time batch size"
     )
 
     io = parser.add_argument_group("feature and checkpointing setup")
     io.add_argument(
-        "--dali_device",
+        "--dali_val_device",
         type=str,
         choices=["cpu", "gpu"],
         default="cpu",

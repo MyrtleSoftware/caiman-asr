@@ -1,14 +1,15 @@
 import pytest
 
 from caiman_asr_train.utils.frame_width import (
-    encoder_frame_width,
+    encoder_output_frame_width,
     input_feat_frame_width,
 )
 
 
 def test_encoder_frame_width(mini_model_factory):
     _, config_path = mini_model_factory()
-    assert encoder_frame_width(config_path) == 0.03
+    # Note this is only true for the mini model
+    assert encoder_output_frame_width(config_path) == 0.03
 
 
 @pytest.mark.parametrize(

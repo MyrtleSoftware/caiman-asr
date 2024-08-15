@@ -10,7 +10,7 @@ from caiman_asr_train.data.dali.utils import _parse_json
 def test_simple_sampler(test_data_dir):
     json_files = str(test_data_dir / "peoples-speech-short.json")
     output_files, _ = _parse_json(json_files)
-    sampler = SimpleSampler()
+    sampler = SimpleSampler(1)
     sampler.make_file_list(output_files, json_names=[json_files])
     assert not sampler.is_sampler_random()
     assert sampler.get_dataset_size() == 2

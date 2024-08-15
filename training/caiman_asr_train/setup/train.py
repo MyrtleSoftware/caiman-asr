@@ -17,6 +17,10 @@ from caiman_asr_train.export.model_schema import check_schema_training
 from caiman_asr_train.log.tb_dllogger import init_log
 from caiman_asr_train.log.tee import start_logging_stdout_and_stderr
 from caiman_asr_train.rnnt import config
+from caiman_asr_train.rnnt.delay_schedules import (
+    ConstantDelayPenalty,
+    LinearDelayPenaltyScheduler,
+)
 from caiman_asr_train.rnnt.model import RNNT
 from caiman_asr_train.rnnt.sub_models import RNNTSubModels
 from caiman_asr_train.setup.base import Setup, TrainingOnly
@@ -146,6 +150,7 @@ class TrainSetup(Setup):
             grad_noise_scheduler=grad_noise_scheduler,
             optimizer_wrapper=optimizer_wrapper,
             train_step_fn=self.get_train_step_fn(args),
+            dp_scheduler=self.build_delay_penalty_scheduler(args),
         )
 
         return model, ema_model, training_only
@@ -159,7 +164,13 @@ class TrainSetup(Setup):
         optimizer,
         scaler: Optional[GradScaler],
     ) -> OptimizerWrapper:
-        return OptimizerWrapper(args, optimizer, scaler)
+        bound = (
+            None
+            if args.grad_scaler_lower_bound_log2 is None
+            else 2**args.grad_scaler_lower_bound_log2
+        )
+
+        return OptimizerWrapper(args, optimizer, scaler, lower_bound=bound)
 
     def build_tokenizer(
         self, args: Namespace, cfg: dict
@@ -199,6 +210,20 @@ class TrainSetup(Setup):
             grad_noise_conf["seed"] = args.seed
             grad_noise_scheduler = GradNoiseScheduler(**grad_noise_conf)
         return grad_noise_scheduler
+
+    def build_delay_penalty_scheduler(
+        self, args: Namespace
+    ) -> ConstantDelayPenalty | LinearDelayPenaltyScheduler:
+        if args.delay_penalty == "linear_schedule":
+            return LinearDelayPenaltyScheduler(
+                warmup_steps=args.dp_warmup_steps,
+                warmup_penalty=args.dp_warmup_penalty,
+                ramp_penalty=args.dp_ramp_penalty,
+                final_steps=args.dp_final_steps,
+                final_penalty=args.dp_final_penalty,
+            )
+        else:
+            return ConstantDelayPenalty(float(args.delay_penalty))
 
     def get_batch_sizes(self, args: Namespace) -> Dict[PipelineType, int]:
         # Effective batch size per GPU after grad accumulation
@@ -248,7 +273,7 @@ class TrainSetup(Setup):
                 resume_step=resume_step[TRAIN],
             )
         else:
-            train_sampler = dali_sampler.SimpleSampler()
+            train_sampler = dali_sampler.SimpleSampler(world_size=world_size)
         return {TRAIN: train_sampler, VAL: None}
 
     def pipeline_types(self) -> List[PipelineType]:

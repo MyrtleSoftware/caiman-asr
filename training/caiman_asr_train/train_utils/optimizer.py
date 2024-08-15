@@ -5,6 +5,8 @@ from beartype import beartype
 from beartype.typing import Optional
 from torch.cuda.amp import GradScaler
 
+from caiman_asr_train.train_utils.distributed import print_once
+
 
 @beartype
 class OptimizerWrapper:
@@ -15,10 +17,13 @@ class OptimizerWrapper:
         args: Namespace,
         optimizer,
         scaler: Optional[GradScaler],
+        lower_bound: Optional[float] = None,
     ):
         self.args = args
         self.optimizer = optimizer
         self.scaler = scaler
+        self.scale = None
+        self.lower_bound = lower_bound
 
     def zero_grad(self) -> None:
         self.optimizer.zero_grad()
@@ -26,7 +31,17 @@ class OptimizerWrapper:
     def step(self, total_norm: float) -> None:
         if not self.args.no_amp:
             self.do_scaler_step()
-            self.scaler.update()
+            self.scaler.update(self.scale)
+
+            if self.lower_bound is not None:
+                scale = self.scaler.get_scale()
+
+                if scale < self.lower_bound:
+                    print_once("WARNING: Overriding the grad scaler")
+                    self.scale = self.lower_bound
+                else:
+                    self.scale = None
+
         else:
             # when not using AMP test for inf / NaN gradients
             if np.isfinite(total_norm):

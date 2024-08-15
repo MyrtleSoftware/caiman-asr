@@ -4,7 +4,7 @@ from beartype import beartype
 from beartype.typing import List, Optional, Tuple
 from torch.cuda.amp import GradScaler
 
-from caiman_asr_train.train_utils.distributed import print_once
+from caiman_asr_train.train_utils.distributed import print_once, unwrap_ddp
 
 
 @beartype
@@ -22,7 +22,7 @@ def get_logging_entries(
     total_norm = 0.0
     tb_per_layer_logs = []
     try:
-        for n, p in getattr(model, "module", model).named_parameters():
+        for n, p in unwrap_ddp(model).named_parameters():
             # Only log/compute the gradnorm of parameters that aren't frozen:
             if not p.requires_grad:
                 continue

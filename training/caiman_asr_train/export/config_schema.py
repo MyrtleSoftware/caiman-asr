@@ -1,3 +1,4 @@
+from beartype.typing import ClassVar
 from pydantic import BaseModel
 
 
@@ -9,17 +10,17 @@ class Schema(BaseModel):
     required at inference time.
 
     Any training-specific config arguments that don't affect inference should be placed
-    in _allow_ignore.
+    in allow_ignore.
     """
 
-    _allow_ignore = set()
+    allow_ignore: ClassVar[set] = set()
 
     class Config:
         extra = "forbid"
 
     def __init__(self, **kwargs):
         keys = set(kwargs.keys())
-        for k in self._allow_ignore:
+        for k in self.allow_ignore:
             if k in keys:
                 kwargs.pop(k)
         super().__init__(**kwargs)
@@ -35,7 +36,7 @@ class FilterbankFeaturesSchema(Schema):
     window_size: float
     window_stride: float
 
-    _allow_ignore = {
+    allow_ignore = {
         "stats_path",
     }
 
@@ -55,7 +56,7 @@ class ModelSchema(Schema):
     pred_n_hid: int
     pred_rnn_layers: int
 
-    _allow_ignore = {
+    allow_ignore = {
         "custom_lstm",
         "enc_batch_norm",
         "enc_dropout",
@@ -85,7 +86,7 @@ class TokenizerSchema(Schema):
     labels: list
     sentpiece_model: str
 
-    _allow_ignore = {
+    allow_ignore = {
         "sampling",
     }
 
@@ -94,7 +95,7 @@ class InputValSchema(Schema):
     filterbank_features: FilterbankFeaturesSchema
     frame_splicing: FrameSplicingSchema
 
-    _allow_ignore = {
+    allow_ignore = {
         "audio_dataset",
     }
 
@@ -104,7 +105,7 @@ class RNNTInferenceConfigSchema(Schema):
     rnnt: ModelSchema
     tokenizer: TokenizerSchema
 
-    _allow_ignore = {
+    allow_ignore = {
         "input_train",
         "grad_noise_scheduler",
         "ngram",

@@ -33,30 +33,33 @@ from caiman_asr_train.log.profiling import (
     set_up_profiling,
 )
 from caiman_asr_train.log.tb_dllogger import flush_log, log
+from caiman_asr_train.rnnt import config
 from caiman_asr_train.setup.core import TRAIN, VAL
 from caiman_asr_train.setup.train import TrainSetup
 from caiman_asr_train.train_utils.core import calculate_epoch, log_end_of_epoch
-from caiman_asr_train.train_utils.distributed import print_once
+from caiman_asr_train.train_utils.distributed import print_once, unwrap_ddp
 from caiman_asr_train.train_utils.rsp import (
     generate_batch_history,
     rsp_config_checks,
     rsp_end_step,
 )
 from caiman_asr_train.train_utils.torchrun import maybe_restart_with_torchrun
+from caiman_asr_train.utils.frame_width import input_feat_frame_width
 
 
 def apply_ema(model, ema_model, decay):
     if not decay:
         return
 
-    sd = getattr(model, "module", model).state_dict()
+    sd = unwrap_ddp(model).state_dict()
     for k, v in ema_model.state_dict().items():
         v.copy_(decay * v + (1 - decay) * sd[k])
 
 
 def main(args, train_objects):
-    args = verify_train_args(args)
+    verify_train_args(args)
     check_shared_args(args)
+
     world_size = train_objects.world_size
 
     assert (
@@ -151,8 +154,11 @@ def main(args, train_objects):
     checkpointer = train_objects.training_only.checkpointer
     model.train()
     state = None
+    frame_width = input_feat_frame_width(config.load(args.model_config))
 
     rsp_counter = generate_batch_history(args.rsp_seq_len_freq)
+
+    dp_scheduler = train_objects.training_only.dp_scheduler
 
     # training loop
     while step <= args.training_steps:
@@ -184,17 +190,22 @@ def main(args, train_objects):
         epoch_start_time = time.time()
 
         before_dataloading = time.time()
+
         for batch in train_loader:
             dataloading_total += time.time() - before_dataloading
+
             if accumulated_batches == 0:
                 train_objects.training_only.adjust_lr(step)
                 optimizer_wrapper.zero_grad()
                 step_utts = 0
+                step_frames = 0
                 all_feat_lens = []
                 losses = []
                 if noise_schedule is not None:
                     noise_schedule.adjust_snrs(step)
                 mel_feat_norm.step(step)
+
+                dp_scheduler.step(step)
 
             audio, audio_lens, txt, txt_lens, _ = batch
 
@@ -202,11 +213,12 @@ def main(args, train_objects):
             # audio_lens is (batch,)
 
             # if these tensors were computed on cpu then move them to gpu
-            if args.dali_device == "cpu":
+            if args.dali_train_device == "cpu":
                 audio = audio.cuda()
                 audio_lens = audio_lens.cuda()
                 txt = txt.cuda()
                 txt_lens = txt_lens.cuda()
+
             before_feat_proc = time.time()
 
             # now do spec augment / frame stacking
@@ -228,6 +240,7 @@ def main(args, train_objects):
                 txt_lens=txt_lens,
                 scaler=scaler,
                 rnnt_state=state,
+                delay_penalty=dp_scheduler.get_value(),
             )
 
             forward_backward_total += time.time() - before_forward_backward
@@ -235,22 +248,25 @@ def main(args, train_objects):
             if not loss_nan:
                 losses.append(loss_item)
                 step_utts += batch[0].size(0) * world_size
+                step_frames += (feats.size(0) * feats.size(1)) * world_size
                 epoch_utts += batch[0].size(0) * world_size
                 accumulated_batches += 1
+            else:
+                # NaN's pollute accumulated gradients,
+                # this will trigger a reset on the next iteration.
+                accumulated_batches = 0
+                print_once("WARNING: loss is NaN; dropping global batch")
 
             state, rsp_counter = rsp_end_step(state, loss_nan, step, args, rsp_counter)
 
-            # the > 0 condition prevents 1st batch NaNs entering this code
-            if (
-                accumulated_batches > 0
-                and accumulated_batches % args.grad_accumulation_batches == 0
-            ):
+            if accumulated_batches == args.grad_accumulation_batches:
                 total_norm, tb_per_layer_logs, log2_scaler = get_logging_entries(
                     model, scaler
                 )
 
                 # Add noise to the gradients of the encoder tensors
                 grad_noise_scheduler = train_objects.training_only.grad_noise_scheduler
+
                 if grad_noise_scheduler is not None:
                     model = grad_noise_scheduler.add_grad_noise(
                         model=model,
@@ -309,7 +325,10 @@ def main(args, train_objects):
                         {
                             "loss": sum(losses),
                             **wer,  # optional entry
-                            "throughput": step_utts / step_time,
+                            "throughput-audio-samples-per-sec": step_utts / step_time,
+                            "throughput-audio-secs-per-sec": step_frames
+                            * frame_width
+                            / step_time,
                             "took": step_time,
                             "grad-norm": total_norm,
                             "seq-len-min": min(all_feat_lens).item(),
@@ -318,6 +337,7 @@ def main(args, train_objects):
                                 sum(all_feat_lens) / len(all_feat_lens)
                             ).item(),
                             "lrate": lr_,
+                            "delay_penalty": dp_scheduler.get_value(),
                             "log2_scaler": log2_scaler,
                             "logmel_mean": no_pad_mean.item(),
                             "logmel_std": no_pad_std.item(),
@@ -329,7 +349,11 @@ def main(args, train_objects):
                     step_start_time = time.time()
 
                 # evaluating on validation set
-                if step % args.val_frequency == 0 or step == args.training_steps:
+                if (
+                    step == 1
+                    or step % args.val_frequency == 0
+                    or step == args.training_steps
+                ):
                     wer = evaluate(
                         epoch,
                         step,
@@ -384,9 +408,11 @@ def main(args, train_objects):
                 if step > args.training_steps:
                     break
                 accumulated_batches = 0
+
             before_dataloading = time.time()
 
         log_end_of_epoch(epoch_start_time, epoch, epoch_utts)
+
         if steps_per_epoch is not None:
             # update epoch unless in 1st epoch of tar files
             epoch += 1

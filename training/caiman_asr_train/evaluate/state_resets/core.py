@@ -294,9 +294,9 @@ def reshape_feats(
     new_feats = feats.transpose(0, 1)
 
     new_feat_lens = (
-        torch.ones(new_feats.shape[1], dtype=torch.int32) * new_feats.shape[0]
+        torch.ones(new_feats.shape[1], dtype=torch.int32, device=new_feats.device)
+        * new_feats.shape[0]
     )
-    new_feat_lens.to(device=new_feats.device)
 
     return new_feats, new_feat_lens
 

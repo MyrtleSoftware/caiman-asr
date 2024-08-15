@@ -347,22 +347,6 @@ void lstm_fused_bwd_impl(
 
 } // namespace
 
-#define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
-
-#define CHECK_CONTIGUOUS(x)                   \
-  TORCH_CHECK(                                \
-      x.is_contiguous(),                      \
-      #x " must be contiguous but got shape", \
-      x.sizes(),                              \
-      " and strides ",                        \
-      x.strides(),                            \
-      " such that numel is ",                 \
-      x.numel())
-
-#define CHECK_INPUT(x) \
-  CHECK_CUDA(x);       \
-  CHECK_CONTIGUOUS(x)
-
 /**
  * Check inputs and dispatch to typed-implementation
  */
@@ -373,10 +357,10 @@ void lstm_fused_fwd(
     torch::Tensor c,
     torch::Tensor y //
 ) {
-  CHECK_INPUT(R);
-  CHECK_INPUT(gates);
-  CHECK_INPUT(c);
-  CHECK_INPUT(y);
+  MYRTLE_CHECK_INPUT(R);
+  MYRTLE_CHECK_INPUT(gates);
+  MYRTLE_CHECK_INPUT(c);
+  MYRTLE_CHECK_INPUT(y);
 
   MYRTLE_DISPATCH_FLOATING_TYPES(gates.scalar_type(), "lstm_fused_fwd", [&] {
     if (myrtle::can_use_32bit_math(gates)) {
@@ -399,12 +383,12 @@ void lstm_fused_bwd(
     torch::Tensor dG //
 ) {
   // Contiguous not required as we will make a copy.
-  CHECK_CUDA(delta);
+  MYRTLE_CHECK_CUDA(delta);
 
-  CHECK_INPUT(R);
-  CHECK_INPUT(gates);
-  CHECK_INPUT(c);
-  CHECK_INPUT(dG);
+  MYRTLE_CHECK_INPUT(R);
+  MYRTLE_CHECK_INPUT(gates);
+  MYRTLE_CHECK_INPUT(c);
+  MYRTLE_CHECK_INPUT(dG);
 
   // Copy needed as partials will be modified in-place.
   torch::Tensor partials = torch::empty_like(delta, {}, at::MemoryFormat::Contiguous);

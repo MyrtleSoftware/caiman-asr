@@ -61,4 +61,8 @@ class Tokenizer:
         return inds
 
     def detokenize(self, inds: int | List[int]) -> str:
+        if inds == 0:
+            # sentpiece.decode([0]) == " ⁇ " but sentpiece.decode(0) inconsistently is "".
+            # group_timestamps() requires consistency.
+            return "⁇"
         return self.sentpiece.decode(inds)

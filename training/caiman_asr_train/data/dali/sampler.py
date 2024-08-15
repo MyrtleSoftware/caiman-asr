@@ -13,9 +13,11 @@
 # limitations under the License.
 
 import os
+from itertools import chain, islice
 from math import ceil
 
 import numpy as np
+import torch.distributed as dist
 
 
 def hash_list_of_strings(li):
@@ -23,9 +25,11 @@ def hash_list_of_strings(li):
 
 
 class SimpleSampler:
-    def __init__(self):
+    def __init__(self, world_size, sort_by_duration=False):
         self.file_list_path = None
         self.dataset_size = None
+        self.sort_by_duration = sort_by_duration
+        self.world_size = world_size
 
     def write_file_list(self, files):
         with open(self.file_list_path, "w") as f:
@@ -55,13 +59,42 @@ class SimpleSampler:
 
     def process_output_files(self, output_files):
         self.dataset_size = len(output_files)
-        return [(path, entry["label"]) for path, entry in output_files.items()]
+
+        def dur(x):
+            return x[1]["duration"]
+
+        iter = (
+            sorted(output_files.items(), key=dur, reverse=True)
+            if self.sort_by_duration
+            else output_files.items()
+        )
+
+        if self.sort_by_duration and self.world_size > 1:
+            iter = list(
+                chain.from_iterable(
+                    islice(iter, i, None, self.world_size)
+                    for i in range(self.world_size)
+                )
+            )
+
+        return [(path, entry["label"]) for path, entry in iter]
 
     def make_file_list(self, output_files, json_names):
-        self.file_list_path = os.path.join(
-            "/tmp", "rnnt_dali.file_list." + hash_list_of_strings(json_names)
-        )
-        self.write_file_list(self.process_output_files(output_files))
+        objects = [self.file_list_path, self.dataset_size]
+        world_size = dist.get_world_size() if dist.is_initialized() else 1
+        if world_size == 1 or dist.get_rank() == 0:
+            self.file_list_path = str(
+                os.path.join(
+                    "/tmp", "rnnt_dali.file_list." + hash_list_of_strings(json_names)
+                )
+            )
+            self.write_file_list(self.process_output_files(output_files))
+            objects = [self.file_list_path, self.dataset_size]
+        else:
+            objects = [None, None]
+        if dist.is_initialized():
+            dist.broadcast_object_list(objects, src=0)
+        self.file_list_path, self.dataset_size = objects
 
 
 class BucketingSampler(SimpleSampler):
@@ -75,7 +108,7 @@ class BucketingSampler(SimpleSampler):
         rng,
         resume_step,
     ):
-        super(BucketingSampler, self).__init__()
+        super(BucketingSampler, self).__init__(world_size=num_workers)
         # Shuffle the data in the same way across all processes:
         self.rng = rng
         self.num_buckets = num_buckets

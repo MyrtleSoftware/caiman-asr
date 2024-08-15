@@ -3,6 +3,10 @@ import os
 import time
 from argparse import Namespace
 
+from caiman_asr_train.args.delay_penalty import (
+    add_delay_penalty_args,
+    verify_delay_penalty_args,
+)
 from caiman_asr_train.args.noise_augmentation import add_noise_augmentation_args
 from caiman_asr_train.args.shared import add_shared_args
 from caiman_asr_train.data.make_datasets.librispeech import LIBRISPEECH_TRAIN960H
@@ -95,7 +99,7 @@ def train_arg_parser() -> argparse.ArgumentParser:
         "is than the joint/loss batch size",
     )
     optim.add_argument(
-        "--val_batch_size", default=1, type=int, help="Evaluation time batch size"
+        "--val_batch_size", default=16, type=int, help="Evaluation time batch size"
     )
     optim.add_argument(
         "--lr", "--learning_rate", default=4e-3, type=float, help="Peak learning rate"
@@ -129,10 +133,24 @@ def train_arg_parser() -> argparse.ArgumentParser:
         default=0.999,
         help="Discount factor for exp averaging of model weights",
     )
+    optim.add_argument(
+        "-scaler_lbl2",
+        "--grad_scaler_lower_bound_log2",
+        default=None,
+        type=float,
+        help="The minimum value of the gradient scaler, set to None for no minimum",
+    )
 
     io = parser.add_argument_group("feature and checkpointing setup")
     io.add_argument(
-        "--dali_device",
+        "--dali_train_device",
+        type=str,
+        choices=["cpu", "gpu"],
+        default="gpu",
+        help="Use DALI pipeline for fast data processing",
+    )
+    io.add_argument(
+        "--dali_val_device",
         type=str,
         choices=["cpu", "gpu"],
         default="cpu",
@@ -330,10 +348,11 @@ def train_arg_parser() -> argparse.ArgumentParser:
     )
     add_noise_augmentation_args(parser)
     add_shared_args(parser)
+    add_delay_penalty_args(parser)
     return parser
 
 
-def verify_train_args(args: Namespace) -> Namespace:
+def verify_train_args(args: Namespace) -> None:
     # check data path args
     if not args.read_from_tar:
         assert (
@@ -352,4 +371,4 @@ def verify_train_args(args: Namespace) -> Namespace:
             args.train_tar_files is not None
         ), "Must provide train_tar_files if --read_from_tar=True"
 
-    return args
+    verify_delay_penalty_args(args)

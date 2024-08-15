@@ -13,17 +13,17 @@ def build_ext(name):
         return str(Path(__file__).resolve().parent.joinpath(r_path))
 
     return CUDAExtension(
-        name=f"{name}_cu",
+        name=f"rnnt_ext.cuda.{name}",
         sources=[localize(f"csrc/{name}.cu")],
         include_dirs=[localize("csrc")],  # Ninja requires absolute paths
         extra_compile_args={
-            "cxx": ["-O3"],
+            "cxx": ["-O3", "-march=native"],
             "nvcc": ["-O3", "--use_fast_math"],
         },
     )
 
 
-modules = list(map(build_ext, ["lstm"]))
+modules = list(map(build_ext, ["logsumexp", "transducer_loss", "lstm"]))
 
 setup(
     name="rnnt_ext",

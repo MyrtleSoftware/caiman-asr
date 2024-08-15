@@ -25,6 +25,12 @@ def add_shared_args(parser: ArgumentParser) -> None:
         affect WER. This option turns that off.""",
     )
     parser.add_argument(
+        "--val_final_padding_secs",
+        type=float,
+        default=0.24,
+        help="Validation audio will be padded at the end with this much silence",
+    )
+    parser.add_argument(
         "--prob_val_narrowband",
         type=float,
         default=0.0,
@@ -86,12 +92,6 @@ def add_shared_args(parser: ArgumentParser) -> None:
         "It can be the same as the audio directory.",
     )
     parser.add_argument(
-        "--dump_preds",
-        action="store_true",
-        default=False,
-        help="Dump text predictions to /{output_dir}/preds.txt",
-    )
-    parser.add_argument(
         "--dali_processes_per_cpu",
         type=float,
         default=1.0,
@@ -105,6 +105,12 @@ def add_shared_args(parser: ArgumentParser) -> None:
         action="store_true",
         help="""Enable profiling with yappi and save top/nvidia-smi logs.
         This may slow down training/validation""",
+    )
+    parser.add_argument(
+        "--calculate_emission_latency",
+        action="store_true",
+        default=False,
+        help="Export timestamps per word to .ctm file and calculate emission latencies",
     )
     add_state_reset_args(parser)
     add_mel_feat_norm_args(parser)
@@ -150,20 +156,9 @@ def add_state_reset_args(parser: ArgumentParser) -> None:
 
 
 @beartype
-def check_state_reset_args(args: Namespace) -> None:
-    """require validation batch size = 1 if state resets is used"""
-    if args.sr_segment:
-        assert (
-            args.val_batch_size == 1
-        ), "Please set --val_batch_size=1 to use state resets."
-        print_once(
-            f"If running validation: state resets are used every {args.sr_segment} "
-            f"seconds with overlap of {args.sr_overlap} seconds."
-        )
-
-
-@beartype
 def check_shared_args(args: Namespace) -> None:
+    if args.fuzzy_topk_logits and args.decoder == "greedy":
+        raise ValueError("--fuzzy_topk_logits is not supported with greedy decoding")
     if args.val_from_dir:
         assert validation_directories_provided(
             audio_dir=args.val_audio_dir, txt_dir=args.val_txt_dir
@@ -189,8 +184,11 @@ def check_shared_args(args: Namespace) -> None:
         ), f"Must provide {args.val_manifests=} if not reading from tar files"
         "or not reading audio and transcripts from directories"
 
+    if args.calculate_emission_latency:
+        val_multiple = len(args.val_manifests) > 1
+        check_latency_args(args, val_multiple)
+
     check_mel_feat_norm_args(args)
-    check_state_reset_args(args)
 
 
 @beartype
@@ -250,3 +248,21 @@ def check_directories_are_valid(audio_dir: str, txt_dir: str, dataset_dir) -> No
             f"Audio and txt directories do not contain the same files. "
             f"Provided directories are: {audio_dir=}, txt files: {txt_dir=}"
         )
+
+
+@beartype
+def check_latency_args(args: Namespace, val_multiple: bool = False):
+    """
+    Validates arguments for emission latency.
+    """
+    assert (
+        not args.use_hugging_face
+    ), "Emission latency and Hugging Face datasets are incompatible"
+    assert (
+        args.decoder != "beam"
+    ), "Returning model timestamps is not supported with the beam decoder"
+
+    if val_multiple:
+        assert (
+            not args.read_from_tar
+        ), "TAR files are not supported with the val_multiple script."

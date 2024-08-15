@@ -2,6 +2,7 @@
 # Copyright (c) 2024, Myrtle.ai. All rights reserved.
 
 import json
+import logging
 import multiprocessing
 from pathlib import Path
 from typing import Dict, List, Union
@@ -10,24 +11,34 @@ import pandas as pd
 import sox
 
 
-def load_manifest(fpath: Union[str, Path]) -> Dict:
+def load_manifest(fpath: Union[str, Path]) -> List[Dict]:
     with open(fpath, "r") as fp:
         manifest = json.load(fp)
     return manifest
 
 
-def save_manifest(manifest, fpath) -> None:
+def save_manifest(manifest: List[Dict], fpath: Union[str, Path]) -> None:
+    logging.info(
+        f"Saving {fpath} manifest to disk, " f"contains {len(manifest)} entries"
+    )
     with open(fpath, "w") as fp:
         json.dump(manifest, fp, indent=2)
 
 
 def validate_manifest(manifest: List[Dict], data_dir: Union[str, Path, None] = None):
     """
-    Validate manifest:
+    Validate a manifest which is a list of dictionaries. The `data_dir` argument
+    is required if audio filepaths are relative and not absolute. Otherwise, leave
+    it as None. The validation process checks the following:
         1) all audio files exist
         2) no transcript is empty
         3) relevant audio metadata is correct
         4) there are no duplicate audio files
+
+    Args:
+    :manifest: a JSON manifest as a list of items, each item describes 1 utt.
+    :data_dir: a data directory path where to search for audio files, needed if
+        the manifest contains relative paths
     """
     if data_dir is None:
         data_dir = Path("/")
@@ -59,9 +70,7 @@ def validate_manifest(manifest: List[Dict], data_dir: Union[str, Path, None] = N
     assert len(set(files)) == len(files), "duplicate items in manifest"
 
 
-def process_utterance(
-    data: Dict, use_relative_path: bool = False, data_dir="./"
-) -> Dict:
+def process_utterance(data: Dict, data_dir: Union[str, Path, None] = None) -> Dict:
     """
     Process single data item (dict) which is of following format:
     {
@@ -88,16 +97,20 @@ def process_utterance(
         "original_duration": 11.21,
         "original_num_samples": 179360
     }
+    Args:
+    :data: a dictionary describing a single utterance
+    :data_dir: a data directory path where to search for audio files, needed if
+        the manifest contains relative paths
     """
+    if data_dir is None:
+        data_dir = Path("/")
+    else:
+        data_dir = Path(data_dir)
     audio_file, trans = data.values()
-    data_dir = Path(data_dir)
-    audio_file = Path(audio_file)
+    audio_file = data_dir / Path(audio_file)
 
     file_info = sox.file_info.info(str(audio_file))
-    if use_relative_path:
-        file_info["fname"] = str(audio_file.relative_to(data_dir))
-    else:
-        file_info["fname"] = str(audio_file)
+    file_info["fname"] = str(audio_file)
 
     return {
         "transcript": trans,
@@ -108,10 +121,14 @@ def process_utterance(
 
 
 def prepare_manifest(
-    data: List[Dict], num_jobs: int = 1, use_relative_path: bool = False, data_dir="./"
+    data: List[Dict], num_jobs: int = 1, data_dir: Union[str, Path, None] = None
 ) -> List[Dict]:
     """
-    Prepare a manifest given a data object of following structure:
+    Takes in `data` and creates a manifest in a parallel fashion. The `data_dir`
+    argument is needed if the `audio_file` is relative and not absolute. The output
+    manifest will contain audio filepaths based on this setting.
+
+    Data is in the following format:
     [
         {
             'audio_file': name of audio with extension,
@@ -119,7 +136,7 @@ def prepare_manifest(
         }
     ]
 
-    The output format is a list of dictionaries, i.e.:
+    Manifest is a list of dictionaries, i.e.:
     [
         {
         "transcript": "BLA BLA BLA ...",
@@ -141,12 +158,16 @@ def prepare_manifest(
         },
         ...
     ]
+
+    Args:
+    :data: a list of items where each item contains info on an utterance
+    :num_jobs: a number of jobs to run the process in parallel
+    :data_dir: a data directory path where to search for audio files, needed if
+        the manifest contains relative paths
     """
     # run multiprocessing over all items in data
     with multiprocessing.Pool(num_jobs) as pool:
-        dataset = pool.starmap(
-            process_utterance, [(item, use_relative_path, data_dir) for item in data]
-        )
+        dataset = pool.starmap(process_utterance, [(item, data_dir) for item in data])
     dataset = sorted(dataset, key=lambda x: x["files"][0]["fname"])
     dataset = list(filter(all_fields_exist, dataset))
 

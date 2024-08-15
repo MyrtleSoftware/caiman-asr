@@ -17,5 +17,15 @@ class testTokenizer(unittest.TestCase):
         pass
 
 
+def test_tokenizer_unk(tokenizer):
+    assert "" == tokenizer.sentpiece.decode(0)
+    assert "c" == tokenizer.sentpiece.decode(15)
+    assert "a" == tokenizer.sentpiece.decode(5)
+    assert "t" == tokenizer.sentpiece.decode(4)
+    # 0 detokenizes differently when part of a list
+    assert " ⁇ cat" == tokenizer.sentpiece.decode([0, 15, 5, 4])
+    assert " ⁇ " == tokenizer.sentpiece.decode([0])
+
+
 if __name__ == "__main__":
     unittest.main()

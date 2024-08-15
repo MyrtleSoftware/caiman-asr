@@ -6,7 +6,7 @@ from caiman_asr_train.rnnt import config
 
 
 @beartype
-def encoder_frame_width(model_config_path: str) -> float:
+def encoder_output_frame_width(model_config_path: str) -> float:
     """Calculates the effective frame width in seconds from model config.
 
     This function will return the duration in seconds of a frame.

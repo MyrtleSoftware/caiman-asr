@@ -40,18 +40,15 @@ def validate(
 
     If return_dataloader=True, return dataloader in results dict.
     """
-    if val_objects.multi_gpu:
-        torch.distributed.barrier()
-
     # A checkpoint should always be specified
     assert args.ckpt is not None
 
     if val_objects.multi_gpu:
+        torch.distributed.barrier()
         assert args.nth_batch_only is None, "nth_batch_only not supported in multi-gpu"
 
     epoch = 1
     step = None  # Switches off logging of val data results to TensorBoard
-
     val_loader = val_objects.data_objects[VAL].loader
     results = evaluate(
         epoch,
@@ -106,6 +103,8 @@ def build_objects(args):
 
 
 def validation_routine(args, build_objects_func, validation_func):
+    check_shared_args(args)
+    check_val_arguments(args)
     if os.path.isdir(args.ckpt):
         # If directory, iterate over all ckpts in given dir
         ckpt_directory = args.ckpt
@@ -134,8 +133,6 @@ def validation_routine(args, build_objects_func, validation_func):
 
 
 def run_validate(args: Namespace, val_objects: BuiltObjects):
-    check_shared_args(args)
-    check_val_arguments(args)
     # check data path args
     if not args.read_from_tar:
         assert (

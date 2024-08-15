@@ -19,7 +19,8 @@ def gen_dataload_args(test_data_dir) -> Namespace:
         local_rank=0,
         num_buckets=6,
         dataset_dir=str(test_data_dir),
-        dali_device="cpu",
+        dali_train_device="cpu",
+        dali_val_device="cpu",
         prob_background_noise=0.0,
         prob_babble_noise=0.0,
         train_tar_files=None,
@@ -51,6 +52,7 @@ def gen_dataload_args(test_data_dir) -> Namespace:
         warmup_steps=1000,
         hold_steps=1000,
         half_life_steps=1000,
+        val_final_padding_secs=0.0,
     )
 
 

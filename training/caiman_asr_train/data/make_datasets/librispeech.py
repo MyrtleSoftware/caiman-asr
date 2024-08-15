@@ -82,8 +82,7 @@ def get_parser():
     )
     parser.add_argument(
         "--use_relative_path",
-        default=True,
-        type=bool,
+        action="store_true",
         help="Use relative audio path in manifests",
     )
     parser.add_argument(
@@ -183,14 +182,21 @@ class LibriSpeech:
         dataset_parts: Union[str, Sequence[str]] = self.dataset_parts
         use_relative_path: bool = self.use_relative_path
         num_jobs: int = self.num_jobs
+        audio_ext = "flac"
+        trans_ext = "trans.txt"
 
         manifests = {}
         for part in dataset_parts:
             logging.info(f"Parsing audio and transcripts files for `{part}`")
             subdir = data_dir / Path(part)
-            trans_files = subdir.rglob("*.trans.txt")
-            audio_files = subdir.rglob("*.flac")
-            audio_dict = {f.stem: f.absolute() for f in audio_files}
+            trans_files = subdir.rglob(f"*.{trans_ext}")
+            audio_files = subdir.rglob(f"*[0-9].{audio_ext}")
+            if use_relative_path:
+                audio_files = [f.relative_to(data_dir) for f in audio_files]
+            audio_dict = {
+                str(f.name).removesuffix(f".{audio_ext}"): f.absolute()
+                for f in audio_files
+            }
 
             # Parse trans files into a dict{file_id: transcript}
             trans_dict = {}
@@ -216,14 +222,11 @@ class LibriSpeech:
             # Create manifest
             logging.info("Generating manifest")
             manifest = prepare_manifest(
-                input_data, num_jobs, use_relative_path, data_dir
+                input_data, num_jobs, data_dir if use_relative_path else None
             )
 
             logging.info("Validating manifest")
-            if use_relative_path:
-                validate_manifest(manifest, data_dir)
-            else:
-                validate_manifest(manifest)
+            validate_manifest(manifest, data_dir if use_relative_path else None)
             manifests[part] = manifest
 
             # Save manifests
@@ -231,7 +234,7 @@ class LibriSpeech:
                 f"Saving librispeech-{part}.json manifest to disk, "
                 f"contains {len(manifest)} entries"
             )
-            manifest_path = self.data_dir / f"librispeech-{part}.json"
+            manifest_path = self.data_dir / f"librispeech-{part}.{audio_ext}.json"
             save_manifest(manifests[part], manifest_path)
 
     def run(self):

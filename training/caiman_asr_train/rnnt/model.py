@@ -277,9 +277,9 @@ class RNNT(nn.Module):
 
         g, _, all_pred_hid = predict(
             y,
-            pred_state=pred_net_state.next_to_last_pred_state
-            if pred_net_state
-            else None,
+            pred_state=(
+                pred_net_state.next_to_last_pred_state if pred_net_state else None
+            ),
             add_sos=True,
             special_sos=pred_net_state.last_token if pred_net_state else None,
         )
@@ -362,31 +362,39 @@ class RNNT(nn.Module):
                 embedding.
 
         Returns:
-            Tuple (g, hid) where:
+            Tuple (g, hid, all_hid) where:
                 g: (B, U + 1, H)
                 hid: (h, c) where h is the final sequence hidden state and c is
                     the final cell state:
                         h (tensor), shape (L, B, H)
                         c (tensor), shape (L, B, H)
+                all_hid: (h_all, c_all) where h_all is all the hidden states and c_all
+                    is all the cell states.
         """
         if y is not None:
             # (B, U) -> (B, U, H)
             y = self.prediction["embed"](y)
         else:
             B = 1 if pred_state is None else pred_state[0].size(1)
-            y = torch.zeros((B, 1, self.pred_n_hid)).to(
-                device=self.joint_enc.weight.device, dtype=self.joint_enc.weight.dtype
+
+            y = torch.zeros(
+                (B, 1, self.pred_n_hid),
+                device=self.joint_enc.weight.device,
+                dtype=self.joint_enc.weight.dtype,
             )
 
         # prepend blank "start of sequence" symbol
         if add_sos:
             B, U, H = y.shape
-            sos_embedding = (
-                torch.zeros((B, 1, H))
+
+            start = (
+                torch.zeros((B, 1, H), device=y.device, dtype=y.dtype)
                 if special_sos is None
-                else self.prediction["embed"](special_sos)
+                else self.prediction["embed"](special_sos).to(
+                    device=y.device, dtype=y.dtype
+                )
             )
-            start = sos_embedding.to(device=y.device, dtype=y.dtype)
+
             y = torch.cat([start, y], dim=1).contiguous()  # (B, U + 1, H)
         else:
             start = None  # makes del call later easier

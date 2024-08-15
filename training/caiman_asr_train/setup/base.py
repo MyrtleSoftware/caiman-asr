@@ -21,9 +21,13 @@ from caiman_asr_train.data.tokenizer import Tokenizer
 from caiman_asr_train.export.checkpointer import Checkpointer
 from caiman_asr_train.lm.kenlm_ngram import NgramInfo, find_ngram_path
 from caiman_asr_train.rnnt import config
+from caiman_asr_train.rnnt.batched_greedy import RNNTBatchedGreedyDecoder
 from caiman_asr_train.rnnt.beam import RNNTBeamDecoder
 from caiman_asr_train.rnnt.decoder import RNNTDecoder
-from caiman_asr_train.rnnt.greedy import RNNTGreedyDecoder
+from caiman_asr_train.rnnt.delay_schedules import (
+    ConstantDelayPenalty,
+    LinearDelayPenaltyScheduler,
+)
 from caiman_asr_train.rnnt.loss import ApexTransducerLoss
 from caiman_asr_train.rnnt.model import RNNT
 from caiman_asr_train.rnnt.sub_models import RNNTSubModels
@@ -44,6 +48,7 @@ class TrainingOnly:
     grad_noise_scheduler: Optional[GradNoiseScheduler]
     optimizer_wrapper: OptimizerWrapper
     train_step_fn: Callable
+    dp_scheduler: ConstantDelayPenalty | LinearDelayPenaltyScheduler
 
 
 @beartype
@@ -92,7 +97,12 @@ class Setup(ABC):
             args, cfg, default_tokenizer, multi_gpu, default_tokenizer_kw
         )
         decoder, loss_fn = self.build_evaluation_objects(
-            ema_model, args, cfg, blank_idx, default_tokenizer, default_tokenizer_kw
+            ema_model,
+            args,
+            cfg,
+            blank_idx,
+            default_tokenizer,
+            default_tokenizer_kw,
         )
         data_objects, feat_procs = self.build_data_and_feat_proc(
             args, np_rng, world_size, batch_sizes, cfg, tokenizers, training_only
@@ -202,9 +212,7 @@ class Setup(ABC):
         ngram_info: Optional[NgramInfo],
     ) -> RNNTDecoder:
         if args.decoder == "greedy":
-            if args.fuzzy_topk_logits:
-                print_once("--fuzzy_topk_logits is not supported with greedy decoding")
-            return RNNTGreedyDecoder(
+            return RNNTBatchedGreedyDecoder(
                 model=ema_model,
                 blank_idx=blank_idx,
                 max_inputs_per_batch=args.max_inputs_per_batch,
@@ -230,11 +238,16 @@ class Setup(ABC):
     ) -> None:
         return None
 
-    def build_loss_fn(self, blank_idx: int, cfg: dict) -> ApexTransducerLoss:
+    def build_loss_fn(
+        self,
+        blank_idx: int,
+        cfg: dict,
+    ) -> ApexTransducerLoss:
         """set up the loss function: if the TransducerJoint has packed_output=True then the
         input to the ApexTransducerLoss must have packed_input=True"""
         rnnt_config = config.rnnt(cfg)
         rnnt_config["gpu_unavailable"] = self.preferred_device() == CPU
+
         return ApexTransducerLoss(
             blank_idx=blank_idx,
             packed_input=rnnt_config["joint_apex_transducer"] == "pack",

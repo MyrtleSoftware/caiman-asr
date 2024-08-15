@@ -53,6 +53,7 @@ DOCKER_ARGS+=" -v $hf_cache_volume "
 
 DOCKER_ARGS+="$EXTRA_VOLUMES $volumes "
 DOCKER_ARGS+="-e TZ=$(cat /etc/timezone) "
+DOCKER_ARGS+="-e CONTAINER_OWNER=$(logname) "
 
 if [ -n "${SNAKEVIZ_PORT+x}" ]; then
     DOCKER_ARGS+="-e SNAKEVIZ_PORT=$SNAKEVIZ_PORT "

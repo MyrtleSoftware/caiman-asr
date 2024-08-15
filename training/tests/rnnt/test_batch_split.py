@@ -26,7 +26,9 @@ def loss_fn(n_classes_fixture):
 
 @pytest.fixture()
 def args():
-    return Namespace(grad_accumulation_batches=1, batch_split_factor=8, num_gpus=1)
+    return Namespace(
+        grad_accumulation_batches=1, batch_split_factor=8, num_gpus=1, delay_penalty=0.0
+    )
 
 
 @pytest.fixture()
@@ -124,6 +126,7 @@ def test_batch_split_train_step_equiv(
         *data1,
         scaler=scaler1,
         rnnt_state=None,
+        delay_penalty=0.0,
     )
 
     results2 = train_step(
@@ -133,6 +136,7 @@ def test_batch_split_train_step_equiv(
         *data2,
         scaler=scaler2,
         rnnt_state=None,
+        delay_penalty=0.0,
     )
 
     compare_step_results(results1, results2, model1, model2, scaler1, scaler2)

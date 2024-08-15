@@ -28,16 +28,17 @@ CAIMAN-ASR is provided pre-trained for English language transcription. For appli
 
 The solution supports two models: `base` and `large` of sizes 85M and 196M parameters respectively. These can be decoded with various configurations that trade off accuracy with latency and throughput. These trade-offs are described in more detail in the [performance page](./performance.md) but the 'fastest' and 'most accurate' configurations are summarized below:
 
-| Description   | Model   | Parameters | Decoding      | Realtime streams (RTS) | p99 latency at max RTS  | p99 latency at RTS=32  | Huggingface Leaderboard WER  |
-|---------------|---------|------------|---------------|------------------------|-------------------------|------------------------|------------------------------|
-| fastest       | `base`  | 85M        | greedy        | 2000                   |   25 ms                 | 15 ms                  | 13.50%                       |
-| most-accurate | `large` | 196M       | beam, width=4 | 500                    |   40 ms                 | 20 ms                  | 11.59%                       |
+| Description   | Model   | Parameters | Decoding      | RTS    | CL99 at max RTS | CL99 at RTS=32 | mean UPL | HF Leaderboard WER  |
+|---------------|---------|------------|---------------|--------|-----------------|----------------|----------|---------------------|
+| fastest       | `base`  | 85M        | greedy        | 2000   | 25 ms           | 15 ms          | 159 ms   |  13.70%             |
+| most-accurate | `large` | 196M       | beam, width=4 | 500    | 40 ms           | 20 ms          | 163 ms   |  11.38%             |
 
 where:
 
 - **Realtime streams (RTS)** is the number of concurrent streams that can be serviced by a single accelerator using default settings
-- **p99 latency** is the 99th-percentile latency to process a single 60 ms audio frame and return any predictions. Note that latency increases with the number of concurrent streams.
+- **Compute latency 99th-percentile (CL99)** is the 99th-percentile compute latency, which measures how long it takes for a model to make a prediction for one audio frame.
+- **User-perceived latency (UPL)** is the time difference between when the user finishes saying a word and when it is returned as a transcript by the system.
 - **WER** is the Word Error Rate, a measure of the accuracy of the model. Lower is better.
-- **Huggingface Leaderboard WER** is the WER of the model on the [Huggingface Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard). WER is averaged across 8 test datasets.
+- **HF Leaderboard WER** is the WER of the model on the [Huggingface Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard). WER is averaged across 9 test datasets.
 
 The **solution scales linearly up to 8 accelerators, and a single server has been measured to support 16000 RTS** with the `base` model.

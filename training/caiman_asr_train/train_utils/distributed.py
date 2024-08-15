@@ -18,4 +18,5 @@ def print_once(msg):
 
 
 def unwrap_ddp(model):
+    """model could be wrapped in DistributedDataParallel"""
     return getattr(model, "module", model)

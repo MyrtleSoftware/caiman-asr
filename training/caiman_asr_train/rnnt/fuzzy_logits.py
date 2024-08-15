@@ -13,7 +13,8 @@ def get_topk_logits(logits: torch.Tensor, vecs_in_pkt: int = 8, vec_size: int = 
     operation, instead it preforms a fuzzy version of this operation.
 
     The logits are divided into 8 vectors, each of size 32, forming a packet.
-    From each packet, the top 32 values are selected from the 8 vectors.
+    From each packet, the top 32 values are selected from the 8 vectors:
+    [max(vec[i] for vec in packet) for i in range(32)].
     These max values are then sent to the CPU, where the argmax operation
     is performed.
 

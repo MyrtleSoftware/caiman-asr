@@ -35,6 +35,17 @@ def add_val_multiple_args_in_place(parser: ArgumentParser) -> None:
         required=True,
     )
     val_multiple.add_argument(
+        "--custom_batch_sizes",
+        help=(
+            "A list of the batch sizes for each dataset, overriding '--val_batch_size'. "
+            "Must be the same length as '--all_dataset_dirs'. "
+            "If unset, all datasets will default to '--val_batch_size'."
+        ),
+        nargs="+",
+        type=int,
+        default=None,
+    )
+    val_multiple.add_argument(
         "--overwrite_ok",
         action="store_true",
         default=False,
@@ -50,8 +61,15 @@ def check_val_multiple_args(args: Namespace):
         assert not args.cpu, "Cannot use --cpu with multiple processes"
 
     if len(args.all_val_manifests) != len(args.all_dataset_dirs):
-        parser.error(
+        raise ValueError(
             f"'--all_val_manifests'={args.all_val_manifests} and "
+            f"'--all_dataset_dirs'={args.all_dataset_dirs} must be the same length"
+        )
+    if args.custom_batch_sizes is not None and len(args.custom_batch_sizes) != len(
+        args.all_dataset_dirs
+    ):
+        raise ValueError(
+            f"'--custom_batch_sizes'={args.custom_batch_sizes} and "
             f"'--all_dataset_dirs'={args.all_dataset_dirs} must be the same length"
         )
 
@@ -75,7 +93,14 @@ def validate_multiple(args: Namespace):
     results = {}
     all_timestamps = {}
     skip_init = False
-    for manifest, dataset_dir in zip(args.all_val_manifests, args.all_dataset_dirs):
+    all_batch_sizes = (
+        [args.val_batch_size] * len(args.all_dataset_dirs)
+        if args.custom_batch_sizes is None
+        else args.custom_batch_sizes
+    )
+    for manifest, dataset_dir, batch_size in zip(
+        args.all_val_manifests, args.all_dataset_dirs, all_batch_sizes, strict=True
+    ):
         val_name = Path(manifest).with_suffix("").name
         output_dir = Path(args.output_dir) / val_name
         output_dir.mkdir(exist_ok=True)
@@ -83,6 +108,7 @@ def validate_multiple(args: Namespace):
         val_args = copy(args)
         val_args.val_manifests = [manifest]
         val_args.dataset_dir = dataset_dir
+        val_args.val_batch_size = batch_size
         val_args.output_dir = str(output_dir)
         val_args.skip_init = skip_init
 

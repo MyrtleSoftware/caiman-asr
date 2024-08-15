@@ -89,7 +89,7 @@ class RNNTBeamDecoder(RNNTDecoder):
         )
         assert beam_width > 0
         self.beam_width = beam_width
-        self.score = lambda x: x.score / x.y_length_tot
+        self.normalised_score = lambda x: x.score / x.y_length_tot
 
         self.detokenize = tokenizer.sentpiece.id_to_piece
         self.tokenizer = tokenizer
@@ -138,7 +138,7 @@ class RNNTBeamDecoder(RNNTDecoder):
         """
         Run decoding loop given encoder features.
 
-        f is shape (time, 1, enc_dim)
+        f is shape (1, time, enc_dim)
         """
 
         training_state = self.model.training
@@ -162,7 +162,7 @@ class RNNTBeamDecoder(RNNTDecoder):
                     break
 
             # f_t is the acoustic encoding for this timestep, shape (1, 1, enc_dim)
-            f_t = f[time_idx, :, :].unsqueeze(0)
+            f_t = f[:, time_idx, :].unsqueeze(0)
 
             kept_hyps = self._beam_run_timestep(
                 f_t, kept_hyps, time_idx, pred_net_cache, device, blank_tensor
@@ -422,16 +422,18 @@ class RNNTBeamDecoder(RNNTDecoder):
 
     def _prune_beam(self, hyps: Dict[int, Hypothesis]) -> Dict[int, Hypothesis]:
         """Prune hypotheses to keep those within the beam score threshold."""
-        max_hyp_score = self.score(max(hyps.values(), key=self.score))
+        max_hyp_score = self.normalised_score(
+            max(hyps.values(), key=self.normalised_score)
+        )
         return {
             k: v
             for k, v in hyps.items()
-            if self.score(v) >= max_hyp_score - self.beam_prune_score_thresh
+            if self.normalised_score(v) >= max_hyp_score - self.beam_prune_score_thresh
         }
 
     def _sort_nbest(self, hyps: ValuesView[Hypothesis]) -> List[Hypothesis]:
         """Sort hypotheses by length normalized score."""
-        return sorted(hyps, key=self.score, reverse=True)
+        return sorted(hyps, key=self.normalised_score, reverse=True)
 
     def _lm_correction(
         self,

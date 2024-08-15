@@ -1,7 +1,7 @@
 # Note: Any modifications to this code require recompilation for the changes to take effect.
 import math
 
-import lstm_cu
+import rnnt_ext.cuda.lstm as lstm_cu
 import torch
 from beartype.typing import Optional, Tuple
 from einops import rearrange

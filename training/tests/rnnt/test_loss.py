@@ -40,7 +40,7 @@ def test_pack_no_pack_equivalent(batch_size, time_dim):
     joint_no_pack = TransducerJoint(pack_output=False)
     loss_fn_no_pack = ApexTransducerLoss(blank_idx=blank_idx, packed_input=False)
     h_no_pack = joint_no_pack(f, g, f_lens, g_lens)
-    loss_no_pack = loss_fn_no_pack(h_no_pack, f_lens, y, y_lens, None, None)
+    loss_no_pack = loss_fn_no_pack(h_no_pack, f_lens, y, y_lens, None, None, 0.0)
 
     batch_offset = torch.cumsum(f_lens * g_lens, dim=0)
     max_f_len = max(f_lens)
@@ -50,7 +50,7 @@ def test_pack_no_pack_equivalent(batch_size, time_dim):
     h_pack = joint_pack(
         f, g, f_lens, g_lens, batch_offset=batch_offset, packed_batch=packed_batch
     )
-    loss_pack = loss_fn_pack(h_pack, f_lens, y, y_lens, batch_offset, max_f_len)
+    loss_pack = loss_fn_pack(h_pack, f_lens, y, y_lens, batch_offset, max_f_len, 0.0)
 
     assert len(h_no_pack.shape) == 4
     assert len(h_pack.shape) == 2

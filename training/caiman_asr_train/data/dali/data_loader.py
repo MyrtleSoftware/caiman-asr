@@ -75,6 +75,7 @@ class DaliDataLoader:
         noise_augmentation_args: NoiseAugmentationArgs,
         data_source: DataSource,
         hugging_face_args: Optional[HuggingFaceArgs],
+        final_padding_secs: float,
         grad_accumulation_batches: int = 1,
         device_type: str = "gpu",
         tar_files: Union[str, List[str], None] = None,
@@ -114,6 +115,7 @@ class DaliDataLoader:
             output_dir=output_dir,
             n_utterances_only=n_utterances_only,
             hugging_face_args=hugging_face_args,
+            final_padding_secs=final_padding_secs,
         )
 
     def _init_iterator(
@@ -133,6 +135,7 @@ class DaliDataLoader:
         output_dir: Path,
         n_utterances_only: Optional[int],
         hugging_face_args: Optional[HuggingFaceArgs],
+        final_padding_secs: float,
         tar_files: Union[str, List[str], None] = None,
         mel_feat_normalizer: Optional[MelFeatNormalizer] = None,
     ):
@@ -212,6 +215,7 @@ class DaliDataLoader:
             no_logging=self.no_logging,
             seed=seed,
             turn_off_initial_padding=turn_off_initial_padding,
+            final_padding_secs=final_padding_secs,
             inspect_audio=inspect_audio,
             prob_narrowband=prob_narrowband,
             output_dir=output_dir,

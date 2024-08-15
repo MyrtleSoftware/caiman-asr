@@ -31,7 +31,9 @@ class DataLoaderArgs:
     num_buckets: Optional[int]
     prob_narrowband: float
     noise_augmentation_args: NoiseAugmentationArgs
+    final_padding_secs: float
     hugging_face_args: Optional[HuggingFaceArgs]
+    dali_device: str
     tar_files: Optional[List[str]] = None
 
     @classmethod
@@ -55,6 +57,8 @@ class DataLoaderArgs:
                 prob_babble_noise=args.prob_babble_noise,
             )
             hugging_face_args = None
+            dali_device = args.dali_train_device
+            final_padding_secs = 0.0
 
         else:
             grad_accumulation_batches = 1
@@ -76,6 +80,8 @@ class DataLoaderArgs:
                 transcript_key=args.hugging_face_val_transcript_key,
                 config=args.hugging_face_val_config,
             )
+            dali_device = args.dali_val_device
+            final_padding_secs = args.val_final_padding_secs
 
         return cls(
             noise_augmentation_args=noise_augmentation_args,
@@ -85,6 +91,8 @@ class DataLoaderArgs:
             tar_files=tar_files,
             prob_narrowband=prob_narrowband,
             hugging_face_args=hugging_face_args,
+            dali_device=dali_device,
+            final_padding_secs=final_padding_secs,
         )
 
 
@@ -126,14 +134,17 @@ def build_dali_loader(
     if data_source is not DataSource.JSON:
         sampler = None
     elif pipeline_type == "val" or train_sampler is None:
-        sampler = dali_sampler.SimpleSampler()
+        sampler = dali_sampler.SimpleSampler(
+            world_size=world_size,
+            sort_by_duration=True,
+        )
     else:
         sampler = train_sampler
 
     return DaliDataLoader(
-        gpu_id=args.local_rank
-        if not cpu
-        else None,  # Use None as a device_id to run DALI without CUDA
+        gpu_id=(
+            args.local_rank if not cpu else None
+        ),  # Use None as a device_id to run DALI without CUDA
         dataset_path=args.dataset_dir,
         dali_yaml_config=dali_yaml_config,
         json_names=dataload_args.json_names,
@@ -144,7 +155,7 @@ def build_dali_loader(
         mel_feat_normalizer=mel_feat_normalizer,
         num_cpu_threads=int(args.dali_processes_per_cpu * mp.cpu_count() / world_size),
         num_buckets=dataload_args.num_buckets,
-        device_type=args.dali_device,
+        device_type=dataload_args.dali_device,
         tokenizer=tokenizer,
         tar_files=dataload_args.tar_files,
         val_from_dir=args.val_from_dir,
@@ -153,6 +164,7 @@ def build_dali_loader(
         no_logging=no_logging,
         seed=args.seed,
         turn_off_initial_padding=args.turn_off_initial_padding,
+        final_padding_secs=dataload_args.final_padding_secs,
         inspect_audio=args.inspect_audio,
         prob_narrowband=dataload_args.prob_narrowband,
         output_dir=Path(args.output_dir),

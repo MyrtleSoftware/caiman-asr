@@ -89,6 +89,10 @@ See the [TensorBoard documentation](tensorboard.md) for more information of how 
 
 To profile training, see these [instructions](profiling.md).
 
+### Controlling emission latency <a name="emission_latency"></a>
+
+See these [instructions](delay_penalty.md) on how to control emission latency of a model.
+
 ## Next Steps
 
 Having trained a model:

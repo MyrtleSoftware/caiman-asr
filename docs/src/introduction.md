@@ -8,4 +8,5 @@ This document outlines the following:
 - [Key Features](key_features.md)
 - [Product Overview](product_overview.md)
 - [ML Training Flow](training/ml_training_flow.md)
+- [Performance](performance.md)
 - [Inference Flow](inference/inference_flow.md)

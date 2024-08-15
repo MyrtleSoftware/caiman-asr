@@ -16,7 +16,7 @@ By default, a checkpoint saved at `/results/RNN-T_best_checkpoint.pt`, with the 
 
 Customise validation by specifying the `--checkpoint`, `--model_config`, and `--val_manifests` arguments to adjust the model checkpoint, model YAML configuration, and validation manifest file(s), respectively.
 
-To save the predictions, pass `--dump_preds` as described [here](./saving_predictions.md).
+Predictions are saved as described [here](./saving_predictions.md).
 
 See [`args/val.py`](https://github.com/MyrtleSoftware/caiman-asr/blob/main/training/caiman_asr_train/args/val.py) and
 [`args/shared.py`](https://github.com/MyrtleSoftware/caiman-asr/blob/main/training/caiman_asr_train/args/shared.py)
@@ -29,6 +29,9 @@ for the complete set of arguments and their respective docstrings.
 - The model's accuracy can be improved by using [beam search](./beam_decoder.md) and an [n-gram language model](./ngram_lm.md).
 - Validating on long utterances is calibrated to not run out of memory on a single 11 GB GPU.
   If a smaller GPU is used, or utterances are longer than 2 hours, refer to this [document](automatic_batch_size_reduction.md).
+- By default during validation, all input audios are padded with 0.96s of silence at the end
+  so that the model has time to output the final tokens.
+  You can change this using the `--val_final_padding_secs` flag.
 
 ## Next Step
 

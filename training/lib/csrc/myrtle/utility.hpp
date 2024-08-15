@@ -21,6 +21,20 @@ template <typename>
 struct dependent_false : std::false_type {};
 
 /**
+ * A type identity meta-function, returns exactly the input type.
+ */
+template <typename T>
+struct type_identity {
+  using type = T;
+};
+
+/**
+ * An convenience alias for `typename type_identity<T>::type`.
+ */
+template <typename T>
+using type_identity_t = typename type_identity<T>::type;
+
+/**
  * The AT_DISPATCH_* macros does not seem to include bfloat16.
  */
 #define MYRTLE_DISPATCH_FLOATING_TYPES(TYPE, NAME, ...) \
@@ -31,6 +45,31 @@ struct dependent_false : std::false_type {};
   AT_DISPATCH_CASE(at::ScalarType::Float, __VA_ARGS__)  \
   AT_DISPATCH_CASE(at::ScalarType::Half, __VA_ARGS__)   \
   AT_DISPATCH_CASE(at::ScalarType::BFloat16, __VA_ARGS__)
+
+/**
+ * Check that the tensor is on the GPU.
+ */
+#define MYRTLE_CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
+
+/**
+ * Check that the tensor is contiguous.
+ */
+#define MYRTLE_CHECK_CONTIGUOUS(x)            \
+  TORCH_CHECK(                                \
+      x.is_contiguous(),                      \
+      #x " must be contiguous but got shape", \
+      x.sizes(),                              \
+      " and strides ",                        \
+      x.strides(),                            \
+      " such that numel is ",                 \
+      x.numel())
+
+/**
+ * Check that the tensor is on the GPU and contiguous.
+ */
+#define MYRTLE_CHECK_INPUT(x) \
+  MYRTLE_CHECK_CUDA(x);       \
+  MYRTLE_CHECK_CONTIGUOUS(x)
 
 static constexpr auto kMax32 = std::numeric_limits<int32_t>::max();
 

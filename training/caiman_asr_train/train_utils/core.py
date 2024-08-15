@@ -32,7 +32,7 @@ def is_loss_nan(loss: torch.Tensor, num_gpus: int) -> bool:
     https://discuss.pytorch.org/t/skiping-training-iteration-in-ddp-setting-results-in-stalled-training/177143 # noqa: E501
     """
     if num_gpus > 1:
-        loss_list = [torch.tensor(0.0).cuda() for _ in range(num_gpus)]
+        loss_list = [torch.empty_like(loss) for _ in range(num_gpus)]
         # all_gather broadcasts loss to all processes.
         # loss_list receives the loss from all processes.
         torch.distributed.all_gather(loss_list, loss)
@@ -64,14 +64,15 @@ def train_step(
     txt: torch.Tensor,
     txt_lens: torch.Tensor,
     scaler: Optional[GradScaler],
-    rnnt_state=Optional[RNNTState],
+    rnnt_state: Optional[RNNTState],
+    delay_penalty: float,
 ) -> Tuple[float, bool, Optional[RNNTState]]:
     """
     Run a step of training.
     """
     model_fwd_fn = maybe_autocast(model_loss_forward_train, not args.no_amp)
     loss, new_rnnt_state = model_fwd_fn(
-        model, loss_fn, args, feats, feat_lens, txt, txt_lens, rnnt_state
+        model, loss_fn, args, feats, feat_lens, txt, txt_lens, rnnt_state, delay_penalty
     )
     loss_nan = is_loss_nan(loss, args.num_gpus)
     if loss_nan:
@@ -100,5 +101,8 @@ def log_end_of_epoch(epoch_start_time: float, epoch: int, epoch_utts: int) -> No
         (epoch,),
         None,
         "train_avg",
-        {"throughput": epoch_utts / epoch_time, "took": epoch_time},
+        {
+            "throughput-audio-samples-per-sec": epoch_utts / epoch_time,
+            "took": epoch_time,
+        },
     )
