@@ -8,18 +8,22 @@ of your chosen config from the following table as these will be needed in the su
 
 |    Name   | Parameters | spm size |                        config                        | Acceleration supported?  |
 |:---------:|:----------:|:--------:|:----------------------------------------------------:|:------------------------:|
-| `testing` | 49M        |     1023 | [testing-1023sp.yaml](https://github.com/MyrtleSoftware/caiman-asr/blob/main/training/configs/testing-1023sp.yaml) |  ✔ |
-| `base`    | 85M        |     8703 | [base-8703sp.yaml](https://github.com/MyrtleSoftware/caiman-asr/blob/main/training/configs/base-8703sp.yaml)       |  ✔ |
-| `large`   | 196M       |    17407 | [large-17407sp.yaml](https://github.com/MyrtleSoftware/caiman-asr/blob/main/training/configs/large-17407sp.yaml)   |  ✔ |
+| `testing` | 49M        |     1023 | [testing-1023sp.yaml](https://github.com/MyrtleSoftware/caiman-asr/blob/main/training/configs/testing-1023sp.yaml) |  ❌ |
+| `base`    | 85M        |     8703 | [base-8703sp.yaml](https://github.com/MyrtleSoftware/caiman-asr/blob/main/training/configs/base-8703sp.yaml)       |  ✅ |
+| `large`   | 196M       |    17407 | [large-17407sp.yaml](https://github.com/MyrtleSoftware/caiman-asr/blob/main/training/configs/large-17407sp.yaml)   |  ✅ |
 
-The `testing` configuration is included because it is quicker to train than either `base` or `large`. It is recommended to train the `testing` model on LibriSpeech as described [here](training.md) before training `base` or `large` on your own data.
+It is recommended to train the `base` model on LibriSpeech as described [here](training.md) before training `base` or `large` on your own data.
 
 ```admonish
-The `testing` config is not recommended for production use.
-Unlike the `testing` config, the `base` and `large` configs were optimized to provide a good tradeoff between WER and throughput on the accelerator.
-The `testing` config will currently run on the accelerator, but this is deprecated.
-Support for this may be removed in future releases.
+The `base` and `large` architectures were optimized to provide a good tradeoff between WER and throughput on the accelerator.
+Other architectures will not run on the accelerator.
 ```
+
+`train.sh` will verify that you are training a model
+that is supported by the accelerator.
+If you want to skip this check so you can
+train the testing model for more rapid iteration,
+pass the flag `--skip_state_dict_check` to `train.sh`.
 
 ## Missing YAML fields <a name="missing_yaml_fields"></a>
 

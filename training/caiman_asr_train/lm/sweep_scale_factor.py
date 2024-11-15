@@ -1,6 +1,7 @@
 import ruamel.yaml
 
 from caiman_asr_train.args.val import val_arg_parser
+from caiman_asr_train.evaluate.error_rates import error_rate_abbrev
 from caiman_asr_train.train_utils.distributed import print_once
 from caiman_asr_train.train_utils.torchrun import maybe_restart_with_torchrun
 from caiman_asr_train.val import build_objects, run_validate
@@ -33,24 +34,29 @@ def main(args):
     best_scale_factor = None
     best_wer = float("inf")
 
+    assert len(args.scale_factors) > 0, "Must provide at least one scale factor"
+
     for i, scale_factor in enumerate(args.scale_factors):
         if i > 0:
             args.skip_init = True
 
         update_scale_factor(args.model_config, scale_factor)
-        val_objects, profilers = build_objects(args)
+        val_objects, _ = build_objects(args)
         results = run_validate(args, val_objects)
-        if results["wer"] < best_wer:
-            best_wer = results["wer"]
+        abbrev = error_rate_abbrev(val_objects.error_rate)
+        if results[abbrev] < best_wer:
+            best_wer = results[abbrev]
             best_scale_factor = scale_factor
 
     print_once(
         (
-            f"Best WER: {best_wer*100:.3f}%. "
+            f"Best {abbrev.upper()}: "
+            f"{best_wer*100:.3f}%. "
             f"Best scale factor: {best_scale_factor}. "
             f"Updating `scale_factor` in model config YAML to {best_scale_factor}"
         )
     )
+
     update_scale_factor(args.model_config, best_scale_factor)
 
 

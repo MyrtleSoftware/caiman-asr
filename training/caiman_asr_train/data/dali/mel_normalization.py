@@ -127,7 +127,7 @@ class MelFeatNormalizer:
         tensor_weight_batched = torch.tensor(
             [self.dataset_to_utt_ratio for _ in range(self.batch_size)]
         )
-        return tensor_weight_batched, 1 - tensor_weight_batched
+        return tensor_weight_batched.numpy(), (1 - tensor_weight_batched).numpy()
 
     def __iter__(self):
         return self

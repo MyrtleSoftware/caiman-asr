@@ -2,10 +2,12 @@
 import argparse
 import json
 import wave
+from itertools import count
 from threading import Thread
 
 import pyaudio
 import websocket
+from stack import PipeStack, Style
 
 # Simple client for connecting to the CAIMAN-ASR server.
 # It records microphone audio, sends it in chunks to the server,
@@ -19,22 +21,111 @@ import websocket
 # `aplay output.wav` to listen to the recording
 
 
-def save_wav(filename):
-    print("Saving recorded audio in " + filename)
-    wf = wave.open(filename, "wb")
-    wf.setnchannels(channels)
-    wf.setsampwidth(p.get_sample_size(sample_format))
-    wf.setframerate(samplerate)
-    wf.writeframes(b"".join(frames))
-    wf.close()
+SAMPLE_FORMAT = pyaudio.paInt16  # 16 bits per sample
+CHANNELS = 1
+SAMPLE_RATE = 16000
+FRAME_LENGTH_MS = 60
+SAMPLES_PER_FRAME = SAMPLE_RATE * FRAME_LENGTH_MS // 1000
 
 
 def listen(ws):
     msg = ws.recv()
+
+    stack = PipeStack()
+    prev_provisional = False
+
     while msg:
-        print(json.loads(msg)["alternatives"][0]["transcript"], end="", flush=True)
+        json_msg = json.loads(msg)
+
+        if prev_provisional:
+            stack.pop()
+
+        transcript = json_msg["alternatives"][0]["transcript"]
+
+        prev_provisional = json_msg["is_provisional"]
+        sty = Style.PARTIAL if prev_provisional else Style.FINAL
+
+        stack.push(transcript, sty)
+
         msg = ws.recv()
-    print()
+
+    print("\n")
+
+
+def save_wav(filename, frames, sample_size):
+    print("Saving recorded audio in " + filename)
+    wf = wave.open(filename, "wb")
+    wf.setnchannels(CHANNELS)
+    wf.setsampwidth(sample_size)
+    wf.setframerate(SAMPLE_RATE)
+    wf.writeframes(b"".join(frames))
+    wf.close()
+
+
+class Audio(object):
+    def __init__(self, input_device):
+        """
+        A context manager for recording audio from a microphone using PyAudio.
+        """
+        self.input_device = input_device
+
+        self.py_audio = pyaudio.PyAudio()
+
+    def __enter__(self):
+        self.stream = self.py_audio.open(
+            format=SAMPLE_FORMAT,
+            channels=CHANNELS,
+            rate=SAMPLE_RATE,
+            frames_per_buffer=SAMPLES_PER_FRAME,
+            input=True,
+            input_device_index=self.input_device,
+        )
+        return self.stream, self.py_audio.get_sample_size(SAMPLE_FORMAT)
+
+    def __exit__(self, *_):
+        self.stream.stop_stream()
+        self.stream.close()
+        self.py_audio.terminate()
+
+
+def run_asr_server(args, stream):
+    """
+    Run the server, returns True if the server was terminated by the client.
+    """
+
+    # Set up websocket connection to asr server. CAIMAN-ASR SERVER MUST ALREADY BE RUNNING!
+    ws = websocket.WebSocket(enable_multithread=True)
+
+    ws.connect(
+        f"ws://{args.host}:{args.port}/asr/v0.1/stream"
+        f"?content_type=audio/x-raw;format=S16LE;channels={CHANNELS};rate={SAMPLE_RATE}",
+        timeout=100,
+    )
+
+    listener = Thread(target=listen, args=(ws,))
+    listener.start()
+
+    frames = []
+    eos = False
+
+    print("Recording:")
+
+    while True:
+        try:
+            data = stream.read(SAMPLES_PER_FRAME)
+            ws.send(data, websocket.ABNF.OPCODE_BINARY)
+            frames.append(data)
+        except KeyboardInterrupt:
+            ws.send("", websocket.ABNF.OPCODE_BINARY)
+            break
+        except ConnectionResetError:
+            print("Connection terminated by server (EOS?)")
+            eos = True
+            break
+
+    listener.join()
+
+    return eos, frames
 
 
 parser = argparse.ArgumentParser(description="CAIMAN-ASR client")
@@ -51,58 +142,11 @@ parser.add_argument(
 
 args = parser.parse_args()
 
-# Set up portaudio
-sample_format = pyaudio.paInt16  # 16 bits per sample
-channels = 1
-samplerate = 16000
-frame_length_ms = 60
-samples_per_frame = int(samplerate * frame_length_ms / 1000)
-p = pyaudio.PyAudio()
+with Audio(args.input_device) as (stream, sample_size):
+    for iter in count():
+        eos, frames = run_asr_server(args, stream)
 
-stream = p.open(
-    format=sample_format,
-    channels=channels,
-    rate=samplerate,
-    frames_per_buffer=samples_per_frame,
-    input=True,
-    input_device_index=args.input_device,
-)
+        save_wav(f"output-{iter}.wav", frames, sample_size)
 
-# Set up websocket connection to asr server. CAIMAN-ASR SERVER MUST ALREADY BE RUNNING!
-ws = websocket.WebSocket(enable_multithread=True)
-ws.connect(
-    f"ws://{args.host}:{args.port}/asr/v0.1/stream"
-    f"?content_type=audio/x-raw;format=S16LE;channels={channels};rate={samplerate}",
-    timeout=100,
-)
-
-listener = Thread(target=listen, args=(ws,))
-listener.start()
-
-print("Recording")
-frames = []  # Used to store the recorded data, so it can be saved to a file
-
-while True:
-    try:
-        data = stream.read(samples_per_frame)
-        ws.send(data, websocket.ABNF.OPCODE_BINARY)
-        frames.append(data)
-    except KeyboardInterrupt:
-        break
-
-# send closing frame to asr server
-ws.send("", websocket.ABNF.OPCODE_BINARY)
-
-# wait for the listener thread to finish
-listener.join()
-
-print("Finished recording")
-
-# Stop and close the portaudio stream and terminate the portaudio interface
-stream.stop_stream()
-stream.close()
-p.terminate()
-
-# Save the recorded data as a WAV file
-filename = "output.wav"
-save_wav(filename)
+        if not eos:
+            break

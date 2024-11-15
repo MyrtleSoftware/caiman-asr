@@ -25,7 +25,8 @@ from caiman_asr_train.args.shared import check_shared_args
 from caiman_asr_train.args.train import train_arg_parser, verify_train_args
 from caiman_asr_train.data.dali.mel_normalization import MelFeatNormalizer
 from caiman_asr_train.data.dali.noise import NoiseSchedule
-from caiman_asr_train.evaluate import calculate_wer, evaluate
+from caiman_asr_train.evaluate.core import calculate_wer, evaluate
+from caiman_asr_train.evaluate.error_rates import error_rate_abbrev
 from caiman_asr_train.log.logging_layers import get_logging_entries
 from caiman_asr_train.log.profiling import (
     finish_profiling,
@@ -34,10 +35,15 @@ from caiman_asr_train.log.profiling import (
 )
 from caiman_asr_train.log.tb_dllogger import flush_log, log
 from caiman_asr_train.rnnt import config
+from caiman_asr_train.rnnt.loss import LossModifiers
 from caiman_asr_train.setup.core import TRAIN, VAL
 from caiman_asr_train.setup.train import TrainSetup
 from caiman_asr_train.train_utils.core import calculate_epoch, log_end_of_epoch
-from caiman_asr_train.train_utils.distributed import print_once, unwrap_ddp
+from caiman_asr_train.train_utils.distributed import (
+    print_once,
+    time_print_once,
+    unwrap_ddp,
+)
 from caiman_asr_train.train_utils.rsp import (
     generate_batch_history,
     rsp_config_checks,
@@ -45,6 +51,7 @@ from caiman_asr_train.train_utils.rsp import (
 )
 from caiman_asr_train.train_utils.torchrun import maybe_restart_with_torchrun
 from caiman_asr_train.utils.frame_width import input_feat_frame_width
+from caiman_asr_train.utils.responses import split_batched_finals
 
 
 def apply_ema(model, ema_model, decay):
@@ -159,12 +166,13 @@ def main(args, train_objects):
     rsp_counter = generate_batch_history(args.rsp_seq_len_freq)
 
     dp_scheduler = train_objects.training_only.dp_scheduler
+    star_scheduler = train_objects.training_only.star_scheduler
 
     # training loop
     while step <= args.training_steps:
         mel_feat_norm.step(step)
         if noise_schedule is not None:
-            noise_schedule.adjust_snrs(step)
+            bg_snrs, bb_snrs = noise_schedule.adjust_snrs(step)
 
         if train_loader.pipeline.do_background_noise_aug:
             print_once(
@@ -202,12 +210,13 @@ def main(args, train_objects):
                 all_feat_lens = []
                 losses = []
                 if noise_schedule is not None:
-                    noise_schedule.adjust_snrs(step)
+                    bg_snrs, bb_snrs = noise_schedule.adjust_snrs(step)
                 mel_feat_norm.step(step)
 
-                dp_scheduler.step(step)
+                dp_scheduler.step(step, hints={"wer": best_wer})
+                star_scheduler.step(step, hints={"wer": best_wer})
 
-            audio, audio_lens, txt, txt_lens, _ = batch
+            audio, audio_lens, txt, txt_lens, _, _ = batch
 
             # audio is (batch, meldim, max_len)
             # audio_lens is (batch,)
@@ -240,7 +249,11 @@ def main(args, train_objects):
                 txt_lens=txt_lens,
                 scaler=scaler,
                 rnnt_state=state,
-                delay_penalty=dp_scheduler.get_value(),
+                loss_mods=LossModifiers(
+                    delay_penalty=dp_scheduler.value(),
+                    star_penalty=star_scheduler.value(),
+                    eos_penalty=args.eos_penalty,
+                ),
             )
 
             forward_backward_total += time.time() - before_forward_backward
@@ -257,7 +270,9 @@ def main(args, train_objects):
                 accumulated_batches = 0
                 print_once("WARNING: loss is NaN; dropping global batch")
 
-            state, rsp_counter = rsp_end_step(state, loss_nan, step, args, rsp_counter)
+            state, rsp_counter, rsp_on = rsp_end_step(
+                state, loss_nan, step, args, rsp_counter
+            )
 
             if accumulated_batches == args.grad_accumulation_batches:
                 total_norm, tb_per_layer_logs, log2_scaler = get_logging_entries(
@@ -268,33 +283,52 @@ def main(args, train_objects):
                 grad_noise_scheduler = train_objects.training_only.grad_noise_scheduler
 
                 if grad_noise_scheduler is not None:
-                    model = grad_noise_scheduler.add_grad_noise(
+                    model, noise_level = grad_noise_scheduler.add_grad_noise(
                         model=model,
                         step=step,
                         world_size=world_size,
                     )
+                else:
+                    noise_level = 0
+
                 optimizer_wrapper.step(total_norm)
 
                 apply_ema(model, ema_model, args.ema)
+
+                abbrev = error_rate_abbrev(train_objects.error_rate)
 
                 if step % args.log_frequency == 0:
                     if (
                         args.prediction_frequency is None
                         or step % args.prediction_frequency == 0
                     ):
-                        preds, _, _ = decoder.decode(feats, feat_lens)
+                        preds, _, _ = split_batched_finals(
+                            decoder.decode(feats, feat_lens)
+                        )
+
                         wer, pred_utt, ref = calculate_wer(
                             preds,
                             txt,
                             txt_lens,
                             tokenizer.detokenize,
                             standardize_wer=train_standardize_wer,
+                            error_rate=train_objects.error_rate,
                         )
                         print_once(f"  Decoded:   {pred_utt[:90]}")
                         print_once(f"  Reference: {ref[:90]}")
-                        wer = {"wer": 100 * wer}
+                        wer = {abbrev: 100 * wer}
                     else:
                         wer = {}
+
+                    if noise_schedule is not None:
+                        noise = {
+                            "noise/background_snr_lo": bg_snrs[0],
+                            "noise/background_snr_hi": bg_snrs[1],
+                            "noise/babble_snr_lo": bb_snrs[0],
+                            "noise/babble_snr_hi": bb_snrs[1],
+                        }
+                    else:
+                        noise = {}
 
                     # log mel statistics for logging
                     audio_no_pad = [
@@ -325,6 +359,7 @@ def main(args, train_objects):
                         {
                             "loss": sum(losses),
                             **wer,  # optional entry
+                            "noise/gradient": noise_level,
                             "throughput-audio-samples-per-sec": step_utts / step_time,
                             "throughput-audio-secs-per-sec": step_frames
                             * frame_width
@@ -337,7 +372,10 @@ def main(args, train_objects):
                                 sum(all_feat_lens) / len(all_feat_lens)
                             ).item(),
                             "lrate": lr_,
-                            "delay_penalty": dp_scheduler.get_value(),
+                            "delay_penalty": dp_scheduler.value(),
+                            "star_penalty": star_scheduler.value(),
+                            "rsp_on": 1 if rsp_on else -1,
+                            **noise,
                             "log2_scaler": log2_scaler,
                             "logmel_mean": no_pad_mean.item(),
                             "logmel_std": no_pad_std.item(),
@@ -368,7 +406,8 @@ def main(args, train_objects):
                         standardize_wer=val_standardize_wer,
                         calculate_loss=not args.skip_val_loss,
                         using_cpu=False,
-                    )["wer"]
+                        error_rate=train_objects.error_rate,
+                    )[abbrev]
 
                     if wer < best_wer:
                         best_wer = wer
@@ -444,5 +483,6 @@ if __name__ == "__main__":
     )
     profilers = set_up_profiling(args.profiler, args.output_dir, args.timestamp)
     train_objects = TrainSetup().run(args)
+    time_print_once("Done with training setup")
     main(args, train_objects)
     finish_profiling(args.profiler, args.output_dir, profilers, args.timestamp)

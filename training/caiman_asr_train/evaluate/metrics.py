@@ -21,11 +21,15 @@ from levenshtein_rs import levenshtein_list as levenshtein
 
 from caiman_asr_train.data.text.normalizers import lowercase_normalize
 from caiman_asr_train.data.text.whisper_text_normalizer import EnglishTextNormalizer
+from caiman_asr_train.evaluate.error_rates import ErrorRate, decide_and_split
 
 
 @beartype
 def word_error_rate(
-    hypotheses: List[str], references: List[str], standardize: bool = True
+    hypotheses: List[str],
+    references: List[str],
+    error_rate: ErrorRate,
+    standardize: bool = True,
 ) -> Tuple[float, int, int]:
     """Compute Word Error Rate (WER) between two text lists.
 
@@ -70,8 +74,8 @@ def word_error_rate(
     for hyp, ref in zip(hypotheses, references):
         if standardize:
             hyp, ref = standardize_wer(hyp), standardize_wer(ref)
-        hyp_list = hyp.split()
-        ref_list = ref.split()
+        hyp_list = decide_and_split(hyp, error_rate)
+        ref_list = decide_and_split(ref, error_rate)
         words += len(ref_list)
         scores += levenshtein(hyp_list, ref_list)
     if words != 0:

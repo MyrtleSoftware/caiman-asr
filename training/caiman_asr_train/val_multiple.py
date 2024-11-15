@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 import csv
+import gc
 import json
 from argparse import ArgumentParser, Namespace
 from copy import copy
 from pathlib import Path
 
+import torch
+
 from caiman_asr_train.args.val import check_val_arguments
+from caiman_asr_train.evaluate.error_rates import ErrorRate, error_rate_abbrev
 from caiman_asr_train.setup.val import ValCPUSetup, ValSetup
 from caiman_asr_train.train_utils.torchrun import maybe_restart_with_torchrun
 from caiman_asr_train.val import check_shared_args, val_arg_parser, validate
@@ -84,23 +88,25 @@ def validate_multiple(args: Namespace):
     results_csv_fp = Path(f"{args.output_dir}/validate_multiple.csv")
     if results_fp.exists() and not args.overwrite_ok:
         raise ValueError(
-            f"Attempting to overwrite {results_fp}. Either pass a new --results_fp "
+            f"Attempting to overwrite {results_fp}. Either pass a new --output_dir "
             "or, if overwriting is the intended behaviour, pass --overwrite_ok"
         )
     results_fp.parent.mkdir(exist_ok=True)
 
     setup_class = ValCPUSetup if args.cpu else ValSetup
-    results = {}
-    all_timestamps = {}
+    all_results = {}
     skip_init = False
     all_batch_sizes = (
         [args.val_batch_size] * len(args.all_dataset_dirs)
         if args.custom_batch_sizes is None
         else args.custom_batch_sizes
     )
-    for manifest, dataset_dir, batch_size in zip(
-        args.all_val_manifests, args.all_dataset_dirs, all_batch_sizes, strict=True
-    ):
+
+    def _inner(manifest, dataset_dir, batch_size, skip_init) -> ErrorRate:
+        """
+        Pythons tightest scope is a function
+        """
+
         val_name = Path(manifest).with_suffix("").name
         output_dir = Path(args.output_dir) / val_name
         output_dir.mkdir(exist_ok=True)
@@ -114,24 +120,103 @@ def validate_multiple(args: Namespace):
 
         val_objects = setup_class().run(val_args)
         model_results = validate(val_args, val_objects=val_objects)
-        wer = round(model_results["wer"], 5)
+
         manifest_path = Path(val_args.dataset_dir) / manifest
-        results[str(manifest_path)] = wer
-        all_timestamps[str(manifest_path)] = model_results["timestamps"]
 
-        skip_init = True  # only initialise logging once
+        all_results[str(manifest_path)] = model_results
 
-    out_json = {"wer": results, "args": args.__dict__}
+        return val_objects.error_rate
+
+    for manifest, dataset_dir, batch_size in zip(
+        args.all_val_manifests, args.all_dataset_dirs, all_batch_sizes, strict=True
+    ):
+        error_rate = _inner(manifest, dataset_dir, batch_size, skip_init)
+
+        # Only initialise logging once
+        skip_init = True
+
+        # Force cleanup to reduce fragmentation between evaluations.
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    abbrev = error_rate_abbrev(error_rate)
+
+    out_keys = [
+        abbrev,
+        "eos_frac",
+        "sil_frac",
+        "rem_frac",
+        "latency_metrics",
+    ]
+
+    out_json = {
+        val_dataset: {
+            metric: val_results[metric] for metric in out_keys if metric in val_results
+        }
+        for val_dataset, val_results in all_results.items()
+    }
+
+    out_json["args"] = args.__dict__
+
     with results_fp.open("w") as f:
-        json.dump(out_json, f)
+        json.dump(out_json, f, indent=2)
 
-    # Write to csv
+    write_csv(abbrev, results_csv_fp, all_results)
+
+    return all_results
+
+
+def write_csv(abbrev, results_csv_fp, all_results):
+    #
+    def nice(x):
+        if isinstance(x, float):
+            return f"{x:.4f}"
+
+        return x
+
+    def to_row(metric: str, proj):
+        """`metric` is a string like "WER".
+        proj is a function that takes all the results for
+        one dataset and selects the `metric` result"""
+        return {
+            "Metric": metric,
+            **{
+                val_dataset: nice(proj(val_results))
+                for val_dataset, val_results in all_results.items()
+            },
+        }
+
+    def from_latency(key: str):
+        #
+        def _anonymous(res):
+            if "latency_metrics" in res:
+                if key in res["latency_metrics"]:
+                    return res["latency_metrics"][key]
+
+            return float("nan")
+
+        return _anonymous
+
+    def to_row_from_latency(key: str):
+        return to_row(key, from_latency(key))
+
     with open(results_csv_fp, "w", newline="") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=results.keys())
-        writer.writeheader()
-        writer.writerow(results)
+        writer = csv.DictWriter(csvfile, fieldnames=["Metric", *all_results.keys()])
 
-    return all_timestamps
+        writer.writeheader()
+
+        writer.writerow(to_row(abbrev, lambda x: x[abbrev]))
+
+        writer.writerow(to_row_from_latency("median-emission-latency"))
+        writer.writerow(to_row_from_latency("p90-emission-latency"))
+        writer.writerow(to_row_from_latency("p99-emission-latency"))
+
+        writer.writerow(to_row("EOS-fraction", lambda x: x.get("eos_frac", 0)))
+        writer.writerow(to_row_from_latency("median-EOS-latency"))
+
+        writer.writerow(to_row("SIL-fraction", lambda x: x.get("sil_frac", 0)))
+        writer.writerow(to_row_from_latency("median-SIL-latency"))
 
 
 if __name__ == "__main__":

@@ -21,6 +21,8 @@ from typing import Union
 import requests
 from tqdm.auto import tqdm
 
+from caiman_asr_train.data.make_datasets.pretty_print import pretty_path
+
 
 def download_file(
     url: str, filepath: Union[str, Path], force_download: bool = False
@@ -36,13 +38,14 @@ def download_file(
             filepath.unlink()
             print(
                 f"""
-                {filepath} exists but downloading from scratch
+                {pretty_path(filepath)} exists but downloading from scratch
                 because `force_download` = True.
             """
             )
         else:
             print(
-                f"{filepath} exists but skipping download because `force_download` = False."
+                f"{pretty_path(filepath)} exists but skipping download "
+                "because `force_download` = False."
             )
             return
 
@@ -59,7 +62,7 @@ def download_file(
             content_iterator,
             total=total_chunks,
             unit="MB",
-            desc=str(filepath),
+            desc=str(pretty_path(filepath)),
             leave=True,
         ):
             fp.write(chunk)
@@ -92,7 +95,7 @@ def extract_tar(filepath: Union[str, Path], data_dir: Union[str, Path]) -> None:
     elif filepath.suffix == ".tar":
         mode = "r:"
     else:
-        raise IOError(f"filepath has unknown extension {filepath}")
+        raise IOError(f"filepath has unknown extension {pretty_path(filepath)}")
 
     with tarfile.open(filepath, mode) as tar:
         members = tar.getmembers()

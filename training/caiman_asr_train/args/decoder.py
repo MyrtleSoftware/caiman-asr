@@ -22,8 +22,8 @@ def add_decoder_args(parser: ArgumentParser) -> None:
         type=float,
         help=(
             "Softmax temperature to use during decoding. Increasing this above 1.0 should "
-            "increase diversity of beam hypotheses. Not used for greedy decoding as it "
-            "doesn't change the greedy ordering."
+            "increase diversity of beam hypotheses. Irrelevant for greedy decoding as it "
+            "doesn't change the hypothesis ordering."
         ),
     )
     decoder.add_argument(
@@ -57,14 +57,52 @@ def add_decoder_args(parser: ArgumentParser) -> None:
         ),
     )
     decoder.add_argument(
+        "--beam_decoder_procs_per_gpu",
+        default=-1,
+        type=int,
+        help=(
+            "Number of decoder processes to run per GPU thread,"
+            " pass -1 to use all available threads with a limit of 8"
+        ),
+    )
+    decoder.add_argument(
+        "--beam_min_decode_batch_size_per_proc",
+        default=128,
+        type=int,
+        help="Minimum batch size for parallel decoding",
+    )
+    decoder.add_argument(
+        "--beam_no_partials",
+        action="store_true",
+        help=(
+            "Disable returning partial hypotheses during beam-search decoding, "
+            "this will speed up decoding but, if used in conjunction with "
+            "'--calculate_emission_latency' will trigger the reported "
+            "emission latency to be the finals-latency"
+        ),
+    )
+    decoder.add_argument(
         "--fuzzy_topk_logits",
         action="store_true",
         default=False,
         help=(
             "Reduce the logits tensor to match the "
-            "tensor that the hardware-accelerated solution is based on."
+            "tensor that the hardware-accelerated solution is based on. "
+            "This will not affect the greedy hypothesis but will affect the "
+            "confidence score."
         ),
     )
+    decoder.add_argument(
+        "--beam_final_emission_thresh",
+        default=1.25,
+        type=float,
+        help=(
+            "If the time (in seconds) between final emissions in the beam decoder "
+            "exceeds this value, the beam search will discard partial hypotheses "
+            "until a final emission is made. This trades WER for lower tail latencies."
+        ),
+    )
+
     add_ngram_args(parser)
 
 

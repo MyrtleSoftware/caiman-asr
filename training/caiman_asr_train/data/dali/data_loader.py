@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 
 import torch.distributed as dist
+from beartype import beartype
 from beartype.typing import List, Optional, Union
 
 from caiman_asr_train.args.hugging_face import HuggingFaceArgs
@@ -35,7 +36,7 @@ from caiman_asr_train.data.hugging_face.core import HuggingFaceReader
 from caiman_asr_train.data.tokenizer import Tokenizer
 from caiman_asr_train.data.webdataset import LengthUnknownError, WebDatasetReader
 from caiman_asr_train.setup.dali import DaliYAMLConfig
-from caiman_asr_train.train_utils.distributed import print_once
+from caiman_asr_train.train_utils.distributed import print_once, time_print_once
 
 
 class DaliDataLoader:
@@ -143,8 +144,11 @@ class DaliDataLoader:
         Returns data iterator. Data underneath this operator is preprocessed within Dali
         """
         max_duration = dali_yaml_config.max_duration
+        min_duration = dali_yaml_config.min_duration
         max_transcript_len = dali_yaml_config.max_transcript_len
-        predicate = set_predicate(max_duration, max_transcript_len)
+        predicate = set_predicate(
+            max_duration, max_transcript_len, min_duration=min_duration
+        )
         if self.data_source is DataSource.JSON:
             output_files, transcripts = {}, {}
             # if reading from directories, generate json names from directories
@@ -152,6 +156,7 @@ class DaliDataLoader:
                 json_names = generate_json_names_from_dirs(
                     dataset_path, self.audio_dir, self.txt_dir
                 )
+            time_print_once("Parsing and filtering jsons")
             for jname in json_names:
                 of, tr = _parse_json(
                     jname if jname[0] == "/" else os.path.join(dataset_path, jname),
@@ -163,9 +168,14 @@ class DaliDataLoader:
             output_files, transcripts = _filter_files(
                 output_files, transcripts, n_utterances_only, seed
             )
+            time_print_once("Done parsing and filtering jsons")
+
+            check_batch_size(self.batch_size, output_files)
 
             assert len(output_files) == len(transcripts)
+            time_print_once("Making file list")
             self.sampler.make_file_list(output_files, json_names)
+            time_print_once("Done making file list")
             print_once(f"Dataset read by DALI. Number of samples: {self.dataset_size}")
             shard_size = self._shard_size()
             external_reader = None
@@ -183,7 +193,9 @@ class DaliDataLoader:
                 max_transcript_len=max_transcript_len,
                 num_buckets=self.num_buckets,
                 sample_rate=dali_yaml_config.sample_rate,
+                min_duration=min_duration,
             )
+            output_files = None
         elif self.data_source is DataSource.HUGGINGFACE:
             transcripts = None
             shard_size = -1  # lengths & shard_sizes are unknown
@@ -196,10 +208,13 @@ class DaliDataLoader:
                 normalize_config=dali_yaml_config.normalize_config,
                 max_duration=max_duration,
                 max_transcript_length=max_transcript_len,
+                min_duration=min_duration,
             )
+            output_files = None
         else:
             raise ValueError(f"Unknown data source: {self.data_source}")
 
+        time_print_once("Initializing Dali pipeline")
         self.pipeline = DaliPipeline(
             dali_yaml_config=dali_yaml_config,
             num_threads=num_cpu_threads,
@@ -221,6 +236,7 @@ class DaliDataLoader:
             output_dir=output_dir,
             mel_feat_normalizer=mel_feat_normalizer,
         )
+        time_print_once("Done initializing Dali pipeline")
 
         return DaliRnntIterator(
             [self.pipeline],
@@ -231,6 +247,7 @@ class DaliDataLoader:
             device_type=self.device_type,
             normalize_config=dali_yaml_config.normalize_config,
             data_source=self.data_source,
+            output_files=output_files,
         )
 
     @staticmethod
@@ -279,4 +296,16 @@ class DaliDataLoader:
         raise LengthUnknownError(
             "Dataset size is unknown. Number of samples is unknown when reading from "
             "tar file/HuggingFace dataset"
+        )
+
+
+@beartype
+def check_batch_size(batch_size: int, output_files: dict[str, dict]):
+    max_duration = max(
+        label_and_duration["duration"] for label_and_duration in output_files.values()
+    )
+    if batch_size * max_duration > 1.5e5:
+        raise ValueError(
+            "Stopping because this validation will likely use all your RAM. "
+            "Try reducing batch size"
         )

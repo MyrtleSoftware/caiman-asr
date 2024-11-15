@@ -109,4 +109,5 @@ class RNNTInferenceConfigSchema(Schema):
         "input_train",
         "grad_noise_scheduler",
         "ngram",
+        "user_tokens",
     }

@@ -20,10 +20,25 @@ set -Eeuo pipefail
 : ${CONFIG_NAME:=base-8703sp}
 : ${DATA_DIR:="/datasets/LibriSpeech"}
 : ${NGRAM_ORDER:=4}
+: ${TRAIN_MANIFESTS:="librispeech-train-clean-100-flac.json librispeech-train-clean-360-flac.json librispeech-train-other-500-flac.json"}
+: ${EXTRA_ARGS:=""}
 
-python caiman_asr_train/data/make_datasets/librispeech.py --data_dir $DATA_DIR
+echo "Preparing LibriSpeech dataset"
 
-TRAIN_MANIFESTS="librispeech-train-clean-100.json librispeech-train-clean-360.json librispeech-train-other-500.json"
+python caiman_asr_train/data/make_datasets/librispeech.py --data_dir $(dirname $DATA_DIR) $EXTRA_ARGS
+
+echo "Segmenting manifests"
+
+# Transform TRAIN_MANIFESTS from something.json to something.eos.json
+EOS_MANIFESTS=$(echo $TRAIN_MANIFESTS | sed 's/.json/.eos.json/g')
+
+python scripts/eos_add.py \
+	--data_dir "$DATA_DIR" \
+	--output_dir "$DATA_DIR" \
+	--manifests $TRAIN_MANIFESTS \
+	--out_manifests $EOS_MANIFESTS
+
+echo "Creating JSON artifacts"
 
 ./scripts/make_json_artifacts.sh "$DATASET_NAME_LOWER_CASE" "$MAX_DURATION_SECS" \
-    "$SPM_SIZE" "$CONFIG_NAME" "$DATA_DIR" "$NGRAM_ORDER" $TRAIN_MANIFESTS
+	"$SPM_SIZE" "$CONFIG_NAME" "$DATA_DIR" "$NGRAM_ORDER" $EOS_MANIFESTS

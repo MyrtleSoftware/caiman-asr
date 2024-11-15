@@ -4,6 +4,7 @@ import torch
 import torch.distributed as dist
 from beartype import beartype
 
+from caiman_asr_train.evaluate.error_rates import ErrorRate
 from caiman_asr_train.evaluate.metrics import word_error_rate
 
 
@@ -27,7 +28,10 @@ def sync_wer_across_gpus(wer_tuple: tuple[float, int, int]) -> float:
 
 @beartype
 def multigpu_wer(
-    hypotheses: list[str], references: list[str], standardize: bool
+    hypotheses: list[str],
+    references: list[str],
+    error_rate: ErrorRate,
+    standardize: bool,
 ) -> float:
-    wer_tuple = word_error_rate(hypotheses, references, standardize)
+    wer_tuple = word_error_rate(hypotheses, references, error_rate, standardize)
     return sync_wer_across_gpus(wer_tuple)

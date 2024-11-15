@@ -1,76 +1,81 @@
 #!/usr/bin/env python
 # Copyright (c) 2024, Myrtle.ai. All rights reserved.
 
-import json
 import logging
 import multiprocessing
+from functools import partial
 from pathlib import Path
-from typing import Dict, List, Union
 
 import pandas as pd
 import sox
+from beartype import beartype
+from beartype.typing import Dict, Iterable, List, Union
+from tqdm import tqdm
 
-
-def load_manifest(fpath: Union[str, Path]) -> List[Dict]:
-    with open(fpath, "r") as fp:
-        manifest = json.load(fp)
-    return manifest
+from caiman_asr_train.data.make_datasets.pretty_print import pretty_path
+from caiman_asr_train.utils.fast_json import fast_write_json
 
 
 def save_manifest(manifest: List[Dict], fpath: Union[str, Path]) -> None:
     logging.info(
-        f"Saving {fpath} manifest to disk, " f"contains {len(manifest)} entries"
+        f"Saving {pretty_path(Path(fpath))} manifest to disk, "
+        f"contains {len(manifest)} entries"
     )
-    with open(fpath, "w") as fp:
-        json.dump(manifest, fp, indent=2)
+    fast_write_json(manifest, fpath)
 
 
-def validate_manifest(manifest: List[Dict], data_dir: Union[str, Path, None] = None):
+def _validate(item: Dict, data_dir: Union[str, Path]):
     """
-    Validate a manifest which is a list of dictionaries. The `data_dir` argument
-    is required if audio filepaths are relative and not absolute. Otherwise, leave
-    it as None. The validation process checks the following:
+    A single-thread validation routine. Expected to be called by `validate_manifest`
+    multiprocessing pool.
+    """
+    fpath = data_dir / item["files"][0]["fname"]
+    file_info = sox.file_info.info(str(fpath))
+
+    # Check audio file exists
+    if not Path(fpath).is_file():
+        return False, f"file {fpath} does not exist"
+
+    # Check transcript is not empty
+    if not item["transcript"]:
+        return False, f"{fpath} transcript is empty"
+
+    # Check relevant audio metadata
+    if not item["original_duration"] == file_info["duration"]:
+        return False, f"{fpath} faulty duration"
+
+    if not item["original_num_samples"] == file_info["num_samples"]:
+        return False, f"{fpath} faulty number of samples"
+
+    return True, ""
+
+
+def validate_manifest(
+    manifest: List[Dict], data_dir: Union[str, Path, None] = None, num_jobs: int = 8
+):
+    """
+    Validate manifest:
         1) all audio files exist
         2) no transcript is empty
         3) relevant audio metadata is correct
         4) there are no duplicate audio files
-
-    Args:
-    :manifest: a JSON manifest as a list of items, each item describes 1 utt.
-    :data_dir: a data directory path where to search for audio files, needed if
-        the manifest contains relative paths
     """
     if data_dir is None:
         data_dir = Path("/")
     else:
         data_dir = Path(data_dir)
 
-    files = []
-    for item in manifest:
-        fpath = data_dir / item["files"][0]["fname"]
-        file_info = sox.file_info.info(str(fpath))
+    with multiprocessing.Pool(num_jobs) as pool:
+        msgs = pool.starmap(_validate, [(item, data_dir) for item in manifest])
 
-        # Check audio file exists
-        assert Path(fpath).is_file(), f"file {fpath} does not exist"
-
-        # Check transcript is not empty
-        assert item["transcript"], f"{fpath} transcript is empty"
-
-        # Check relevant audio metadata
-        assert (
-            item["original_duration"] == file_info["duration"]
-        ), f"{fpath} faulty duration"
-        assert (
-            item["original_num_samples"] == file_info["num_samples"]
-        ), f"{fpath} faulty number of samples"
-
-        files.append(fpath)
-
-    # Check there are no duplicate items
-    assert len(set(files)) == len(files), "duplicate items in manifest"
+    for error, msg in msgs:
+        assert error, f"{msg}"
 
 
-def process_utterance(data: Dict, data_dir: Union[str, Path, None] = None) -> Dict:
+@beartype
+def process_utterance(
+    data_dir: Union[str, Path, None], use_relative_path: bool, data: Dict
+) -> Dict:
     """
     Process single data item (dict) which is of following format:
     {
@@ -106,11 +111,12 @@ def process_utterance(data: Dict, data_dir: Union[str, Path, None] = None) -> Di
         data_dir = Path("/")
     else:
         data_dir = Path(data_dir)
-    audio_file, trans = data.values()
-    audio_file = data_dir / Path(audio_file)
+    audio_file = data["audio_file"]
+    trans = data["transcript"]
+    abs_audio_file = data_dir / Path(audio_file)
 
-    file_info = sox.file_info.info(str(audio_file))
-    file_info["fname"] = str(audio_file)
+    file_info = sox.file_info.info(str(abs_audio_file))
+    file_info["fname"] = str(audio_file) if use_relative_path else str(abs_audio_file)
 
     return {
         "transcript": trans,
@@ -120,8 +126,12 @@ def process_utterance(data: Dict, data_dir: Union[str, Path, None] = None) -> Di
     }
 
 
+@beartype
 def prepare_manifest(
-    data: List[Dict], num_jobs: int = 1, data_dir: Union[str, Path, None] = None
+    data: Iterable[Dict],
+    num_jobs: int = 1,
+    data_dir: Union[str, Path, None] = None,
+    use_relative_path: bool = False,
 ) -> List[Dict]:
     """
     Takes in `data` and creates a manifest in a parallel fashion. The `data_dir`
@@ -166,8 +176,14 @@ def prepare_manifest(
         the manifest contains relative paths
     """
     # run multiprocessing over all items in data
+    process_utterance_ = partial(process_utterance, data_dir, use_relative_path)
+
+    try:
+        data_len = len(data)
+    except TypeError:
+        data_len = None
     with multiprocessing.Pool(num_jobs) as pool:
-        dataset = pool.starmap(process_utterance, [(item, data_dir) for item in data])
+        dataset = list(tqdm(pool.imap(process_utterance_, data), total=data_len))
     dataset = sorted(dataset, key=lambda x: x["files"][0]["fname"])
     dataset = list(filter(all_fields_exist, dataset))
 

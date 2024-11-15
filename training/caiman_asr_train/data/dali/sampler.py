@@ -19,6 +19,8 @@ from math import ceil
 import numpy as np
 import torch.distributed as dist
 
+from caiman_asr_train.train_utils.distributed import time_print_once
+
 
 def hash_list_of_strings(li):
     return str(abs(hash("".join(li))))
@@ -32,8 +34,10 @@ class SimpleSampler:
         self.world_size = world_size
 
     def write_file_list(self, files):
+        time_print_once("Writing file list to disk")
         with open(self.file_list_path, "w") as f:
             f.writelines(f"{name} {label}\n" for name, label in files)
+        time_print_once("Done writing file list to disk")
 
     def read_file_list(self):
         assert self.file_list_path
@@ -119,6 +123,7 @@ class BucketingSampler(SimpleSampler):
         self.resume_step = resume_step
 
     def process_output_files(self, output_files):
+        time_print_once("Shuffling utterances")
         names = list(output_files)
         num_epochs = ceil(self.num_training_steps * self.global_batch_size / len(names))
         lengths = [output_files[name]["duration"] for name in names]
@@ -170,7 +175,9 @@ class BucketingSampler(SimpleSampler):
         flatten_labels = workers_epochs_iters_batch.flatten()
         flatten_labels = flatten_labels[self.resume_step * self.global_batch_size :]
 
-        return [(names[i], labels[i]) for i in flatten_labels]
+        result = [(names[i], labels[i]) for i in flatten_labels]
+        time_print_once("Done shuffling utterances")
+        return result
 
     def is_sampler_random(self):
         return True

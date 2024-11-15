@@ -49,25 +49,27 @@ class Hypothesis:
 
     Args:
     score       : cumulative logprob
+    p_seq       : sequence of probabilities for each token in y_seq
     y_seq       : sequence of non-blank token idxs
     y_len_t     : number of non-blank tokens added this timestep
     timesteps   : sequence of time idxs for when each token in y_seq was added
     s_seq       : sequence of str tokens (sentencepiece tokens)
     hashval     : int64 hash computed from the str sequence
     pred_state  : prediction network state
-    lm_state    : language model state
     ngram_lm_state: kenlm.State
+    is_terminal : whether this hypothesis is terminal (i.e. EOS token)
     """
 
     score: float
+    p_seq: list[float]
     y_seq: list[int]
     y_len_t: int
     timesteps: list[int]
     s_seq: list[str]
     hashval: int
     pred_state: Tuple[torch.Tensor, torch.Tensor] | None
-    lm_state: Tuple[torch.Tensor, torch.Tensor] | None
     ngram_lm_state: kenlm.State | None = None
+    is_terminal: bool = False
 
     _prev_length: int = 0
 
@@ -96,6 +98,7 @@ class Hypothesis:
         idx_keep = tkn_idx - 1
         self._prev_length += idx_keep
 
+        self.p_seq = self.p_seq[idx_keep:]
         self.s_seq = self.s_seq[idx_keep:]
         self.y_seq = self.y_seq[idx_keep:]
         self.timesteps = self.timesteps[idx_keep:]
@@ -123,7 +126,9 @@ class Hypothesis:
         """
         assert len(self.y_seq) > 0
         assert self.y_length_tot >= len(self.y_seq)
-        assert len(self.y_seq) == len(self.timesteps) == len(self.s_seq)
+        assert (
+            len(self.y_seq) == len(self.timesteps) == len(self.s_seq) == len(self.p_seq)
+        )
         assert self.transcript == tokenizer.detokenize(self.y_seq[1:]).strip(), (
             self.transcript,
             tokenizer.detokenize(self.y_seq[1:]),
@@ -136,17 +141,19 @@ class Hypothesis:
         The model states (pred state, ngram state, ...) are shared between self and the
         cloned Hypothesis in order to save memory but everything else is copied.
         """
+
         return Hypothesis(
-            self.score,
-            self.y_seq.copy(),
-            self.y_len_t,
-            self.timesteps.copy(),
-            self.s_seq.copy(),
-            self.hashval,
-            self.pred_state,
-            self.lm_state,
-            self.ngram_lm_state,
-            self._prev_length,
+            score=self.score,
+            p_seq=self.p_seq.copy(),
+            y_seq=self.y_seq.copy(),
+            y_len_t=self.y_len_t,
+            timesteps=self.timesteps.copy(),
+            s_seq=self.s_seq.copy(),
+            hashval=self.hashval,
+            pred_state=self.pred_state,
+            ngram_lm_state=self.ngram_lm_state,
+            is_terminal=self.is_terminal,
+            _prev_length=self._prev_length,
         )
 
 
@@ -166,12 +173,13 @@ def init_sos_hyp(sos_tkn: int, ngram_lm: KenLmModel | None) -> Hypothesis:
 
     return Hypothesis(
         score=0.0,
+        p_seq=[1.0],
         y_seq=[sos_tkn],
         y_len_t=1,
         timesteps=[-1],
         s_seq=[CHR_SPU_UNICODE],
         hashval=0,
         pred_state=None,
-        lm_state=None,
         ngram_lm_state=init_ngram_state,
+        is_terminal=False,
     )

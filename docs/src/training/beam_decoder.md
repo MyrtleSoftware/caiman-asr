@@ -18,12 +18,13 @@ All of the beam decoder options described in this page are available in `train.s
 
 ## Adaptive beam search
 
-The beam decoder utilises an optimised version of beam search - adaptive beam search - which reduces decoding compute by reducing the number of beam expansions to consider, without degrading WER. Two hypothesis pruning methods are employed:
+The time synchronous beam decoder utilises an optimised version of beam search - adaptive beam search - which reduces decoding compute and latency by reducing the number of beam expansions to consider, without degrading WER. Three hypothesis pruning methods are employed:
 
 1. Hypotheses with a score less than `beam_prune_score_thresh` (default 0.4) below the best hypothesis' score are pruned.
 2. Tokens with a logprob score less than `beam_prune_topk_thresh` (default 1.5) below the most likely token are ignored.
+3. Hypotheses are depth-pruned when their most recent common ancestor is further than `beam_final_emission_thresh` seconds older than the best hypothesis. This has the effect of forcing finals at at-least this interval, which reduces tail emission latencies.
 
-Reducing `beam_prune_score_thresh` and `beam_prune_topk_thresh` increases pruning aggressiveness; setting them \< 0 disables pruning.
+Reducing `beam_prune_score_thresh`, `beam_prune_topk_thresh`, and `beam_final_emission_thresh` increases pruning aggressiveness; setting them \< 0 disables pruning.
 
 Adaptive beam search dynamically adjusts computation based on model confidence, using more compute when uncertain and behaving almost greedily when confident.
 

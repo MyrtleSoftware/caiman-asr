@@ -13,8 +13,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from dataclasses import dataclass
+
 import torch
+from beartype import beartype
+from beartype.typing import Optional
 from rnnt_ext.transducer.loss import TransducerLoss
+
+from caiman_asr_train.train_utils.distributed import print_once
+
+
+@beartype
+@dataclass
+class LossModifiers:
+    delay_penalty: float
+    eos_penalty: float
+    star_penalty: float
+
+
+IDENTITY_LOSS_MODIFIERS = LossModifiers(
+    delay_penalty=0.0,
+    eos_penalty=0.0,
+    star_penalty=1.0,
+)
 
 
 class ApexTransducerLoss(torch.nn.Module):
@@ -22,27 +43,37 @@ class ApexTransducerLoss(torch.nn.Module):
     NVIDIA apex RNNT implementation from the apex module transducer_loss_cuda.
     """
 
+    @beartype
     def __init__(
         self,
-        blank_idx,
-        packed_input,
-        validate_first_n_remaining=10,
+        blank_idx: int,
+        eos_idx: Optional[int],
+        star_idx: Optional[int],
+        packed_input: bool,
+        validate_first_n_remaining: int = 10,
     ):
         super().__init__()
         self.t_loss = TransducerLoss(packed_input=packed_input)
         self.packed_input = packed_input
         self.blank_idx = blank_idx
+        self.eos_idx = eos_idx
+        self.star_idx = star_idx
         self.validate_first_n_remaining = validate_first_n_remaining
 
+        print_once(
+            f"TransducerLoss: blank_idx={blank_idx}, eos_idx={eos_idx}, star_idx={star_idx}"
+        )
+
+    @beartype
     def forward(
         self,
-        logits,
-        logit_lens,
-        y,
-        y_lens,
-        batch_offset,
-        max_f_len,
-        delay_penalty,
+        logits: torch.Tensor,
+        logit_lens: torch.Tensor,
+        y: torch.Tensor,
+        y_lens: torch.Tensor,
+        batch_offset: Optional[torch.Tensor],
+        max_f_len: Optional[int],
+        loss_mods: LossModifiers = IDENTITY_LOSS_MODIFIERS,
     ):
         """
         Computes the RNNT loss function
@@ -59,6 +90,7 @@ class ApexTransducerLoss(torch.nn.Module):
             y_lens: the length text tensor.
             batch_offset: cumulative sum of T*(U+1).
             max_f_len: max number of features.
+            loss_mods: Modifiers for the loss function.
         """
 
         if y.dtype != torch.int32:
@@ -83,9 +115,13 @@ class ApexTransducerLoss(torch.nn.Module):
             logit_lens,
             y_lens,
             self.blank_idx,
+            eos_idx=self.eos_idx,
+            star_idx=self.star_idx,
             batch_offset=batch_offset,
             max_f_len=max_f_len,
-            delay_penalty=delay_penalty,
+            delay_penalty=loss_mods.delay_penalty,
+            eos_penalty=loss_mods.eos_penalty,
+            star_penalty=loss_mods.star_penalty,
         ).mean()
 
         return loss
@@ -126,7 +162,7 @@ def get_packing_meta_data(
     """
     final_feat_lens = (feat_lens + enc_time_reduction - 1) // enc_time_reduction
     batch_offset = torch.cumsum(final_feat_lens * (txt_lens + 1), dim=0)
-    max_f_len = max(final_feat_lens)
+    max_f_len = max(final_feat_lens).item()
 
     dict_meta_data = {
         "batch_offset": batch_offset,

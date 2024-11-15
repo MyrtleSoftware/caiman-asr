@@ -65,3 +65,34 @@ Reference:  that is what we will standardize in today's example
 ```
 
 Which are identical, hence the WER=0%.
+
+#### Character error rate and mixture error rate
+
+Word Error Rate is a useful metric
+for English and other languages
+that separate words with spaces.
+
+If you have trained on a language like Chinese,
+you may instead want to measure
+the Character Error Rate.
+
+To do this, change the `error_rate` key in the config:
+
+```yaml
+    error_rate: char
+```
+
+If your dataset contains both Chinese and English,
+you may want to use the [Mixture Error Rate](https://arxiv.org/pdf/2007.05916).
+Set the config to:
+
+```yaml
+    error_rate: mixture
+```
+
+```admonish
+The implementation of Mixture Error Rate works for Mandarin Chinese,
+but isn't tested on other languages.
+Please contact [caiman-asr@myrtle.ai](mailto:caiman-asr@myrtle.ai),
+and Myrtle will be happy to add support for your language.
+```

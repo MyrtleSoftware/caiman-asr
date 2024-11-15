@@ -5,7 +5,12 @@ from argparse import Namespace
 import torch
 from beartype.typing import Optional, Tuple
 
-from caiman_asr_train.rnnt.loss import ApexTransducerLoss, get_packing_meta_data
+from caiman_asr_train.rnnt.loss import (
+    IDENTITY_LOSS_MODIFIERS,
+    ApexTransducerLoss,
+    LossModifiers,
+    get_packing_meta_data,
+)
 from caiman_asr_train.rnnt.model import RNNT
 from caiman_asr_train.rnnt.state import RNNTState
 from caiman_asr_train.train_utils.distributed import unwrap_ddp
@@ -19,7 +24,7 @@ def model_loss_forward(
     txt: torch.Tensor,
     txt_lens: torch.Tensor,
     rnnt_state: Optional[RNNTState],
-    delay_penalty: float,
+    loss_mods: LossModifiers,
 ) -> Tuple[torch.Tensor, Optional[RNNTState]]:
     """
     Run model and get loss
@@ -47,7 +52,7 @@ def model_loss_forward(
         txt_lens,
         meta_data["batch_offset"],
         meta_data["max_f_len"],
-        delay_penalty=delay_penalty,
+        loss_mods=loss_mods,
     )
 
     del logits, logits_lens
@@ -64,11 +69,11 @@ def model_loss_forward_train(
     txt: torch.Tensor,
     txt_lens: torch.Tensor,
     rnnt_state: Optional[RNNTState],
-    delay_penalty: float,
+    loss_mods: LossModifiers,
 ) -> Tuple[torch.Tensor, Optional[RNNTState]]:
     """ """
     loss, new_rnnt_state = model_loss_forward(
-        model, loss_fn, feats, feat_lens, txt, txt_lens, rnnt_state, delay_penalty
+        model, loss_fn, feats, feat_lens, txt, txt_lens, rnnt_state, loss_mods
     )
     loss /= args.grad_accumulation_batches
     return loss, new_rnnt_state
@@ -91,6 +96,6 @@ def model_loss_forward_val(
         txt,
         txt_lens,
         rnnt_state=None,
-        delay_penalty=0.0,
+        loss_mods=IDENTITY_LOSS_MODIFIERS,
     )
     return loss

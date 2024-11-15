@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 import argparse
-import json
 from pathlib import Path
+
+from caiman_asr_train.utils.fast_json import fast_read_json
 
 
 def get_parser():
@@ -37,7 +38,7 @@ def get_abs_paths(json_files, data_dir):
 
 def main(args):
     abs_paths = get_abs_paths(args.jsons, args.data_dir)
-    nested_contents = (json.load(open(path)) for path in abs_paths)
+    nested_contents = (fast_read_json(path) for path in abs_paths)
     flat_contents = (item for each_json in nested_contents for item in each_json)
     durations = [
         item["original_duration"]

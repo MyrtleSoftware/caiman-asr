@@ -1,23 +1,29 @@
-from pydantic import BaseModel
+from dataclasses import dataclass
+
+from beartype import beartype
 
 
-class HypothesisResponse(BaseModel):
+@beartype
+@dataclass
+class HypothesisResponse:
     """
     {
         "y_seq": [1, 2, 3],
         "timesteps": [0, 1, 4],
         "token_seq": ["▁hello", "▁wo", "rld"],
-        "confidence": 1.0,
+        "confidence": [1.0, 1.0, 1.0],
     }
     """
 
     y_seq: list[int]
     timesteps: list[int]
     token_seq: list[str]
-    confidence: float
+    confidence: list[float]
 
 
-class DecodingResponse(BaseModel):
+@beartype
+@dataclass
+class DecodingResponse:
     """
     {
         "start_frame_idx": 0,
@@ -35,7 +41,9 @@ class DecodingResponse(BaseModel):
     alternatives: list[HypothesisResponse]
 
 
-class FrameResponses(BaseModel):
+@beartype
+@dataclass
+class FrameResponses:
     """
     Decoding responses for a single frame of audio.
 
@@ -50,11 +58,15 @@ class FrameResponses(BaseModel):
     the partials and concatenate the finals.
 
     During beam search decoding:
-    ANCHOR: finals_partials_in_mdbook
-    * Every frame other than the last one will have partials and may also have a final
+    * Every frame (other than the last one) will have partials and may also have a final,
+    unless the `--beam_no_partials` flag is set.
     * The last frame will not have partials and may have a final if there is outstanding
     text.
-    ANCHOR_END: finals_partials_in_mdbook
+
+    During greedy decoding:
+    * All responses are final and there are no partials.
+    * If the network returns a blank token a `FrameResponses(None, None)` will be returned.
+
     """
 
     partials: DecodingResponse | None

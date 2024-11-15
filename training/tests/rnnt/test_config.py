@@ -1,29 +1,92 @@
 import pytest
+from pydantic import ValidationError
 
-from caiman_asr_train.rnnt.config import grad_noise_scheduler, tokenizer
+from caiman_asr_train.data.unk_handling import UnkHandling
+from caiman_asr_train.rnnt.config import get_tokenizer_conf, grad_noise_scheduler
 
 
 @pytest.mark.parametrize(
     "ex_input, expected",
     [
         (
-            {"tokenizer": {"labels": "labs", "sentpiece_model": "foo"}},
-            {"labels": "labs", "sentpiece_model": "foo", "sampling": 0.0},
+            {"tokenizer": {"labels": list("labs"), "sentpiece_model": "foo"}},
+            {
+                "labels": list("labs"),
+                "sentpiece_model": "foo",
+                "sampling": 0.0,
+                "unk_handling": UnkHandling.FAIL,
+            },
         )
     ],
 )
 def test_tokenizer(ex_input, expected):
     """ """
-    returned = tokenizer(ex_input)
+    returned = get_tokenizer_conf(ex_input)
     assert returned == expected
 
 
 @pytest.mark.parametrize(
-    "ex_input, raise_error",
+    "ex_input, raise_error,message",
     [
         (
-            {"tokenizer": {"labels": "labs", "sentpiece_model": None, "sampling": 2.0}},
-            AssertionError,
+            {
+                "tokenizer": {
+                    "labels": "labs",
+                    "sentpiece_model": "fake.model",
+                    "sampling": 0.5,
+                }
+            },
+            ValidationError,
+            "1 validation error for TokenizerConfig\nlabels\n  "
+            "Input should be a valid list",
+        ),
+        (
+            {
+                "tokenizer": {
+                    "labels": ["l", "a", "b", "s"],
+                    "sentpiece_model": None,
+                    "sampling": 0.5,
+                }
+            },
+            ValidationError,
+            "1 validation error for TokenizerConfig\nsentpiece_model\n  "
+            "Input should be a valid string",
+        ),
+        (
+            {
+                "tokenizer": {
+                    "labels": ["l", "a", "b", "s"],
+                    "sentpiece_model": "fake.model",
+                    "sampling": "three",
+                }
+            },
+            ValidationError,
+            "1 validation error for TokenizerConfig\nsampling\n  "
+            "Input should be a valid number",
+        ),
+        (
+            {
+                "tokenizer": {
+                    "labels": ["l", "a", "b", "s"],
+                    "sentpiece_model": "fake.model",
+                    "sampling": 2.0,
+                }
+            },
+            ValidationError,
+            "1 validation error for TokenizerConfig\nsampling\n  "
+            "Input should be less than or equal to 1",
+        ),
+        (
+            {
+                "tokenizer": {
+                    "labels": "labs",
+                    "sentpiece_model": None,
+                    "sampling": 2.0,
+                }
+            },
+            ValidationError,
+            "3 validation errors for TokenizerConfig\nsentpiece_model\n  "
+            "Input should be a valid string",
         ),
         (
             {
@@ -33,14 +96,21 @@ def test_tokenizer(ex_input, expected):
                     "sampling": "three",
                 }
             },
-            ValueError,
+            ValidationError,
+            "3 validation errors for TokenizerConfig\nsentpiece_model\n  "
+            "Input should be a valid string",
         ),
-        ({"tokenizer": {}}, AssertionError),
+        (
+            {"tokenizer": {}},
+            ValidationError,
+            "2 validation errors for TokenizerConfig\nsentpiece_model\n  "
+            "Field required",
+        ),
     ],
 )
-def test_tokenizer_raises(ex_input, raise_error):
-    with pytest.raises(raise_error):
-        tokenizer(ex_input)
+def test_tokenizer_raises(ex_input, raise_error, message):
+    with pytest.raises(raise_error, match=message):
+        get_tokenizer_conf(ex_input)
 
 
 @pytest.mark.parametrize(

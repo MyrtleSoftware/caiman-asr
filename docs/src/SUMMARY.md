@@ -31,6 +31,7 @@
     - [Profiling](training/profiling.md)
     - [Changing the character set](training/changing_the_character_set.md)
     - [Delay penalty](training/delay_penalty.md)
+    - [Endpointing](training/endpointing.md)
   - [Validation](training/validation.md)
     - [WER calculation](training/wer_calculation.md)
     - [State resets](training/state_resets.md)
@@ -53,3 +54,5 @@
     - [Live audio demonstration](./inference/live_audio_demonstration.md)
     - [Hardware requirements](./inference/hardware_requirements.md)
   - [CAIMAN-ASR demo](./inference/caiman-asr_demo.md)
+
+- [Versions](./versions.md)

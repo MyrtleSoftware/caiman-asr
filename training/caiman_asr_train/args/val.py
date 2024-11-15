@@ -28,7 +28,7 @@ def val_arg_parser() -> ArgumentParser:
 
     optim = parser.add_argument_group("optimization setup")
     optim.add_argument(
-        "--val_batch_size", default=256, type=int, help="Evaluation time batch size"
+        "--val_batch_size", default=1024, type=int, help="Evaluation time batch size"
     )
 
     io = parser.add_argument_group("feature and checkpointing setup")
@@ -57,7 +57,7 @@ def val_arg_parser() -> ArgumentParser:
         "--val_manifests",
         type=str,
         required=False,
-        default=["/datasets/LibriSpeech/librispeech-dev-clean.json"],
+        default=["/datasets/LibriSpeech/librispeech-dev-clean-flac.json"],
         nargs="+",
         help="Paths of the evaluation datasets manifest files. "
         "Ignored if --read_from_tar=True",

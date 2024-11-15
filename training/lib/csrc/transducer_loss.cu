@@ -27,6 +27,7 @@
 // This file is modified from:
 //     https://github.com/NVIDIA/apex/tree/master/apex/contrib/csrc/transducer
 
+#include <cstdint>
 #include <vector>
 
 #include <cuda.h>
@@ -51,8 +52,8 @@ struct log_sum_exp {
 };
 
 template <typename Acc>
-__device__ __forceinline__ Acc delay_penalty(Acc lambda, Acc t, Acc T) {
-  return lambda * ((T - 1) / 2 - t);
+__device__ __forceinline__ Acc frac_penalty(Acc lam, Acc t, Acc T) {
+  return lam * ((T - 1) / 2 - t);
 }
 
 template <typename Acc>
@@ -83,9 +84,13 @@ __global__ void transducer_loss_forward_kernal(
     const int* aud_len,
     const int* txt_len,
     const int64_t* batch_offset,
-    myrtle::type_identity_t<Acc> lambda, // Disable type deduction as host has sigma as double.
+    myrtle::type_identity_t<Acc> dp_lam, // Disable type deduction as host has double.
     int64_t dict_size,                   // 64-bit indexing for data tensor
     int64_t blank_idx,
+    myrtle::type_identity_t<Acc> eos_lam,  // Disable type deduction as host has double.
+    int64_t eos_idx,                       // Set outside idx range to disable (i.e. -1)
+    myrtle::type_identity_t<Acc> star_lam, // Disable type deduction as host has nsdouble.
+    int64_t star_idx,                      // Set outside idx range to disable (i.e. -1)
     int64_t max_flen,
     int64_t max_glen,
     bool packed,
@@ -106,9 +111,65 @@ __global__ void transducer_loss_forward_kernal(
   const Acc* my_denom = denom + my_batch_offset;
   int u = tid;
 
-  auto log_softmax_x = [=](auto t, auto u, auto k) -> Acc {
+  auto _log_softmax_x = [=](auto t, auto u, auto k) -> Acc {
     return sub_or_nan<Acc>(
-        my_x[(t * my_stride + u) * dict_size + k], my_denom[(t * my_stride + u)]);
+        my_x[(t * my_stride + u) * dict_size + k], my_denom[(t * my_stride + u)] //
+    );
+  };
+
+  auto log_null_x = [=](auto t, auto u) -> Acc {
+    //
+    // Log prob of emitting blank at (t, u) due to the
+    // implicit SOS token (t, u) corresponds to label[u - 1].
+    // being the last emitted label. If this is an star
+    // tok then this may actually emit a non-blank so the
+    // name is a little misleading!
+
+    Acc lsmx = _log_softmax_x(t, u, blank_idx);
+
+    if (u == 0) {
+      // SOS row != unk_idx, no penalties applied.
+      return lsmx;
+    }
+
+    if (my_label[u - 1] == star_idx) {
+      // <unk> row, move in t-axis has penalty to prevent high
+      // prob pathway that confuses in early train stages.
+      return star_lam;
+    }
+
+    return lsmx;
+  };
+
+  auto log_emit_x = [=](auto t, auto u) -> Acc {
+    //
+    // Log prob of emitting correct label at (t, u)
+    // this requires emitting label u + 1 but due to the
+    // implicit SOS token this corresponds to label[u].
+
+    // Follow Eq. 19 in [2] we need to apply:
+    //
+    //   y'(t, u - 1) = y(t, u - 1) + L * d(t)
+    //
+    // with:
+    //
+    //   d(t) = (T - 1) / 2 - t
+
+    Acc dp = frac_penalty<Acc>(dp_lam, t, my_flen);
+
+    if (my_label[u] == star_idx) {
+      // If label is uncertain then emission probability is independent of x.
+      return dp;
+    }
+
+    Acc lsmx_dp = _log_softmax_x(t, u, my_label[u]) + dp;
+
+    if (my_label[u] == eos_idx) {
+      // If emitting EOS, apply the end-point penalty to blank.
+      return lsmx_dp + frac_penalty<Acc>(eos_lam, t, my_flen);
+    }
+
+    return lsmx_dp;
   };
 
   if (blockIdx.x == 0) {
@@ -136,34 +197,20 @@ __global__ void transducer_loss_forward_kernal(
         if (t >= 0 and t < my_flen and u >= 0 and u < my_glen) {
           // Eq(16) in [1]
           if (u == 0) {
-            // T != 0 because for t==0, u==0, we would require step == 0
+            // T != 0 because for t==0, u==0, we would require step == 0.
 
             // alpha(t, u) = alpha(t-1, u) * null(t-1, u)
-            my_alpha[t * max_glen + u] = my_alpha[(t - 1) * max_glen] + log_softmax_x(t - 1, 0, blank_idx);
+            my_alpha[t * max_glen + u] = my_alpha[(t - 1) * max_glen] + log_null_x(t - 1, 0);
 
+          } else if (t == 0) {
+            // alpha(t, u-1) = alpha(t, u-1) * y'(t, u-1)
+            my_alpha[u] = my_alpha[u - 1] + log_emit_x(t, u - 1);
           } else {
-
-            // In both the following branches we consider y(t, u-1).
-            // Follow Eq. 19 in [2] we need to apply:
-            //
-            //   y'(t, u - 1) = y(t, u - 1) + L * d(t)
-            //
-            // with:
-            //
-            //   d(t) = (T - 1) / 2 - t
-
-            Acc penalty = delay_penalty<Acc>(lambda, t, my_flen);
-
-            if (t == 0) {
-              // alpha(t, u-1) = alpha(t, u-1) * y'(t, u-1)
-              my_alpha[u] = my_alpha[u - 1] + log_softmax_x(t, u - 1, my_label[u - 1])  + penalty;
-            } else {
-              // alpha(t, u) = alpha(t-1, u) * null(t-1, u) + alpha(t, u-1) * y'(t, u-1)
-              my_alpha[t * max_glen + u] = log_sum_exp<Acc>{}(
-                my_alpha[(t - 1) * max_glen + u] + log_softmax_x(t - 1, u, blank_idx),
-                my_alpha[(t) * max_glen + u - 1] + log_softmax_x(t, u - 1, my_label[u - 1]) + penalty
-              );
-            }
+            // alpha(t, u) = alpha(t-1, u) * null(t-1, u) + alpha(t, u-1) * y'(t, u-1)
+            my_alpha[t * max_glen + u] = log_sum_exp<Acc>{}(
+              my_alpha[(t - 1) * max_glen + u] + log_null_x(t - 1, u),
+              my_alpha[(t) * max_glen + u - 1] + log_emit_x(t, u - 1)
+            );
           }
         }
 
@@ -178,8 +225,7 @@ __global__ void transducer_loss_forward_kernal(
     // clang-format off
 
     if (u == 0) {
-      // No delay penalty as emitting a blank
-      my_beta[(my_flen - 1) * max_glen + my_glen - 1] = log_softmax_x(my_flen - 1, my_glen - 1, blank_idx);
+      my_beta[(my_flen - 1) * max_glen + my_glen - 1] = log_null_x(my_flen - 1, my_glen - 1);
     }
 
     __syncthreads();
@@ -193,23 +239,16 @@ __global__ void transducer_loss_forward_kernal(
           // Eq(18) in [1]
           if (u == my_glen - 1) {
             // beta(t, u) = beta(t+1, u) * null(t, u)
-            my_beta[t * max_glen + u] = my_beta[(t + 1) * max_glen + u] + log_softmax_x(t, u, blank_idx);
+            my_beta[t * max_glen + u] = my_beta[(t + 1) * max_glen + u] + log_null_x(t, u);
+          } else if (t == my_flen - 1) {
+            // beta(t, u) = beta(t, u+1) * y'(t, u)
+            my_beta[t * max_glen + u] = my_beta[t * max_glen + (u + 1)] + log_emit_x(t, u);
           } else {
-
-            // Penalty just like in the alpha path.
-
-            Acc penalty = delay_penalty<Acc>(lambda, t, my_flen);
-
-            if (t == my_flen - 1) {
-              // beta(t, u) = beta(t, u+1) * y'(t, u)
-              my_beta[t * max_glen + u] = my_beta[t * max_glen + u + 1] + log_softmax_x(t, u, my_label[u]) + penalty;
-            } else {
-              // beta(t, u) = beta(t+1, u) * null(t, u) + beta(t, u+1) * y'(t, u)
-              my_beta[t * max_glen + u] = log_sum_exp<Acc>{}(
-                my_beta[(t + 1) * max_glen + u + 0] + log_softmax_x(t, u, blank_idx),
-                my_beta[(t + 0) * max_glen + u + 1] + log_softmax_x(t, u, my_label[u]) + penalty
-              );
-            }
+            // beta(t, u) = beta(t+1, u) * null(t, u) + beta(t, u+1) * y'(t, u)
+            my_beta[t * max_glen + u] = log_sum_exp<Acc>{}(
+              my_beta[(t + 1) * max_glen + u] + log_null_x(t, u),
+              my_beta[t * max_glen + (u + 1)] + log_emit_x(t, u)
+            );
           }
         }
       }
@@ -243,9 +282,13 @@ __global__ void transducer_loss_fused_backward_kernal(
     const Acc* alpha,
     const Acc* beta,
     const int64_t* batch_offset,
-    myrtle::type_identity_t<Acc> lambda, // Disable type deduction as host has sigma as double.
+    myrtle::type_identity_t<Acc> dp_lam, // Disable type deduction as host has  double.
     int64_t dict_size,
     int64_t blank_idx,
+    myrtle::type_identity_t<Acc> eos_lam,  // Disable type deduction as host has double.
+    int64_t eos_idx,                       // Set outside idx range to disable (i.e. -1)
+    myrtle::type_identity_t<Acc> star_lam, // Disable type deduction as host has double.
+    int64_t star_idx,                      // Set outside idx range to disable (i.e. -1)
     int64_t max_flen,
     int64_t max_glen,
     bool packed,
@@ -261,7 +304,9 @@ __global__ void transducer_loss_fused_backward_kernal(
       packed ? (batch == 0 ? 0 : batch_offset[batch - 1]) : batch * max_flen * max_glen;
   const int64_t my_stride = packed ? my_glen : max_glen;
 
-  __shared__ Acc common, beta_TU, beta_TUp1, beta_Tp1U, my_label_shared;
+  __shared__ Acc common, beta_TU, beta_TUp1, beta_Tp1U;
+
+  __shared__ int my_Up1_label, my_U_label;
 
   auto my_x_grad = x_grad + (my_batch_offset + t * my_stride + u) * dict_size;
 
@@ -277,30 +322,64 @@ __global__ void transducer_loss_fused_backward_kernal(
       common = std::log(loss_grad[batch]) + my_alpha[t * max_glen + u] - my_beta[0];
       beta_TU = my_beta[t * max_glen + u];
 
+      if (u == 0) {
+        my_U_label = -1;
+      } else {
+        my_U_label = my_label[u - 1];
+      }
+
       if (t != my_flen - 1) {
         beta_Tp1U = my_beta[(t + 1) * max_glen + u];
       }
 
       if (u != my_glen - 1) {
-        beta_TUp1 = my_beta[t * max_glen + u + 1];
-        my_label_shared = my_label[u];
+        beta_TUp1 = my_beta[t * max_glen + u + 1] + frac_penalty<Acc>(dp_lam, t, my_flen);
+        my_Up1_label = my_label[u];
+
+        if (my_Up1_label == eos_idx) {
+          beta_TUp1 += frac_penalty<Acc>(eos_lam, t, my_flen);
+        }
       }
     }
 
     __syncthreads();
 
     for (int64_t h = tid; h < dict_size; h += blockDim.x) {
+      // Local grad contribution
       Acc grad = common + sub_or_nan<Acc>(my_x[h], *my_denom);
-      Acc my_grad = std::exp(grad + beta_TU); //
+      Acc my_grad = std::exp(grad + beta_TU);
 
-      if (u != my_glen - 1 and h == my_label_shared) {
-        // Must apply the emmission penalty  just like in the forward pass.
-        my_grad -= std::exp(grad + beta_TUp1 + delay_penalty<Acc>(lambda, t, my_flen));
-      } else if (h == blank_idx) {
+      // Other contributions:
+      //
+      // 1. Correct, h == my_Up1_label, get grad from above
+      // 2.          h == blank, get grad from the right
+      // 3.          h == blank and terminal, get temrminal grad
+
+      // Additionaly if my_Up1_label is star_idx then all h get grad
+      // contribution from above. Finally if my_U_label is star_idx
+      // then all.
+
+      if (u != my_glen - 1) {
+        if (my_Up1_label == star_idx or h == my_Up1_label) {
+          // Contribution from above for all h (including blank).
+          // Contribution from above for correct label.
+          my_grad -= std::exp(grad + beta_TUp1);
+        }
+        // Fall-throught for contribution from right
+        // for blank or my_U_label == star_idx
+        // calculated on fall-through.
+      }
+
+      // Right contribution:
+
+      if (h == blank_idx or my_U_label == star_idx) {
+        // Conditional just like in the forward pass.
+        Acc star_pen = my_U_label == star_idx ? star_lam : 0;
+
         if (t == my_flen - 1 and u == my_glen - 1) {
-          my_grad -= std::exp(grad);
+          my_grad -= std::exp(grad + star_pen);
         } else if (t != my_flen - 1) {
-          my_grad -= std::exp(grad + beta_Tp1U);
+          my_grad -= std::exp(grad + beta_Tp1U + star_pen);
         }
       }
 
@@ -321,9 +400,13 @@ std::vector<torch::Tensor> transducer_loss_cuda_forward(
     torch::Tensor aud_len,
     torch::Tensor txt_len,
     torch::Tensor batch_offset,
-    double lambda,
+    double dp_lam,
     int max_flen,
     int blank_idx,
+    double eos_lam,
+    int eos_idx,
+    double star_lam,
+    int star_idx,
     bool packed //
 ) {
   MYRTLE_CHECK_INPUT(x);
@@ -349,6 +432,20 @@ std::vector<torch::Tensor> transducer_loss_cuda_forward(
       dict_size - 1,
       ", but got ",
       blank_idx);
+
+  TORCH_CHECK(
+      eos_idx < dict_size,
+      "Expected blank index to be less than ",
+      dict_size - 1,
+      ", but got ",
+      eos_idx);
+
+  TORCH_CHECK(
+      star_idx < dict_size,
+      "Expected blank index to be less than ",
+      dict_size - 1,
+      ", but got ",
+      star_idx);
 
   // The data type of alpha and beta will be resolved at dispatch time,
   // hence defined here and assigned later
@@ -382,9 +479,13 @@ std::vector<torch::Tensor> transducer_loss_cuda_forward(
             aud_len.data_ptr<int>(),
             txt_len.data_ptr<int>(),
             batch_offset_ptr,
-            lambda,
+            dp_lam,
             dict_size,
             blank_idx,
+            eos_lam,
+            eos_idx,
+            star_lam,
+            star_idx,
             max_flen,
             max_glen,
             packed,
@@ -409,9 +510,13 @@ torch::Tensor transducer_loss_cuda_backward(
     torch::Tensor txt_len,
     torch::Tensor label,
     torch::Tensor batch_offset,
-    double lambda,
+    double dp_lam,
     int max_flen,
     int blank_idx,
+    double eos_lam,
+    int eos_idx,
+    double star_lam,
+    int star_idx,
     bool packed //
 ) {
   MYRTLE_CHECK_INPUT(x);
@@ -466,9 +571,13 @@ torch::Tensor transducer_loss_cuda_backward(
             alpha.data_ptr<acc_t>(),
             beta.data_ptr<acc_t>(),
             batch_offset_ptr,
-            lambda,
+            dp_lam,
             dict_size,
             blank_idx,
+            eos_lam,
+            eos_idx,
+            star_lam,
+            star_idx,
             max_flen,
             max_glen,
             packed,

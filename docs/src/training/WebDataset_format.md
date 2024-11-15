@@ -69,6 +69,13 @@ For validation you might run:
 ./scripts/val.sh --read_from_tar --data_dir=/ --val_tar_files /datasets/TarredDataset/dev/**
 ```
 
+```admonish
+Training and validation support the use of zip files in addition to tar files.
+Ensure that the zip files adhere to the  [WebDataset format](https://github.com/webdataset/webdataset#the-webdataset-format).
+Additionally, be sure that the arguments passed to `--val_tar_files` and `--train_tar_files` are either all tar files or all zip files,
+and not a combination of both formats.
+```
+
 ## WebDataset Limitations
 
 Our WebDataset support currently has the following limitations:

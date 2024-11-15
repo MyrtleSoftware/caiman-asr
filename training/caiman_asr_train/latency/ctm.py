@@ -1,4 +1,3 @@
-import csv
 import json
 import os
 import tarfile
@@ -7,13 +6,12 @@ from pathlib import Path
 
 import torch.distributed as dist
 from beartype import beartype
-from beartype.typing import Dict, List, Optional, Union
+from beartype.typing import Dict, List, Optional, Tuple
 
-from caiman_asr_train.latency.measure_latency import (
-    align_ctm_files,
-    compute_latency_metrics,
-)
-from caiman_asr_train.latency.timestamp import SequenceTimestamp
+from caiman_asr_train.latency.measure_latency import align_ctm_files
+from caiman_asr_train.latency.measure_latency_lite import compute_latency_metrics
+from caiman_asr_train.latency.timestamp import SequenceTimestamp, Termination
+from caiman_asr_train.train_utils.distributed import print_once
 from caiman_asr_train.utils.frame_width import encoder_output_frame_width
 
 
@@ -51,12 +49,40 @@ def to_ctm(
 
 
 @beartype
+def dump_ctm(
+    data: List[str],
+    lst_seq_time: List[SequenceTimestamp],
+    ctm_fpath: str,
+    flist: Optional[List[str]],
+    frame_width: float,
+) -> Dict[str, Termination]:
+    # During json validation, data (a list of filenames) has been sorted by audio duration
+    # and hence can't be trusted, so instead use flist.
+    # During tarfile validation, flist is None because there's no sampler to read it from,
+    # but also there's no sorting, so trust data
+    for i, sample in enumerate(data):
+        to_ctm(
+            lst_seq_time[i],
+            ctm_fpath,
+            sample if flist is None else flist[i],
+            frame_width,
+        )
+
+    return {
+        fname: seq.eos
+        for fname, seq in zip(
+            flist if flist is not None else data, lst_seq_time, strict=True
+        )
+    }
+
+
+@beartype
 def manage_ctm_export(
     args: Namespace,
     lst_seq_time: List[SequenceTimestamp],
     gt_ctm_fpaths: List[str],
-    flist: Union[List[str], None],
-) -> Dict[str, Optional[float]]:
+    flist: Optional[List[str]],
+) -> Tuple[Dict[str, Optional[float]], List[float], List[float], List[float]]:
     """
     Manages the export of word-level timestamps to a CTM file, accommodating different
     data sources and computing environments.
@@ -67,11 +93,21 @@ def manage_ctm_export(
     The function processes each audio file, exports the corresponding CTM file, and
     calculates emission latencies by aligning these exported CTM files with the provided
     ground truth CTM files.
+
+    Returns:
+        latency_metrics: A dictionary containing latency metrics.
+        latencies: A list of emission latencies.
+        sil_latency: A list of silence latencies.
+        eos_latency: A list of end-of-sentence latencies.
     """
     latency_metrics = {}
+    latencies = []
+    sil_latency = []
+    eos_latency = []
+
     if args.num_gpus == 1 or dist.get_rank() == 0:
         frame_width = encoder_output_frame_width(args.model_config)
-        index = 0
+
         if args.read_from_tar:
             data = get_audio_filenames_from_tar(args.dataset_dir, args.val_tar_files)
             file_list = args.val_tar_files
@@ -81,90 +117,32 @@ def manage_ctm_export(
 
         data = [j for i in data for j in i]
         base_name = "-".join([Path(x).stem for x in file_list])
+
         ctm_fpath = str(Path(args.output_dir) / f"{base_name}_{args.timestamp}.ctm")
-        for i, sample in enumerate(data):
-            to_ctm(
-                lst_seq_time[index],
-                ctm_fpath,
-                sample if flist is None else flist[i],
-                frame_width,
-            )
-            index += 1
-        latencies, _ = align_ctm_files(gt_ctm_fpaths, ctm_fpath)
-        latency_metrics = compute_latency_metrics(latencies)
 
-    return latency_metrics
+        last_emit_time = dump_ctm(data, lst_seq_time, ctm_fpath, flist, frame_width)
 
+        (
+            latencies,
+            _,
+            sil_latency,
+            eos_latency,
+            token_usage_rate,
+            terminal_token_usage_rate,
+        ) = align_ctm_files(gt_ctm_fpaths, ctm_fpath, last_emit_time)
 
-@beartype
-def manage_multiple_ctm_export(
-    args: Namespace,
-    all_timestamps: dict,
-    gt_ctm_fpaths: List[str],
-    multi_gpu: bool = False,
-) -> None:
-    """
-    Manages the export of word-level timestamps to a CTM file, for val_multiple.
+        if token_usage_rate <= 0.50:
+            print(f"WARNING: {token_usage_rate=} is very low (below 50%).")
 
-    The function processes each audio file, exports the corresponding CTM file, and
-    calculates emission latencies by aligning these exported CTM files with the
-    provided ground truth CTM files. The latency metrics are printed and saved to csv
-    and json.
-    """
-    if not multi_gpu or dist.get_rank() == 0:
-        frame_width = encoder_output_frame_width(args.model_config)
-        all_latencies = {}
-        for i, (manifest_path, timestamps) in enumerate(all_timestamps.items()):
-            data = combine_manifest_data(args.all_dataset_dirs[i], [manifest_path])[0]
-            base_name = os.path.splitext(os.path.basename(manifest_path))[0]
-            output_ctm_fpath = os.path.join(
-                args.output_dir, f"{base_name}_{args.timestamp}.ctm"
-            )
-            for j, audio_filename in enumerate(data):
-                to_ctm(
-                    timestamps[j],
-                    output_ctm_fpath,
-                    audio_filename,
-                    frame_width,
-                )
-            latencies, _ = align_ctm_files([gt_ctm_fpaths[i]], output_ctm_fpath)
-            print(f"Emission latencies for {manifest_path}")
-            all_latencies[manifest_path] = compute_latency_metrics(latencies)
+        if terminal_token_usage_rate <= 0.50:
+            print(f"WARNING: {terminal_token_usage_rate=} is very low (below 50%).")
 
-        csv_path = os.path.join(args.output_dir, "validate_multiple.csv")
-        json_path = os.path.join(args.output_dir, "validate_multiple.json")
+        latency_metrics = compute_latency_metrics(latencies, sil_latency, eos_latency)
 
-        # csv formatting:
-        # dataset1, dataset2, ..., dataset1 EL, dataset2 EL, ...
-        # 8.93, 9.20, ..., 0.332, 0.342, ...
-        # with WER columns first, followed by emission latency columns
-        # csv only contains mean latencies (in seconds)
+        latency_metrics["token_usage_rate"] = token_usage_rate
+        latency_metrics["terminal_token_usage_rate"] = terminal_token_usage_rate
 
-        with open(csv_path, "r") as file:
-            reader = csv.reader(file)
-            original_data = list(reader)
-
-        headers = original_data[0]
-        data_row = original_data[1]
-
-        for dataset in all_latencies.keys():
-            headers.append(f"{dataset} mean EL")
-            data_row.append(round(all_latencies[dataset]["Mean Latency"], 4))
-
-        with open(csv_path, "w", newline="") as file:
-            writer = csv.writer(file)
-            writer.writerow(headers)
-            writer.writerows([data_row])
-
-        # json contains mean and percentile (50th and 90th) latencies
-
-        with open(json_path, "r") as file:
-            data = json.load(file)
-
-        data["latencies"] = all_latencies
-
-        with open(json_path, "w") as file:
-            json.dump(data, file, indent=4)
+    return latency_metrics, latencies, sil_latency, eos_latency
 
 
 @beartype
@@ -184,10 +162,11 @@ def get_reference_ctms(args: Namespace, val_multiple: bool = False) -> List[str]
     ctms_files = []
     for manifest_file in manifests_files:
         ctm_file = os.path.splitext(manifest_file)[0] + ".ctm"
-        assert os.path.exists(
-            ctm_file
-        ), f"Corresponding ground truth CTM file {ctm_file} not found"
-        ctms_files.append(ctm_file)
+
+        if os.path.exists(ctm_file):
+            ctms_files.append(ctm_file)
+        else:
+            print_once(f"WARNING: CTM file for {manifest_file} not found")
 
     return ctms_files
 

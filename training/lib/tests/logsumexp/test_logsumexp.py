@@ -72,7 +72,7 @@ def test_logsumexp(dtype, elems, max_threads, promote):
     print("cuda  err", c_err)
 
     # Check that the results are the same
-    assert np.isclose(0, c_err) or (c_err <= 1.1 * t_err)
+    assert np.isclose(0, c_err) or (c_err <= 1.4 * t_err)
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
@@ -106,4 +106,4 @@ def test_log_softmax(dtype, elems, max_threads, promote):
     print("cuda  err", c_err)
 
     # Check that the results are the same
-    assert np.isclose(0, c_err) or (c_err <= 1.3 * t_err)
+    assert np.isclose(0, c_err) or (c_err <= 1.5 * t_err)

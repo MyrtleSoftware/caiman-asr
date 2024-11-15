@@ -1,5 +1,4 @@
 import argparse
-import json
 import os
 import tarfile
 
@@ -8,12 +7,19 @@ from beartype import beartype
 from beartype.typing import List
 
 from caiman_asr_train.data.make_datasets.librispeech import LIBRISPEECH_TRAIN960H
-from caiman_asr_train.data.text.preprocess import norm_and_tokenize
+from caiman_asr_train.data.text.preprocess import (
+    norm_and_tokenize,
+    norm_and_tokenize_parallel,
+)
 from caiman_asr_train.data.tokenizer import Tokenizer
+from caiman_asr_train.data.unk_handling import maybe_filter_transcripts
+from caiman_asr_train.rnnt.config import get_tokenizer_conf
 from caiman_asr_train.setup.text_normalization import (
     NormalizeConfig,
     normalize_config_from_full_yaml,
 )
+from caiman_asr_train.utils.fast_json import fast_read_json
+from caiman_asr_train.utils.user_tokens_lite import get_all_user_tokens
 
 
 def parse_args():
@@ -75,15 +81,12 @@ def extract_transcripts_from_manifests(
     for i, json_file in enumerate(manifest_files):
         fpath = os.path.join(path, json_file)
         print(f"Processing manifest {i+1}/{num_files}: {fpath}")
-        with open(fpath, "r") as file:
-            data = json.load(file)
+        data = fast_read_json(fpath)
+        raw_transcripts = [item["transcript"] for item in data]
         transcripts.extend(
-            [
-                norm_and_tokenize(
-                    item["transcript"], normalize_config, tokenizer, charset=labels
-                )
-                for item in data
-            ]
+            norm_and_tokenize_parallel(
+                raw_transcripts, normalize_config, tokenizer, charset=labels
+            )
         )
     return transcripts
 
@@ -126,11 +129,17 @@ def main():
     with open(args.model_config) as f:
         model_config = yaml.safe_load(f)
 
-    tokenizer_cfg = model_config["tokenizer"]
+    # Currently user tokens are not passed to the LM during decoding.
+    # Hence, they should be stripped from the model configuration file such
+    # that they are normalized out of the transcripts.
+    if tokens := get_all_user_tokens(model_config):
+        print(f"INFO: stripping user {tokens=} from model configuration file.")
+        del model_config["user_tokens"]
+        assert not get_all_user_tokens(model_config)
+
+    tokenizer_cfg = get_tokenizer_conf(model_config)
     labels = tokenizer_cfg["labels"]
-    tokenizer = Tokenizer(
-        labels, tokenizer_cfg["sentpiece_model"], tokenizer_cfg["sampling"]
-    )
+    tokenizer = Tokenizer(**tokenizer_cfg)
     normalize_config = normalize_config_from_full_yaml(model_config)
 
     if args.read_from_tar:
@@ -141,11 +150,14 @@ def main():
         transcripts = extract_transcripts_from_manifests(
             args.manifests, args.data_dir, tokenizer, normalize_config, labels
         )
+    filtered_transcripts = maybe_filter_transcripts(
+        transcripts, tokenizer_cfg["unk_handling"]
+    )
     # Convert tokenized transcripts to the expected form for KenLM,
     # where each sentence is a string of space-separated tokens.
     token_sentences = [
         " ".join(tokenizer.sentpiece.id_to_piece(token) for token in sentence)
-        for sentence in transcripts
+        for sentence in filtered_transcripts
     ]
     save_transcripts_to_file(token_sentences, args.output_path)
     print(f"Saved tokenized transcripts to {args.output_path}")

@@ -11,16 +11,40 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 import multiprocessing as mp
+import random
+import re
+import string
 
 import torch.distributed as dist
 from beartype import beartype
-from beartype.typing import List, Optional, Union
+from beartype.typing import Dict, List, Optional, Union
 
 from caiman_asr_train.data.text.normalizers import select_and_normalize
 from caiman_asr_train.data.tokenizer import Tokenizer
 from caiman_asr_train.setup.text_normalization import NormalizeConfig
+
+
+def mask_user_symbols(text: str, symbols_mask: Optional[Dict[str]] = None) -> str:
+    """
+    :text is a string of word separated by " "
+    :symbols_mask is a dict of form {rnd_string: word_to_mask}
+    """
+    if symbols_mask is not None:
+        for masker, maskee in symbols_mask.items():
+            text = re.sub(re.escape(maskee), masker, text)
+    return text
+
+
+def unmask_user_symbols(text: str, symbols_mask: Optional[Dict[str]] = None) -> str:
+    """
+    :text is a string of word separated by " "
+    :symbols_mask is a dict of form {rnd_string: word_to_mask}
+    """
+    if symbols_mask is not None:
+        for masker, maskee in symbols_mask.items():
+            text = re.sub(masker, maskee, text)
+    return text
 
 
 @beartype
@@ -34,31 +58,30 @@ def norm_and_tokenize(
     Normalizes and optionally tokenizes a transcript. `Transcript` is a string,
     typically a single utterance.
     """
+    # Define a mask to hide `user_symbols`` from normalization
+    symbols_mask = None
+    user_symbols = normalize_config.user_symbols
+    if user_symbols:
+        symbols_mask = {
+            "".join(random.choice(string.ascii_lowercase) for _ in range(20)): sym
+            for sym in user_symbols
+        }
+        assert len(symbols_mask) == len(user_symbols)
+
     charset = tokenizer.charset if tokenizer is not None else charset
-    assert (
-        charset is not None
-    ), "Must either pass tokenizer or charset but both are None"
+
+    msg = "Must either pass tokenizer or charset but both are None"
+
+    assert charset is not None, msg
+
+    transcript = mask_user_symbols(transcript, symbols_mask)
     transcript = select_and_normalize(transcript, charset, normalize_config)
+    transcript = unmask_user_symbols(transcript, symbols_mask)
 
     if tokenizer is None:
         return transcript
+
     return tokenizer.tokenize(transcript)
-
-
-@beartype
-def norm_and_tokenize_chunk(
-    transcripts: List[str],
-    normalize_config: NormalizeConfig,
-    tokenizer: Optional[Tokenizer] = None,
-    charset: Optional[List[str]] = None,
-) -> List[List[int] | str]:
-    """
-    Wrapper around `norm_and_tokenize` for processing many transcripts and
-    straightforward parallelization.
-    """
-    return [
-        norm_and_tokenize(t, normalize_config, tokenizer, charset) for t in transcripts
-    ]
 
 
 @beartype
@@ -90,23 +113,15 @@ def norm_and_tokenize_parallel(
 
     trans_num = len(transcripts)
     if min_trans_per_process * num_processes >= trans_num or mp.cpu_count() < 2:
-        results = norm_and_tokenize_chunk(
-            transcripts, normalize_config, tokenizer, charset
-        )
-    else:
-        # Chunk transcripts
-        chunk_size = int(trans_num / num_processes)
-        chunks = [
-            transcripts[i : i + chunk_size] for i in range(0, trans_num, chunk_size)
+        results = [
+            norm_and_tokenize(t, normalize_config, tokenizer, charset)
+            for t in transcripts
         ]
-
+    else:
         # spawn processes and collect results
         with mp.get_context("spawn").Pool(processes=num_processes) as pool:
-            args = [(chunk, normalize_config, tokenizer, charset) for chunk in chunks]
-            results = pool.starmap(norm_and_tokenize_chunk, args)
-
-        # unpack from List[List[List[int]]] -> List[List[int]]
-        results = [item for sublist in results for item in sublist]
+            args = [(t, normalize_config, tokenizer, charset) for t in transcripts]
+            results = pool.starmap(norm_and_tokenize, args)
 
     msg = f"Some transcripts failed to tokenize ({trans_num} vs. {len(results)})"
     assert trans_num == len(results), msg

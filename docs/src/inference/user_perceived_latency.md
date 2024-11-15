@@ -2,10 +2,12 @@
 
 User-perceived latency (UPL) is defined as the time difference between the instant when the speaker finishes saying a word and the instant when the word appears as a transcript on a screen. In practice, it can be measured by streaming audio to a server live and measuring the response time for each word. The following table summarizes UPL for base and large models measured by streaming librispeech-dev-clean dataset to an on-site server with an FPGA backend running at maximum RTS.
 
-| Model / decoding | Mean UPL | p90 UPL  | p99 UPL |
-|------------------|----------|----------|---------|
-| base / greedy    |  159 ms  |  303 ms  | 451 ms  |
-| large / beam     |  163 ms  |  326 ms  | 629 ms  |
+<!-- Numbers from the hydra weekendly -->
+
+| Model / decoding | p50 UPL | p90 UPL  | p99 UPL |
+|------------------|---------|----------|---------|
+| base / greedy    |  147 ms |  306 ms  | 460 ms  |
+| large / beam     |  158 ms |  428 ms  | 968 ms  |
 
 UPL is the sum of the following latencies:
 
@@ -37,7 +39,9 @@ The network latency corresponds to sending the audio chunk to the server and rec
 
 The emission latency (EL) is explained in detail in this [document](../training/emission_latency.md). Together with the network latency, it is the only latency the user can directly influence, as explained in [here](../training/delay_penalty.md). Its contribution is strictly additive. The table below summarizes emission latency for the latest models averaged across all HF Leaderboard evaluation datasets.
 
-| Model  | Mean EL | p90 EL |
-|--------|---------|--------|
-| base   | 121 ms  | 281 ms |
-| large  | 82 ms   | 287 ms |
+<!-- Numbers from the WER spread-sheet base+greedy and large+beam -->
+
+| Model  | Median EL |
+|--------|-----------|
+| base   |   107 ms  |
+| large  |    58 ms  |

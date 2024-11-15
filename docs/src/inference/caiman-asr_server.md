@@ -5,16 +5,10 @@ Release name: `caiman-asr-server-<version>.run`
 This release bundle contains all the software needed to run the Myrtle.ai CAIMAN-ASR server in a production environment.
 This includes the server docker image, a simple Python client, and scripts to start and stop the server.
 Additionally, it contains a script to compile a hardware checkpoint into a CAIMAN-ASR checkpoint.
-Three model architectures are supported:
+Two model architectures are supported:
 
-- `testing`
 - `base`
 - `large`
-
-```admonish
-The `testing` config is not recommended for production use.
-See details [here](../training/model_yaml_configurations.md)
-```
 
 The CAIMAN-ASR server supports two backends: CPU and FPGA. The CPU backend is not real time, but
 can be useful for testing on a machine without an Achronix Speedster7t PCIe card
@@ -32,16 +26,8 @@ streams per card with the `base` model and 800 with the `large` model.
 2. Start the CAIMAN-ASR server with the hardware checkpoint:
 
    ```
-   ./start_asr_server.sh --rnnt-checkpoint compile-model-checkpoint/hardware_checkpoint.testing.example.pt --cpu-backend --no-beam-decoder
+   ./start_asr_server.sh --rnnt-checkpoint compile-model-checkpoint/hardware_checkpoint.base.example.pt --cpu-backend
    ```
-
-```admonish
-This example turns off beam decoding
-because it's unsupported by the CPU backend.
-If you want to calculate WER using beam search without an FPGA,
-please use the ML training repository
-as described [here](../training/beam_decoder.md).
-```
 
 3. Once the server prints "Server started on port 3030", you can start the simple client.
    This will send a librispeech example wav to the CAIMAN-ASR server and print the transcription:
@@ -84,7 +70,7 @@ below). For more details on this process, see the [Compiling weights](./compilin
    ```
    cd compile-model-checkpoint
    ./build_docker.sh
-   ./run_docker.sh hardware_checkpoint.testing.example.pt caiman_asr_checkpoint.testing.example.pt
+   ./run_docker.sh hardware_checkpoint.base.example.pt caiman_asr_checkpoint.base.example.pt
    cd ..
    ```
 
@@ -92,7 +78,7 @@ below). For more details on this process, see the [Compiling weights](./compilin
    `--license-dir` should point to the directory containing your license files. See the [Licensing](./licensing.md) section for more information.
 
    ```
-   ./start_asr_server.sh --rnnt-checkpoint compile-model-checkpoint/caiman_asr_checkpoint.testing.example.pt --license-dir "./licenses/" --card-id 0
+   ./start_asr_server.sh --rnnt-checkpoint compile-model-checkpoint/caiman_asr_checkpoint.base.example.pt --license-dir "./licenses/" --card-id 0
    ```
 
    To detach from the running docker container without killing it, use ctrl+p followed by ctrl+q.
@@ -133,9 +119,17 @@ More information about beam decoding is [here](../training/beam_decoder.md).
 When decoding with beam search, the server will return two types of response, either 'partial' or 'final'.
 For more details, see [here](../inference/websocket_api.md).
 
-```admonish
-The CPU backend is not compatible with beam decoding.
-```
+## EOS decoding
+
+The handling of EOS tokens at inference time can be controlled via flags passed to the ASR server. See [here](../training/endpointing.md) for a description of the following terminology. The inference server decoding modes are:
+
+- __Classic__ (default or pass `--eos-mode classic`) - The model internally predicts `<EOS>` tokens and feeds them back into the prediction network however, the `<EOS>` tokens are stripped from the responses. Hence, they are invisible to the user. The identity parameters are used in the decoder.
+- __Stream EOS__ (pass `--eos-mode stream`) - This mode operates exactly as the Classic mode, except that the `<EOS>` tokens are returned to the user. In this mode with the beam decoder, partials/finals are entirely orthogonal to `<EOS>`.
+- __Terminal EOS__ (pass `--eos-mode terminal`) - In this mode the endpointing hyper-parameters can be controlled via the `--eos-multiplier eos_alpha` and `--eos-threshold eos_beta` flags to control the end-pointing aggressiveness. If the model predicts an `<EOS>` token the server will close the connection. With the beam decoder the `<EOS>` token will always arrive in the last final if terminated by an EOS.
+
+## Silence-termination (VAD)
+
+The ASR server can fallback to a VAD in case the model misses an EOS token. This can be enabled with the `--silence-terminate-seconds your_time_in_seconds` flag. This operates orthogonally to terminal EOS mode. However, it is recommended to set `--silence-terminate-seconds 2` when using terminal EOS mode, as Myrtle.ai has found this to have minimal impact on WER.
 
 # Connecting to the websocket API
 

@@ -33,6 +33,8 @@ RUN apt-get update && \
     apt-get install -y aha && \
     # Install Boost and Eigen3 dependencies for kenlm:
     apt-get install -y libboost-all-dev libeigen3-dev && \
+    # For Jenkins
+    apt-get install -y openjdk-17-jre uuid-runtime && \
     rm -rf /var/lib/apt/lists/*
 
 # Install KenLM
@@ -60,8 +62,8 @@ WORKDIR /workspace/training
 COPY lib lib
 # Setuptool requires we are in the working directory of the package
 WORKDIR /workspace/training/lib
-# # Separating the build/install steps gives better stdout/stderr diagnostics
-RUN python setup.py build
+# Separating the build/install steps gives better stdout/stderr diagnostics.
+RUN python setup.py build -j $(nproc)
 # This is a non-editable install (we need it to put the cuda extensions in the module path which -e does not do)
 RUN python -m pip install .
 # Reset the workspace, needed by following scripts

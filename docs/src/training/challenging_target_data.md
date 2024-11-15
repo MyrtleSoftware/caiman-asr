@@ -36,7 +36,7 @@ The following command will train the base model on the LibriSpeech dataset on an
     --grad_accumulation_batches=1 --batch_split_factor=8 \
     --training_steps=42000 --prob_background_noise=0.25 \
     --prob_babble_noise=0.1 --prob_train_narrowband=0.5 \
-    --val_manifests=/datasets/LibriSpeech/librispeech-dev-other.json
+    --val_manifests=/datasets/LibriSpeech/librispeech-dev-other-flac.json
 ```
 
 These augmentations are applied independently,

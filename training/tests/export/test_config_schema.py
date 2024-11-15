@@ -121,12 +121,26 @@ class TestConfigSchema(unittest.TestCase):
 
 
 def test_raises_error_with_new_field():
-    with pytest.raises(ValidationError):
-        TokenizerSchema(**{"new_field": "new_value"})
+    with pytest.raises(
+        ValidationError,
+        match="1 validation error for TokenizerSchema"
+        "\nnew_field\n  Extra inputs are not permitted",
+    ):
+        TokenizerSchema(
+            **{
+                "labels": ["a", "b"],
+                "sentpiece_model": "/datasets/sentencepieces/50k-ls+cv+mls+ps17407.model",
+                "new_field": "new_value",
+            }
+        )
 
 
 def test_raises_error_with_missing_field():
-    with pytest.raises(ValidationError):
+    with pytest.raises(
+        ValidationError,
+        match="1 validation error for TokenizerSchema"
+        "\nsentpiece_model\n  Field required",
+    ):
         TokenizerSchema(
             **{"labels": [" ", "a", "b", "c", "d", "e", "f", "g", "h", "i"]}
         )

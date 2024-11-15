@@ -1,6 +1,6 @@
 import torch
 from beartype import beartype
-from beartype.typing import List, Optional, Tuple, Union
+from beartype.typing import List, Optional, Tuple
 from jaxtyping import Float, jaxtyped
 
 from caiman_asr_train.evaluate.state_resets.overlap_processing import (
@@ -8,6 +8,7 @@ from caiman_asr_train.evaluate.state_resets.overlap_processing import (
     get_unique_predictions,
     process_time,
 )
+from caiman_asr_train.evaluate.state_resets.timestamp import Timestamp
 from caiman_asr_train.utils.frame_width import input_feat_frame_width
 
 
@@ -64,12 +65,12 @@ def state_resets_reshape_feats(
 @beartype
 def state_resets_merge_segments(
     pred: List[List[int]],
-    timestamps: List[List[int]],
+    timestamps: List[List[Timestamp]],
     probs: List[List[float]],
     enc_time_reduction: int,
     sr_segment_frames: int,
     sr_overlap_frames: int,
-) -> Tuple[List[List[int]], List[List[Union[int, float]]], Optional[List[List[float]]]]:
+) -> Tuple[List[List[int]], List[List[Timestamp]], Optional[List[List[float]]]]:
     """Return prediction tokens and timestamps for all segments concatenated.
 
     This function will return the prediction tokens and the timestamps without

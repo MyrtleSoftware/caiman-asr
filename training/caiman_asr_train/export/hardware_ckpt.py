@@ -29,7 +29,7 @@ def parse_arguments() -> Namespace:
     parser.add_argument(
         "--config",
         type=str,
-        default="configs/testing-1023sp_run.yaml",
+        required=True,
         help="config file",
     )
     parser.add_argument(
@@ -135,7 +135,7 @@ def inference_only_config(config_fp: str) -> dict:
     config_dict = config.load(config_fp)
     inference_only_cfg = RNNTInferenceConfigSchema(**config_dict)
 
-    return inference_only_cfg.dict()
+    return inference_only_cfg.model_dump()
 
 
 def create_hardware_ckpt(args) -> dict:
@@ -166,7 +166,7 @@ def create_hardware_ckpt(args) -> dict:
             "binary": ngram_lm,  # optional binary KenLM ngram
             "scale_factor": ngram_sf,
         },
-        "version": "1.12.0",  # add the semantic version number of the hardware checkpoint
+        "version": "1.13.0",  # add the semantic version number of the hardware checkpoint
         "rnnt_config": inference_config,  # copy in inference config
     }
 

@@ -31,9 +31,13 @@
 #     https://github.com/NVIDIA/apex/blob/master/apex/contrib/transducer/transducer.py
 
 
+import math
+
 import rnnt_ext.cuda.logsumexp as logsumexp_cu
 import rnnt_ext.cuda.transducer_loss as transducer_loss_cu
 import torch
+from beartype import beartype
+from beartype.typing import List, Optional
 
 
 class TransducerLoss(torch.nn.Module):
@@ -54,18 +58,23 @@ class TransducerLoss(torch.nn.Module):
         self.packed_input = packed_input
         self.dummy_batch_offset = torch.empty(0)
 
+    @beartype
     def forward(
         self,
-        x,
-        label,
-        f_len,
-        y_len,
-        blank_idx,
-        batch_offset=None,
-        max_f_len=None,
-        debug_list=None,
-        delay_penalty=0.0,
-    ):
+        x: torch.Tensor,
+        label: torch.Tensor,
+        f_len: torch.Tensor,
+        y_len: torch.Tensor,
+        blank_idx: int,
+        eos_idx: Optional[int] = None,
+        star_idx: Optional[int] = None,
+        batch_offset: Optional[torch.Tensor] = None,
+        max_f_len: Optional[int] = None,
+        debug_list: Optional[List[torch.Tensor]] = None,
+        delay_penalty: float = 0.0,
+        eos_penalty: float = 0.0,
+        star_penalty: float = 1.0,
+    ) -> torch.Tensor:
         """Forward operation of transducer joint
 
         Arguments:
@@ -75,6 +84,8 @@ class TransducerLoss(torch.nn.Module):
             f_len (tensor): lengths of the inputs in the time dimension for each batch.
             y_len (tensor): lengths of the labels for each batch.
             blank_idx (int): index for the null symbol.
+            eos_idx (int, optional): index for the end-of-sentence symbol. (default: None)
+            star_idx (int, optional): index for the uncertain symbol. (default: None)
             batch_offset (tensor, optional): tensor containing the offset of each batch
                 in the input. For example, batch offset can be obtained from:
                 batch_offset = torch.cumsum(f_len*(y_len+1), dim=0)
@@ -92,6 +103,13 @@ class TransducerLoss(torch.nn.Module):
             delay_penalty: a scalar to penalize delayed emission of non-blank tokens.
                 The idea is to boost probabilities of non-blanks left of the diagonal
                 in the RNN-T lattice. (default: 0.0)
+            eos_penalty: a scalar to bias the model to emit the end-of-sentence
+                token as soon as possible. (default: 0.0)
+            star_penalty: a scalar to penalize repeated emission in the star channel
+                this is interpreted as a probability. (default: 1.0)
+
+        Returns:
+            loss (tensor): the transducer loss with shape (B).
         """
 
         assert len(x.shape) == 4 or len(x.shape) == 2, "Shape (B, T, U, H) or (*, H)"
@@ -122,6 +140,10 @@ class TransducerLoss(torch.nn.Module):
             delay_penalty,
             my_max_f_len,
             blank_idx,
+            eos_penalty,
+            eos_idx,
+            math.log(star_penalty),
+            star_idx,
             debug_list,
             self.packed_input,
         )
@@ -137,9 +159,13 @@ class TransducerLossFunc(torch.autograd.Function):
         f_len,
         y_len,
         batch_offset,
-        lam,
+        delay_penalty,
         max_f_len,
         blank_idx,
+        eos_penalty,
+        eos_idx,
+        star_penalty,
+        star_idx,
         debug_list,
         packed_input,
     ):
@@ -155,6 +181,18 @@ class TransducerLossFunc(torch.autograd.Function):
 
         assert denom.shape == x.shape[:-1]
 
+        if eos_idx is None:
+            eos_idx = -1
+        else:
+            assert eos_idx != blank_idx, "eos_idx must be different from blank_idx"
+
+        if star_idx is None:
+            star_idx = -2
+        else:
+            assert star_idx != blank_idx, "star_idx must be different from blank_idx"
+
+        assert star_idx != eos_idx, "star_idx must be different from eos_idx"
+
         alpha, beta, loss = transducer_loss_cu.forward(
             x,
             denom,
@@ -162,9 +200,13 @@ class TransducerLossFunc(torch.autograd.Function):
             f_len,
             y_len,
             batch_offset,
-            lam,
+            delay_penalty,
             max_f_len,
             blank_idx,
+            eos_penalty,
+            eos_idx,
+            star_penalty,
+            star_idx,
             packed_input,
         )
 
@@ -172,9 +214,14 @@ class TransducerLossFunc(torch.autograd.Function):
             debug_list += [alpha, beta]
         ctx.save_for_backward(x, denom, alpha, beta, f_len, y_len, label, batch_offset)
         ctx.blank_idx = blank_idx
+        ctx.eos_penalty = eos_penalty
+        ctx.eos_idx = eos_idx
+        ctx.star_penalty = star_penalty
+        ctx.star_idx = star_idx
+
         ctx.packed_input = packed_input
         ctx.max_f_len = max_f_len
-        ctx.lam = lam
+        ctx.delay_penalty = delay_penalty
 
         return loss
 
@@ -193,10 +240,14 @@ class TransducerLossFunc(torch.autograd.Function):
             y_len,
             label,
             batch_offset,
-            ctx.lam,
+            ctx.delay_penalty,
             ctx.max_f_len,
             ctx.blank_idx,
+            ctx.eos_penalty,
+            ctx.eos_idx,
+            ctx.star_penalty,
+            ctx.star_idx,
             ctx.packed_input,
         )
 
-        return x_grad, *([None] * 9)
+        return x_grad, *([None] * 13)

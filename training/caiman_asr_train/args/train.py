@@ -7,8 +7,10 @@ from caiman_asr_train.args.delay_penalty import (
     add_delay_penalty_args,
     verify_delay_penalty_args,
 )
+from caiman_asr_train.args.eos import add_eos_train_args
 from caiman_asr_train.args.noise_augmentation import add_noise_augmentation_args
 from caiman_asr_train.args.shared import add_shared_args
+from caiman_asr_train.args.star import add_star_args
 from caiman_asr_train.data.make_datasets.librispeech import LIBRISPEECH_TRAIN960H
 
 
@@ -229,7 +231,7 @@ def train_arg_parser() -> argparse.ArgumentParser:
         "--val_manifests",
         type=str,
         required=False,
-        default=["/datasets/LibriSpeech/librispeech-dev-clean.json"],
+        default=["/datasets/LibriSpeech/librispeech-dev-clean-flac.json"],
         nargs="+",
         help="Paths of the evaluation datasets manifest files"
         "Ignored if --read_from_tar=True",
@@ -349,6 +351,8 @@ def train_arg_parser() -> argparse.ArgumentParser:
     add_noise_augmentation_args(parser)
     add_shared_args(parser)
     add_delay_penalty_args(parser)
+    add_star_args(parser)
+    add_eos_train_args(parser)
     return parser
 
 

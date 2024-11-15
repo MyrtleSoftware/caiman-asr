@@ -1,6 +1,6 @@
 #!/bin/bash
 
-pytest caiman_asr_train
+pytest caiman_asr_train scripts
 TEST_EXIT_CODE=$?
 
 # cleanup any artefacts created during testing

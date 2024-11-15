@@ -146,6 +146,36 @@ If you haven't filled out the standard
 in the yaml config file, be sure to update them,
 especially the `sentpiece_model` you trained in Step 6.
 
+### Step 8: Large character sets
+
+If you are training on a language like Chinese
+that has a large character set, be sure to train
+a sentencepiece model with at least as many tokens
+as there are unique characters.
+
+```admonish
+You may also want to
+[use character error rate](./wer_calculation.md#character-error-rate-and-mixture-error-rate)
+```
+
+The sentencepiece model will not include characters
+in its vocabulary if they are exceptionally rare in the training data.
+This is not an issue when training on English, since no character is very rare.
+But for other languages, this can cause training to crash during the token cache generation.
+
+To prevent this, you can change the error to a warning:
+
+1. If your sentencepiece model is `/path/to/sentencepiece.model`, create a file called `/path/to/sentencepiece.yaml`. This is a configuration file that controls global settings for the sentencepiece model.
+2. Add the following line:
+   ```yaml
+   unk_handling: WARN
+   ```
+   (The default is `FAIL`.)
+3. If you still see many (>100) warnings about unknown tokens
+   during training, there likely is a true problem with your sentencepiece model.
+   Please contact [caiman-asr@myrtle.ai](mailto:caiman-asr@myrtle.ai) so Myrtle
+   can add support for your language.
+
 ## Inspecting character errors
 
 By default, the [WER calculation](wer_calculation.md#wer-standardization)

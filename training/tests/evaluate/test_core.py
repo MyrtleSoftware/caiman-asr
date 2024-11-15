@@ -2,10 +2,17 @@
 from argparse import Namespace
 from datetime import timedelta
 
+import torch
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from caiman_asr_train.evaluate.core import evaluate
+from caiman_asr_train.evaluate.error_rates import ErrorRate
+from caiman_asr_train.rnnt.response import (
+    DecodingResponse,
+    FrameResponses,
+    HypothesisResponse,
+)
 
 
 class FakeModel:
@@ -22,7 +29,14 @@ class FakeModel:
 class FakeLoader:
     def __init__(self):
         self.pipeline_type = "val"
-        self.data = ["audio", "audio_len", "txt", "txt_len", ["raw_transcripts"]]
+        self.data = [
+            "audio",
+            torch.tensor([0]),
+            "txt",
+            "txt_len",
+            ["raw_transcripts"],
+            ["fnames"],
+        ]
 
     def __iter__(self):
         return self
@@ -30,6 +44,7 @@ class FakeLoader:
     def __next__(self):
         if data := self.data:
             self.data = None
+            print(f"FakeLoader: {data}")
             return data
         raise StopIteration
 
@@ -40,11 +55,32 @@ class FakeLoader:
 class FakeDecoder:
     def __init__(self, tokens):
         self.tokens = tokens
-        self.timesteps = [1] * len(tokens)
-        self.probs = [0.1] * len(tokens)
 
     def decode(self, feats, feat_lens):
-        return [self.tokens], [self.timesteps], [self.probs]
+        return [{i: __class__._response(i, tok) for i, tok in enumerate(self.tokens)}]
+
+    @property
+    def eos_index(self):
+        return None
+
+    @staticmethod
+    def _response(step: int, tok: int) -> FrameResponses:
+        return FrameResponses(
+            partials=None,
+            final=DecodingResponse(
+                start_frame_idx=step,
+                duration_frames=1,
+                is_provisional=False,
+                alternatives=[
+                    HypothesisResponse(
+                        y_seq=[tok],
+                        timesteps=[step],
+                        token_seq=["<unk>"],
+                        confidence=[0.1],
+                    )
+                ],
+            ),
+        )
 
 
 TOKENIZER_NUM_LABELS = 29
@@ -64,6 +100,9 @@ def test_unk_token(tokenizer, tokens):
         dali_val_device="cuda",
         sr_segment=0,
         calculate_emission_latency=False,
+        model_config="/workspace/training/configs/testing-1023sp.yaml",
+        eos_vad_threshold=float("inf"),
+        eos_is_terminal=False,
     )
 
     evaluate(
@@ -78,4 +117,5 @@ def test_unk_token(tokenizer, tokens):
         cfg=None,
         args=args,
         skip_logging=True,
+        error_rate=ErrorRate.WORD,
     )

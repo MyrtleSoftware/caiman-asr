@@ -104,12 +104,16 @@ class GradNoiseScheduler:
         to the step.
         """
 
-        if self.switch_on(step):
-            model_encoder = unwrap_ddp(model).encoder
-            for param_name, param in model_encoder.named_parameters():
+        if not self.switch_on(step):
+            return model, 0
+
+        model_encoder = unwrap_ddp(model).encoder
+        noise = self.std(step)
+        for _, param in model_encoder.named_parameters():
+            if param.requires_grad:
                 noise = torch.normal(
                     mean=0.0,
-                    std=self.std(step),
+                    std=noise,
                     size=param.size(),
                     device=param.device,
                     dtype=param.dtype,
@@ -118,4 +122,5 @@ class GradNoiseScheduler:
                 # each GPU adds noise to the tensors grads, but it is only needed once
                 noise.data.div(world_size)
                 param.grad.data.add_(noise)
-        return model
+
+        return model, noise

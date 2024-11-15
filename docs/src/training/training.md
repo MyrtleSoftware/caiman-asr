@@ -4,7 +4,7 @@
 
 ### Quick Start <a name="training_quick_start"></a>
 
-This example demonstrates how to train a model on the LibriSpeech dataset using the `testing` model configuration.
+This example demonstrates how to train a model on the LibriSpeech dataset using the `base` model configuration.
 This guide assumes that the user has followed the [installation guide](installation.md)
 and has prepared LibriSpeech according to the [data preparation guide](json_format.md#librispeech_json).
 
@@ -13,7 +13,7 @@ More information on choosing them can be found [here](batch_size_hyperparameters
 
 Recommendations for LibriSpeech training are:
 
-- a global batch size of 1008 for a 24GB GPU
+- a global batch size of 1024 for a 24GB GPU
 - use all `train-*` subsets and validate on `dev-clean`
 - 42000 steps is sufficient for 960hrs of train data
 - adjust number of GPUs using the `--num_gpus=<NUM_GPU>` argument
@@ -23,12 +23,14 @@ To launch training inside the container, using a single GPU, run the following c
 ```bash
 ./scripts/train.sh \
   --data_dir=/datasets/LibriSpeech \
-  --train_manifests librispeech-train-clean-100.json librispeech-train-clean-360.json librispeech-train-other-500.json \
-  --val_manifests librispeech-dev-clean.json \
-  --model_config configs/testing-1023sp_run.yaml \
+  --train_manifests librispeech-train-clean-100-flac.json librispeech-train-clean-360-flac.json librispeech-train-other-500-flac.json \
+  --val_manifests librispeech-dev-clean-flac.json \
+  --model_config configs/base-8703sp_run.yaml \
   --num_gpus 1 \
-  --global_batch_size 1008 \
-  --grad_accumulation_batches 42 \
+  --global_batch_size 1024 \
+  --grad_accumulation_batches 16 \
+  --batch_split_factor 8 \
+  --val_batch_size 1 \
   --training_steps 42000
 ```
 

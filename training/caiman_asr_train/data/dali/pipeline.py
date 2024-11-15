@@ -38,6 +38,7 @@ from caiman_asr_train.data.hugging_face.core import HuggingFaceReader
 from caiman_asr_train.data.webdataset import WebDatasetReader
 from caiman_asr_train.setup.dali import DaliYAMLConfig
 from caiman_asr_train.setup.text_normalization import NormalizeLevel
+from caiman_asr_train.train_utils.distributed import time_print_once
 
 
 class PipelineParams:
@@ -48,10 +49,13 @@ class PipelineParams:
         sample_rate=16000,
         max_duration=float("inf"),
         max_transcript_len=float("inf"),
+        min_duration=0.0,
         normalize_transcripts=NormalizeLevel.IDENTITY,
         standardize_wer=True,
         trim_silence=False,
         speed_perturbation=None,
+        user_symbols=None,
+        error_rate="word",
     ):
         pass
 
@@ -153,12 +157,14 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
                 source=self.background_noise_iterator, num_outputs=2
             )
 
+            time_print_once("Making noise dataset for DALI")
             noise_dir = make_noise_dataset_for_dali(
                 noise_augmentation_args.use_noise_audio_folder,
                 noise_augmentation_args.noise_dataset,
                 noise_config=noise_augmentation_args.noise_config,
                 sample_rate=self.sample_rate,
             )
+            time_print_once("Done making noise dataset for DALI")
 
             self.numpy_noise = ops.readers.Numpy(
                 name="NumpyNoiseReader",
@@ -212,7 +218,7 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
             assert sampler is None, "Sampler not required for WebDataset/Hugging Face"
             self.read = ops.ExternalSource(
                 source=external_reader,
-                num_outputs=3,
+                num_outputs=4,
                 batch=False,
                 parallel=False,
                 cycle="raise",
@@ -333,20 +339,20 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
             label_len = self.get_shape(label)
             audio, sr = self.decode(audio)
 
-            # The last one is a placeholder
-            return audio, label, label_len, 42
+            # The last ones are just placeholders
+            return audio, label, label_len, 42, 314
         else:
-            audio, label, raw_transcript = self.read()
+            audio, label, raw_transcript, fname = self.read()
 
             shape = self.get_shape(label)
             label_len = nvidia.dali.fn.cast(shape, dtype=types.INT32)
             label = nvidia.dali.fn.pad(label, fill_value=0)
 
-            return audio, label, label_len, raw_transcript
+            return audio, label, label_len, raw_transcript, fname
 
     def define_graph(self):
         # Audio's sample rate is self.sample_rate
-        audio, label, label_lens, raw_transcript = self.read_data_in()
+        audio, label, label_lens, raw_transcript, fname = self.read_data_in()
 
         if self.do_remove_silence:
             # This is currently CPU->CPU (could be GPU in/out)
@@ -450,11 +456,12 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
         audio = self.pad(audio)
 
         raw_transcript = nvidia.dali.fn.pad(raw_transcript, fill_value=-1)
+        fname = nvidia.dali.fn.pad(fname, fill_value=-1)
 
         # When modifying DALI pipeline returns, make sure you update `output_map`
         # in DALIGenericIterator invocation
         # modified to return args on the preprocessing device
-        return audio, audio_len, label, label_lens, raw_transcript
+        return audio, audio_len, label, label_lens, raw_transcript, fname
 
 
 def save_audio_factory(pipeline_type, shard_id, output_dir: Path):

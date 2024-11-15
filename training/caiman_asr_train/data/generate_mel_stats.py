@@ -10,6 +10,7 @@ from caiman_asr_train.data.tokenizer import Tokenizer
 from caiman_asr_train.data.webdataset import LengthUnknownError
 from caiman_asr_train.rnnt import config
 from caiman_asr_train.setup.dali import build_dali_yaml_config
+from caiman_asr_train.utils.user_tokens_lite import get_all_user_tokens
 
 
 class TokenizerResultsIgnored(Tokenizer):
@@ -31,8 +32,9 @@ def generate_stats(args: Namespace):
     cfg = config.load(args.model_config)
     (dataset_kw, features_kw, _, _) = config.input(cfg, "train")
     update_config_mel_stats(dataset_kw, features_kw)
+    user_symbols = list(get_all_user_tokens(cfg).values())
     dali_yaml_config = build_dali_yaml_config(
-        config_data=dataset_kw, config_features=features_kw
+        config_data=dataset_kw, config_features=features_kw, user_symbols=user_symbols
     )
     train_loader = build_dali_loader(
         args,
@@ -42,6 +44,7 @@ def generate_stats(args: Namespace):
         tokenizer=TokenizerResultsIgnored(),
         world_size=1,
         mel_feat_normalizer=None,
+        cpu=args.dali_train_device == "cpu",
     )
 
     meldim = features_kw["n_filt"]
@@ -59,7 +62,7 @@ def generate_stats(args: Namespace):
             f"({train_loader.pipeline_type} evaluation: {i:>10}/{total_loader_len}",
             end="\r",
         )
-        logmel, logmel_lens, _, _, _ = batch
+        logmel, logmel_lens, _, _, _, _ = batch
         melsum = melsum.to(logmel.device)
         melss = melss.to(logmel.device)
         meln = meln.to(logmel.device)

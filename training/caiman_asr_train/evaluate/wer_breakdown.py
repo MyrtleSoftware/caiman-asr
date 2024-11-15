@@ -3,18 +3,23 @@
 from beartype import beartype
 
 from caiman_asr_train.evaluate.distributed_utils import multigpu_wer
+from caiman_asr_train.evaluate.error_rates import ErrorRate, error_rate_abbrev
 from caiman_asr_train.train_utils.distributed import print_once
 
 
 @beartype
 def print_wer_breakdown(
-    hypotheses: list[str], references: list[str], breakdown_chars: str
+    hypotheses: list[str],
+    references: list[str],
+    breakdown_chars: str,
+    error_rate: ErrorRate,
 ) -> None:
     def get_wer(transformation):
         return multigpu_wer(
             [transformation(h) for h in hypotheses],
             [transformation(r) for r in references],
             standardize=False,
+            error_rate=error_rate,
         )
 
     # Handle lowercasing separately from punctuation
@@ -28,7 +33,7 @@ def print_wer_breakdown(
     unstd_wer = get_wer(lambda x: x)
 
     print_once("")
-    print_once("WER % (relative improvement %)")
+    print_once(f"{error_rate_abbrev(error_rate).upper()} % (relative improvement %)")
     print_once("-" * 30)
     print_once(
         f"Unstandardized: {unstd_wer*100:5.3f}% "

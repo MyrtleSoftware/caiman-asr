@@ -25,13 +25,13 @@
 # Originally from https://github.com/openai/whisper/blob/main/whisper/normalizers/english.py
 # Additions/amendments by Myrtle.ai
 
-import json
 import os
 import re
 
 from caiman_asr_train.data.text.whisper_basic_normalizer import (
     remove_symbols_and_diacritics,
 )
+from caiman_asr_train.utils.fast_json import fast_read_json
 
 
 class EnglishTextNormalizer:
@@ -152,7 +152,7 @@ class EnglishSpellingNormalizer:
 
     def __init__(self):
         mapping_path = os.path.join(os.path.dirname(__file__), "english.json")
-        self.mapping = json.load(open(mapping_path))
+        self.mapping = fast_read_json(mapping_path)
 
     def __call__(self, s: str):
         return " ".join(self.mapping.get(word, word) for word in s.split())

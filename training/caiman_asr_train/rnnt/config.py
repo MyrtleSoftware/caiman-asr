@@ -14,15 +14,17 @@
 
 import copy
 import inspect
+from pathlib import Path
 
 import yaml
+from beartype import beartype
 from beartype.typing import Dict
+from pydantic import BaseModel, ConfigDict, confloat
 
 from caiman_asr_train.data import features
 from caiman_asr_train.data.dali.pipeline import PipelineParams, SpeedPerturbationParams
-from caiman_asr_train.data.tokenizer import Tokenizer
+from caiman_asr_train.data.unk_handling import UnkHandling
 from caiman_asr_train.rnnt.model import RNNT
-from caiman_asr_train.train_utils.distributed import print_once
 from caiman_asr_train.train_utils.grad_noise_scheduler import GradNoiseScheduler
 
 
@@ -97,7 +99,7 @@ def input(conf_yaml, split="train"):
     conf_dataset = validate_and_fill(
         PipelineParams,
         conf_dataset,
-        optional=["standardize_wer", "replacements", "remove_tags"],
+        optional=["standardize_wer", "replacements", "remove_tags", "user_symbols"],
     )
 
     conf_splicing = validate_and_fill(features.FrameSplicing, conf_splicing)
@@ -129,24 +131,35 @@ def rnnt(conf) -> Dict:
     )
 
 
-def tokenizer(conf) -> Dict:
-    # First assert arguments are correctly parsed
-    config = validate_and_fill(Tokenizer, conf["tokenizer"], optional=["sampling"])
+class TokenizerConfig(BaseModel):
+    sentpiece_model: str
+    labels: list[str]
+    # If using an old config, set sampling to 0.
+    sampling: confloat(ge=0.0, le=1.0) = 0.0
 
-    # assert optional arguments have valid values
-    if "sampling" in config:
-        samp = config["sampling"]
-        assert float(samp) >= 0.0 and float(samp) <= 1.0, (
-            f"Invalid sampling value in the tokenizer: {samp}."
-            f"Please choose a value in the range [0.0, 1.0]."
-        )
+    model_config = ConfigDict(extra="forbid")
 
-        # sampling is not applied without a sentencepiece model
-        if config.get("sentpiece_model") is None and samp > 0.0:
-            print_once(
-                "Sampling is not applied without a sentencePiece model. "
-                "Sampling is set to 0.0."
-            )
-            config["sampling"] = 0.0
 
-    return config
+class SentencePieceConfig(BaseModel):
+    unk_handling: UnkHandling = UnkHandling.FAIL
+
+    model_config = ConfigDict(extra="forbid")
+
+
+@beartype
+def get_spm_conf(tokenizer_conf: TokenizerConfig) -> SentencePieceConfig:
+    sentpiece_model_path = Path(tokenizer_conf.sentpiece_model)
+    spm_config_path = sentpiece_model_path.with_suffix(".yaml")
+    raw_spm_config = (
+        yaml.safe_load(spm_config_path.read_text()) if spm_config_path.exists() else {}
+    )
+    return SentencePieceConfig(**raw_spm_config)
+
+
+@beartype
+def get_tokenizer_conf(conf: dict) -> dict:
+    """The Tokenizer class needs information from both the
+    main YAML config and the SentencePiece YAML config"""
+    tokenizer_conf = TokenizerConfig(**conf["tokenizer"])
+    spm_conf = get_spm_conf(tokenizer_conf)
+    return dict(tokenizer_conf) | dict(spm_conf)

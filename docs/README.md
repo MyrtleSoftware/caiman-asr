@@ -20,3 +20,8 @@ cd docs
 ```
 
 The docs will now be available at `http://<machine_name>:3000` and will be re-built automatically when changes are made.
+
+## Versioned docs
+
+`./scripts/install_mdbook.bash` builds HTML for the current version of the docs,
+as well as all previous released versions.

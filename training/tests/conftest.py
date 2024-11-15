@@ -53,7 +53,7 @@ def saved_tokenizer_num_labels(tokenizer) -> int:
 
 
 @pytest.fixture()
-def mini_config_fp_factory(tmp_path, tokenizer_kw, mel_stats_dir, ngram_subdir):
+def mini_config_fp_factory(tmp_path, mel_stats_dir, ngram_subdir, test_data_dir):
     """
     Load the config file and replace the relevant fields to make it a 'mini' config.
 
@@ -74,7 +74,7 @@ def mini_config_fp_factory(tmp_path, tokenizer_kw, mel_stats_dir, ngram_subdir):
         rnnt_config["joint_n_hid"] = 4
 
         cfg["rnnt"] = rnnt_config
-        cfg["tokenizer"] = tokenizer_kw
+        cfg["tokenizer"]["sentpiece_model"] = str(test_data_dir / "librispeech29.model")
 
         cfg["input_val"]["filterbank_features"]["stats_path"] = mel_stats_dir
         cfg["input_train"]["filterbank_features"]["stats_path"] = mel_stats_dir

@@ -1,5 +1,9 @@
+from time import strftime
+
 import torch.distributed as dist
 from beartype import beartype
+
+from caiman_asr_train.utils.color_print import bold_yellow
 
 
 @beartype
@@ -15,6 +19,14 @@ def is_rank_zero() -> bool:
 def print_once(msg):
     if is_rank_zero():
         print(msg)
+
+
+def warn_once(msg):
+    print_once(bold_yellow(msg))
+
+
+def time_print_once(msg):
+    print_once(f"{strftime('%c')} {msg}")
 
 
 def unwrap_ddp(model):

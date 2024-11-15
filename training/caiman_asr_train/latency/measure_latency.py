@@ -10,6 +10,14 @@ import matplotlib.pyplot as plt
 from beartype import beartype
 from beartype.typing import Dict, List, Optional, Tuple
 
+from caiman_asr_train.data.text.is_tag import is_tag
+from caiman_asr_train.data.text.normalizers import lowercase_normalize as norm
+from caiman_asr_train.latency.measure_latency_lite import compute_latency_metrics
+from caiman_asr_train.latency.timestamp import EOS, Never, Silence, Termination
+from caiman_asr_train.train_utils.distributed import print_once
+
+BASIC_CHAR_SET = list(" abcdefghijklmnopqrstuvwxyz'")
+
 
 @dataclass
 class CTMTimestamp:
@@ -83,11 +91,18 @@ def load_ctm(ctm_file_path: str) -> List[CTMTimestamp]:
 def align_transcripts(
     ground_truth: List[CTMTimestamp],
     predicted: List[CTMTimestamp],
+    last_emit_time: Optional[Dict[str, Termination]],
     include_subs: bool = False,
-) -> Tuple[List[float], List[float]]:
+) -> Tuple[List[float], List[float], List[float], List[float], float, float]:
     """
     Aligns the words from ground truth and predicted transcripts and calculates the
     emission latencies.
+
+    Returns:
+        latency: List of emission latencies.
+        end_times: List of end times of ground truth words.
+        sil_latency: List of end point latencies for SIL terminated utterances.
+        eos_latency: List of end point latencies for EOS terminated utterances.
     """
     # Create dictionaries to group words by filenames
     ground_truth_dict = {}
@@ -101,14 +116,37 @@ def align_transcripts(
 
     latencies = []
     end_times = []
+    accepted = 0
+    all_gt_words = 0
+
+    eos_latency = []
+    sil_latency = []
+
+    end_acc = 0
+    end_tot = 0
+
+    def ok(tag, d1, d2):
+        if tag == "equal":
+            return True
+
+        if tag == "replace" and include_subs:
+            return d1 == d2
+
+        return False
 
     # Process each file separately
     for filename in ground_truth_dict:
         if filename not in predicted_dict:
             continue
 
-        ground_truth_words = [ctm.word for ctm in ground_truth_dict[filename]]
-        predicted_words = [ctm.word for ctm in predicted_dict[filename]]
+        ground_truth = [
+            ctm for ctm in ground_truth_dict[filename] if not is_tag(ctm.word)
+        ]
+
+        predicted = [ctm for ctm in predicted_dict[filename] if not is_tag(ctm.word)]
+
+        ground_truth_words = [norm(ctm.word, BASIC_CHAR_SET) for ctm in ground_truth]
+        predicted_words = [norm(ctm.word, BASIC_CHAR_SET) for ctm in predicted]
 
         # Initialize the SequenceMatcher for each file
         matcher = difflib.SequenceMatcher(
@@ -122,82 +160,75 @@ def align_transcripts(
             # start/end indices in both sequences.
 
             # Process according to the tag and include_subs flag
-            if tag in ("equal", "replace") and (tag != "replace" or include_subs):
+            if ok(tag, i2 - i1, j2 - j1):
                 latencies.extend(
                     [
-                        predicted_dict[filename][j].end_time
-                        - ground_truth_dict[filename][i].end_time
+                        predicted[j].end_time - ground_truth[i].end_time
                         for i, j in zip(range(i1, i2), range(j1, j2), strict=True)
                     ]
                 )
-                end_times.extend(
-                    ground_truth_dict[filename][i].end_time for i in range(i1, i2)
-                )
+                end_times.extend(ground_truth[i].end_time for i in range(i1, i2))
+                accepted += j2 - j1
 
-    return latencies, end_times
+        if last_emit_time is not None:
+            assert filename in last_emit_time, f"Missing emit time for {filename}"
 
+            last_gt = ground_truth_words[-1] if ground_truth_words else ""
+            last_pr = predicted_words[-1] if predicted_words else ""
 
-@beartype
-def remove_outliers(
-    latencies, timestamps, threshold=2
-) -> Tuple[List[float], List[float]]:
-    """
-    Remove outlier latencies outside threshold and their corresponding timestamps.
+            if last_gt == last_pr:
+                # If the ground truth CTM is empty, assume the worse possible
+                # endpointing latency
+                gt_final = ground_truth[-1].end_time if ground_truth else 0.0
+                end_acc += 1
 
-    Args:
-    -----
-    latencies: List of latency measurements.
-    timestamps: List of timestamps corresponding to each latency measurement.
-    threshold: The threshold range to determine outliers (default is 2).
+                match last_emit_time[filename]:
+                    case EOS(final_time):
+                        eos_latency.append(final_time - gt_final)
+                    case Silence(final_time):
+                        sil_latency.append(final_time - gt_final)
+                    case Never():
+                        pass
 
-    Returns:
-    --------
-    filtered_latencies: The list of latencies with outliers removed.
-    filtered_timestamps: The list of timestamps corresponding to the filtered latencies.
-    """
-    filtered_latencies = []
-    filtered_timestamps = []
+        end_tot += 1
+        all_gt_words += len(ground_truth_words)
 
-    for latency, timestamp in zip(latencies, timestamps):
-        if -threshold <= latency <= threshold:
-            filtered_latencies.append(latency)
-            filtered_timestamps.append(timestamp)
+    if all_gt_words > 0:
+        token_usage_rate = accepted / all_gt_words
+        terminal_token_usage_rate = end_acc / end_tot
+    else:
+        token_usage_rate = 0.0
+        terminal_token_usage_rate = 0.0
+        print_once("WARNING: No ground truth words found. Please check the CTM files.")
 
-    return filtered_latencies, filtered_timestamps
+    return (
+        latencies,
+        end_times,
+        sil_latency,
+        eos_latency,
+        token_usage_rate,
+        terminal_token_usage_rate,
+    )
 
 
 @beartype
 def align_ctm_files(
-    gt_ctm_paths: List[str], model_ctm_path: str, include_subs: bool = False
-) -> Tuple[List[float], List[float]]:
+    gt_ctm_paths: List[str],
+    model_ctm_path: str,
+    last_emit_time: Optional[Dict[str, Termination]],
+    include_subs: bool = False,
+) -> Tuple[List[float], List[float], List[float], List[float], float, float]:
     gt_ctm = []
     for ctm in gt_ctm_paths:
         gt_ctm += load_ctm(ctm)
     model_ctm = load_ctm(model_ctm_path)
-    latencies, end_times = align_transcripts(gt_ctm, model_ctm, include_subs)
-    latencies, end_times = remove_outliers(latencies, end_times)
-    return latencies, end_times
 
-
-@beartype
-def compute_latency_metrics(
-    latencies: List[float],
-    percentiles: List[float] = [50, 90],
-) -> Dict[str, Optional[float]]:
-    keys = ["Mean Latency"] + [f"{i}th Percentile" for i in percentiles]
-    latency_metrics = {key: None for key in keys}
-    latency_num = len(latencies)
-
-    if not latency_num:
-        return latency_metrics
-
-    latencies = sorted(latencies)
-    latency_metrics["Mean Latency"] = round(sum(latencies) / latency_num, 3)
-    for perc in percentiles:
-        latency_percentile = latencies[int(latency_num * perc / 100)]
-        latency_metrics[f"{perc}th Percentile"] = round(latency_percentile, 3)
-
-    return latency_metrics
+    return align_transcripts(
+        gt_ctm,
+        model_ctm,
+        last_emit_time,
+        include_subs,
+    )
 
 
 @beartype
@@ -221,10 +252,12 @@ def plot_latency_vs_seq_len(latencies, end_times, save_path):
 
 
 def main(args: Namespace):
-    latencies, end_times = align_ctm_files(
-        [args.gt_ctm], args.model_ctm, args.include_subs
+    latencies, end_times, sil_latency, eos_latency, _, _ = align_ctm_files(
+        [args.gt_ctm], args.model_ctm, None, args.include_subs
     )
-    print(compute_latency_metrics(latencies))
+
+    print(compute_latency_metrics(latencies, sil_latency, eos_latency))
+
     if args.output_img_path:
         assert (
             os.path.splitext(args.output_img_path)[1] == ".png"

@@ -39,10 +39,11 @@ The script will:
 
 1. Download data
 2. Create `JSON` manifests for each subset of LibriSpeech
-3. Create a sentencepiece tokenizer from the train-960h subset
-4. Record log-mel stats for the train-960h subset
-5. Populate the [missing fields](model_yaml_configurations.md#missing_yaml_fields) of a YAML configuration template
-6. Generate an n-gram language model with KenLM from the train-960h subset
+3. Convert the manifests into end-pointed manifests
+4. Create a sentencepiece tokenizer from the train-960h subset
+5. Record log-mel stats for the train-960h subset
+6. Populate the [missing fields](model_yaml_configurations.md#missing_yaml_fields) of a YAML configuration template
+7. Generate an n-gram language model with KenLM from the train-960h subset
 
 #### 1. Data download
 
@@ -60,13 +61,16 @@ Having run the script, the following folders should exist inside the container:
 #### 2. JSON manifests
 
 - `/datasets/LibriSpeech/`
-  - `librispeech-train-clean-100.json`
-  - `librispeech-train-clean-360.json`
-  - `librispeech-train-other-500.json`
-  - `librispeech-dev-clean.json`
-  - `librispeech-dev-other.json`
-  - `librispeech-test-clean.json`
-  - `librispeech-test-other.json`
+  - `librispeech-train-clean-100-flac.json`
+  - `librispeech-train-clean-360-flac.json`
+  - `librispeech-train-other-500-flac.json`
+  - `librispeech-train-clean-100-flac.eos.json`
+  - `librispeech-train-clean-360-flac.eos.json`
+  - `librispeech-train-other-500-flac.eos.json`
+  - `librispeech-dev-clean-flac.json`
+  - `librispeech-dev-other-flac.json`
+  - `librispeech-test-clean-flac.json`
+  - `librispeech-test-other-flac.json`
 
 #### 3. Sentencepiece tokenizer
 
@@ -155,6 +159,8 @@ where:
 - `TRAIN_MANIFESTS` can be a space-separated list
 
 It is advised that you use all of your training data transcripts to build the sentencepiece tokenizer but it is ok to use a subset of the data to calculate the mel stats via the `--n_utterances_only` flag to `caiman_asr_train/data/generate_mel_stats.py`.
+
+Before running make_json_artifacts.sh on your custom dataset, you may want to create an EOS version as explained [here](./endpointing.md#generating-segmented-transcripts)
 
 ### Next steps
 

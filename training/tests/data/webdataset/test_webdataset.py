@@ -15,7 +15,7 @@ def webdataset_reader(test_data_dir, tokenizer) -> WebDatasetReader:
         batch_size=2,
         shuffle=True,
         tokenizer=tokenizer,
-        normalize_config=NormalizeConfig(NormalizeLevel.LOWERCASE, [], True),
+        normalize_config=NormalizeConfig(NormalizeLevel.LOWERCASE, [], True, []),
         num_buckets=2,
     )
 
@@ -28,17 +28,32 @@ def webdataset_reader_periods(test_data_dir, tokenizer) -> WebDatasetReader:
         batch_size=2,
         shuffle=True,
         tokenizer=tokenizer,
-        normalize_config=NormalizeConfig(NormalizeLevel.LOWERCASE, [], True),
+        normalize_config=NormalizeConfig(NormalizeLevel.LOWERCASE, [], True, []),
+        num_buckets=2,
+    )
+
+
+@pytest.fixture()
+def webdataset_reader_periods_zip(test_data_dir, tokenizer) -> WebDatasetReader:
+    return WebDatasetReader(
+        file_root=str(test_data_dir),
+        tar_files=["webdataset-eg-with-periods.zip"],
+        batch_size=2,
+        shuffle=True,
+        tokenizer=tokenizer,
+        normalize_config=NormalizeConfig(NormalizeLevel.LOWERCASE, [], True, []),
         num_buckets=2,
     )
 
 
 def test_webdataset_returns_samples(webdataset_reader):
     seen_samples = 0
-    for audio, transcript, raw_transcript in webdataset_reader:
+    for audio, transcript, raw_transcript, fname in webdataset_reader:
         assert isinstance(transcript, np.ndarray)
         assert transcript.dtype == np.int32
         assert isinstance(raw_transcript, np.ndarray)
+        assert raw_transcript.dtype == np.int32
+        assert isinstance(fname, np.ndarray)
         assert raw_transcript.dtype == np.int32
         assert isinstance(audio, np.ndarray)
         assert audio.dtype == np.float32
@@ -51,11 +66,31 @@ def test_webdataset_returns_samples(webdataset_reader):
 
 def test_webdataset_periods_returns_samples(webdataset_reader_periods):
     seen_samples = 0
-    for audio, transcript, raw_transcript in webdataset_reader_periods:
+    for audio, transcript, raw_transcript, fname in webdataset_reader_periods:
         assert isinstance(transcript, np.ndarray)
         assert transcript.dtype == np.int32
         assert isinstance(raw_transcript, np.ndarray)
         assert raw_transcript.dtype == np.int32
+        assert isinstance(fname, np.ndarray)
+        assert fname.dtype == np.int32
+        assert isinstance(audio, np.ndarray)
+        assert audio.dtype == np.float32
+        seen_samples += 1
+
+    assert (
+        seen_samples == 2
+    ), f"There should be exactly 2 samples in the test data, but there were {seen_samples}"
+
+
+def test_webdataset_periods_zip_returns_samples(webdataset_reader_periods_zip):
+    seen_samples = 0
+    for audio, transcript, raw_transcript, fname in webdataset_reader_periods_zip:
+        assert isinstance(transcript, np.ndarray)
+        assert transcript.dtype == np.int32
+        assert isinstance(raw_transcript, np.ndarray)
+        assert raw_transcript.dtype == np.int32
+        assert isinstance(fname, np.ndarray)
+        assert fname.dtype == np.int32
         assert isinstance(audio, np.ndarray)
         assert audio.dtype == np.float32
         seen_samples += 1

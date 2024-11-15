@@ -76,3 +76,50 @@ from caiman_asr_train.rnnt.decoder import get_topk_logits
 def test_get_topk_logits(logits, vecs_in_pkt, vec_size, expected):
     logits = get_topk_logits(logits, vecs_in_pkt, vec_size)
     assert torch.allclose(logits, expected)
+
+
+def legacy_get_topk_logits(
+    logits: torch.Tensor, vecs_in_pkt: int = 8, vec_size: int = 32
+):
+    """
+    This is the old unbatched version here to check the
+    correctness of the new batched version.
+    """
+
+    reshape_logits = logits.view(-1, vecs_in_pkt, vec_size).to(device=logits.device)
+    n_packets, _, _ = reshape_logits.shape
+
+    # get max values and indices across the vectors in each packet
+    max_vals, max_indices = reshape_logits.max(dim=1)
+
+    # get correct indices of the max values across vectors
+    reshape_indices = (
+        torch.arange(0, logits.size(1), 1)
+        .view(n_packets, vecs_in_pkt, vec_size)
+        .to(device=logits.device)
+    )
+
+    indices = torch.gather(reshape_indices, 1, max_indices.unsqueeze(1)).squeeze(1)
+
+    flat_max_vals = max_vals.flatten()
+    flat_indices = indices.flatten()
+
+    # keep minimum to mask reduced values
+    _min = torch.min(flat_max_vals).item()
+
+    # generate tensor with logits
+    _input = _min * torch.ones_like(logits[0])
+    scatter_max_vals = _input.scatter_(0, flat_indices, flat_max_vals)
+
+    return scatter_max_vals.unsqueeze(0)
+
+
+@pytest.mark.parametrize("batch", [1, 2, 7])
+@pytest.mark.parametrize("elements", [1024, 2048])
+def test_batched(batch, elements):
+    logits = torch.randn(batch, elements)
+
+    batched = get_topk_logits(logits)
+
+    for i in range(batch):
+        assert torch.allclose(batched[None, i], legacy_get_topk_logits(logits[None, i]))

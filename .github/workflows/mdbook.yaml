@@ -30,6 +30,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Fetch all commits to access older versions of docs
+          fetch-depth: 0
       - name: Install mdBook
         run: |
           cd docs

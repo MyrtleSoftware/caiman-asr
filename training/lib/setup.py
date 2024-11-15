@@ -1,7 +1,10 @@
 from pathlib import Path
 
 from setuptools import find_packages, setup
-from torch.utils.cpp_extension import BuildExtension, CUDAExtension
+from torch.utils.cpp_extension import CUDA_HOME, BuildExtension, CUDAExtension
+
+if CUDA_HOME is None:
+    raise RuntimeError("nvcc was not found.")
 
 
 def build_ext(name):
@@ -27,10 +30,10 @@ modules = list(map(build_ext, ["logsumexp", "transducer_loss", "lstm"]))
 
 setup(
     name="rnnt_ext",
-    version="0.1.0",
+    version="0.2.0",
     description="Myrtle.ai's CAIMAN-ASR training module extensions",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     ext_modules=modules,
-    cmdclass={"build_ext": BuildExtension},
+    cmdclass={"build_ext": BuildExtension.with_options(use_ninja=False)},
 )

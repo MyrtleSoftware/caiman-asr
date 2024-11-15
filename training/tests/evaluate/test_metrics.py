@@ -6,6 +6,7 @@ from hypothesis import given
 from hypothesis.strategies import text
 from levenshtein_rs import levenshtein_list as levenshtein
 
+from caiman_asr_train.evaluate.error_rates import ErrorRate
 from caiman_asr_train.evaluate.metrics import word_error_rate
 
 
@@ -58,7 +59,9 @@ def levenshtein_ref(a, b):
     ],
 )
 def test_word_error_rate(hypotheses, references, standardize, expected_wer):
-    wer, scores, words = word_error_rate(hypotheses, references, standardize)
+    wer, scores, words = word_error_rate(
+        hypotheses, references, standardize=standardize, error_rate=ErrorRate.WORD
+    )
     assert (wer, scores, words) == expected_wer, "WER calculation is incorrect"
 
 
@@ -66,7 +69,9 @@ def test_wer_unequal_lengths():
     references = ["hello", "mars"]
     hypotheses = ["hello"]
     with pytest.raises(ValueError):
-        word_error_rate(hypotheses, references, standardize=True)
+        word_error_rate(
+            hypotheses, references, standardize=True, error_rate=ErrorRate.WORD
+        )
 
 
 def test_long_utterance():
@@ -76,3 +81,12 @@ def test_long_utterance():
     assert levenshtein(str1.split(), str2.split()) == levenshtein_ref(
         str1.split(), str2.split()
     )
+
+
+def test_mer():
+    assert word_error_rate(
+        ["One two four一二四"],
+        ["One two three一二三"],
+        standardize=False,
+        error_rate=ErrorRate.MIXTURE,
+    ) == (1 / 3, 2, 6)

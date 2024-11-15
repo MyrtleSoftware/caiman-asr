@@ -12,27 +12,31 @@ The WERs in the following section are for models trained on 13k hours of open-so
 
 The UPL were computed by streaming librispeech-dev-clean audio live to an FPGA backend server on-site. Please refer to this [document](./inference/user_perceived_latency.md) for more details on latencies.
 
-## Beam search with n-gram LM
+## Without state resets
+
+<!-- These use a language model for beam because it doesn't slow down inference-->
 
 The solution supports decoding with a [beam search](./training/beam_decoder.md) (default beam width=4) with an [n-gram language model](./training/ngram_lm.md) for improved accuracy. The solution supports greedy decoding for higher throughput.
 
-| Model   | Parameters | Decoding          | RTS   | CL99 at max RTS | mean UPL | HF Leaderboard WER  |
+| Model   | Parameters | Decoding          | RTS   | CL99 at max RTS | median UPL | HF Leaderboard WER  |
 |---------|------------|-------------------|-------|-----------------|------------|---------------------|
-| `base`  | 85M        | `greedy`          | 2000  |  25 ms          | 159 ms     | 13.74%              |
-| `base`  | 85M        | `beam`, `width=4` | 1300  |  80 ms          | -          | 12.78%              |
-| `large` | 196M       | `greedy`          | 800   |  25 ms          | -          | 12.02%              |
-| `large` | 196M       | `beam`, `width=4` | 500   |  40 ms          | 163 ms     | 11.37%              |
+| `base`  | 85M        | `greedy`          | 2000  |  25 ms          | 147 ms     | 12.31%              |
+| `base`  | 85M        | `beam`, `width=4` | 1300  |  80 ms          | -          | 11.64%              |
+| `large` | 196M       | `greedy`          | 800   |  25 ms          | -          | 11.41%              |
+| `large` | 196M       | `beam`, `width=4` | 500   |  40 ms          | 158 ms     | 10.95%              |
 
 ## State resets
 
+<!-- These use a language model for beam because it doesn't slow down inference-->
+
 State resets is a technique that improves the accuracy on long utterances (over 60s) by resetting the model's hidden state after a fixed duration. This reduces the number of real-time streams that can be supported by around 25%:
 
-| Model   | Parameters | Decoding          | RTS   | CL99 at max RTS | mean UPL | HF Leaderboard WER  |
+| Model   | Parameters | Decoding          | RTS   | CL99 at max RTS | median UPL | HF Leaderboard WER  |
 |---------|------------|-------------------|-------|-----------------|------------|---------------------|
-| `base`  | 85M        | `greedy`          | 1600  | 45 ms           | 159 ms     | 13.70%              |
-| `base`  | 85M        | `beam`, `width=4` | 1200  | 50 ms           |  -         | 12.83%              |
-| `large` | 196M       | `greedy`          | 650   | 55 ms           |  -         | 11.99%              |
-| `large` | 196M       | `beam`, `width=4` | 400   | 60 ms           | 163 ms     | 11.38%              |
+| `base`  | 85M        | `greedy`          | 1600  | 45 ms           | 147 ms     | 12.14%              |
+| `base`  | 85M        | `beam`, `width=4` | 1200  | 50 ms           |  -         | 11.38%              |
+| `large` | 196M       | `greedy`          | 650   | 55 ms           |  -         | 11.13%              |
+| `large` | 196M       | `beam`, `width=4` | 400   | 60 ms           | 158 ms     | 10.61%              |
 
 Note that most of the data in the Huggingface leaderboard is less than 60s long so the impact of state resets is not reflected in the leaderboard WER.
 

@@ -13,7 +13,7 @@ from rnnt_ext.custom_lstm.legacy import CustomLSTM as Legacy
 @pytest.mark.parametrize("batch_size", [1, 3])
 @pytest.mark.parametrize("input_size", [1, 2])
 @pytest.mark.parametrize("hidden_size", [1, 5])
-@pytest.mark.parametrize("layer_function", [CUDA.soft_layer_fun, CUDA.hard_layer_fun])
+@pytest.mark.parametrize("layer_function", [CUDA.SoftLayer(), CUDA.HardLayer()])
 def test_derivatives(seq_length, batch_size, input_size, hidden_size, layer_function):
     #
     kwargs = {
@@ -36,7 +36,7 @@ def test_derivatives(seq_length, batch_size, input_size, hidden_size, layer_func
     variables = [X, W, R, BW, BR]
 
     def stub(X, W, R, BW, BR):
-        out, _, _ = layer_function.apply(h0, c0, X, W, R, BW, BR)
+        out, *_ = layer_function(h0, c0, X, W, R, BW, BR)
         return out
 
     assert torch.autograd.gradcheck(stub, variables)

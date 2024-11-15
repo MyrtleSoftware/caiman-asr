@@ -1,4 +1,4 @@
-from beartype.typing import Callable
+from beartype.typing import Callable, Optional
 
 from caiman_asr_train.rnnt.hypothesis import Hypothesis
 from caiman_asr_train.rnnt.response import (
@@ -19,24 +19,36 @@ class ResponseSerializer:
     Other less conservative final detection algorithms are possible.
 
     NOTE: this isn't a true serialiser in that it just creates a python FrameResponses
-    class, but that object and its children are pydantic models that can be
-    serialised to JSON with the .dict() method.
+    class, but that object and its children are dataclasses that can be
+    serialised to JSON with the dataclasses.asdict() method.
     """
 
     def __init__(self, nbest_sort: Callable) -> None:
         self.nbest_sort = nbest_sort
 
     def frame_responses(
-        self, kept_hyps: dict[int, Hypothesis], time_idx: int
+        self,
+        kept_hyps: dict[int, Hypothesis],
+        time_idx: Optional[int] = None,
+        partials=True,
     ) -> tuple[FrameResponses, dict[int, Hypothesis]]:
         """
         Build the frame-level responses and update kept_hyps if necessary.
 
         kept_hyps is only updated if a final is selected.
+
+        If partials is True then partials will be built, otherwise they will be None.
+
+        Note: building partials is very slow and currently we don't use them so
+        myrtle has not invested resources in optimizing this option.
         """
         final, kept_hyps = self._get_final(kept_hyps)
 
-        partials = self._build_partials(kept_hyps, time_idx)
+        if partials:
+            assert time_idx is not None, "time_idx must be provided if partials is True"
+            partials = self._build_partials(kept_hyps, time_idx)
+        else:
+            partials = None
 
         return FrameResponses(partials=partials, final=final), kept_hyps
 
@@ -74,10 +86,11 @@ class ResponseSerializer:
         alternatives = []
         start_frame = time_idx
         for hyp in n_best_list:
-            timesteps, token_seq, y_seq = (
+            timesteps, token_seq, y_seq, p_seq = (
                 hyp.timesteps[1:],
                 hyp.s_seq[1:],
                 hyp.y_seq[1:],
+                hyp.p_seq[1:],
             )
             assert len(timesteps) == len(token_seq) == len(y_seq)
             if not timesteps:
@@ -85,7 +98,7 @@ class ResponseSerializer:
                 continue
             start_frame = min(start_frame, min(timesteps))
             alt = HypothesisResponse(
-                y_seq=y_seq, timesteps=timesteps, token_seq=token_seq, confidence=1.0
+                y_seq=y_seq, timesteps=timesteps, token_seq=token_seq, confidence=p_seq
             )
             alternatives.append(alt)
 
@@ -142,11 +155,12 @@ class ResponseSerializer:
             hyp: hypothesis
             tkn_idx: token index up to which the final should be built from
         """
-        s_seqs, y_seqs, timestepss = [], [], []
+        s_seqs, y_seqs, timesteps, p_seqs = [], [], [], []
         for hyp in hyps:
+            p_seqs.append(hyp.p_seq[1:tkn_idx])
             s_seqs.append(hyp.s_seq[1:tkn_idx])
             y_seqs.append(hyp.y_seq[1:tkn_idx])
-            timestepss.append(hyp.timesteps[1:tkn_idx])
+            timesteps.append(hyp.timesteps[1:tkn_idx])
 
         assert all(
             s_seqs[0] == s for s in s_seqs[1:]
@@ -154,19 +168,21 @@ class ResponseSerializer:
         assert all(
             y_seqs[0] == y for y in y_seqs[1:]
         ), f"All y_seqs should be the same but {y_seqs=}"
+
         final_s_seq = s_seqs[0]
         final_y_seq = y_seqs[0]
+        final_p_seq = p_seqs[0]
 
         # timesteps are not guaranteed to be the same across hypotheses so take the
         # minimum for each token. This is done because if the token was output by the
         # model with high probability then it has almost certainly been spoken by that
         # point
         assert all(
-            len(t) == len(timestepss[0]) for t in timestepss[1:]
-        ), f"All timestepss should be the same length but {timestepss=}"
+            len(t) == len(timesteps[0]) for t in timesteps[1:]
+        ), f"All timesteps should be the same length but {timesteps=}"
+
         final_timesteps = [
-            min(timestep[i] for timestep in timestepss)
-            for i in range(len(timestepss[0]))
+            min(timestep[i] for timestep in timesteps) for i in range(len(timesteps[0]))
         ]
 
         start_frame, end_frame = min(final_timesteps), max(final_timesteps)
@@ -175,7 +191,7 @@ class ResponseSerializer:
             y_seq=final_y_seq,
             timesteps=final_timesteps,
             token_seq=final_s_seq,
-            confidence=1.0,
+            confidence=final_p_seq,
         )
         return DecodingResponse(
             start_frame_idx=start_frame,

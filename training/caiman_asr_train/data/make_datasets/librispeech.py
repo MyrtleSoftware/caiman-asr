@@ -1,7 +1,10 @@
 import argparse
 import logging
+import shutil
 from pathlib import Path
-from typing import Dict, Sequence, Union
+from typing import Dict, Union
+
+import sox
 
 from caiman_asr_train.data.make_datasets.io import (
     download_file,
@@ -45,7 +48,7 @@ def get_parser():
     parser = argparse.ArgumentParser(description="LibriSpeech utility parser")
     parser.add_argument(
         "--data_dir",
-        default="/datasets/LibriSpeech",
+        default="/datasets",
         type=str,
         help="Directory to save data and manifests",
     )
@@ -71,6 +74,7 @@ def get_parser():
     )
     parser.add_argument(
         "--force_download",
+        default=False,
         action="store_true",
         help="Force download in case files exist",
     )
@@ -82,24 +86,27 @@ def get_parser():
     )
     parser.add_argument(
         "--use_relative_path",
+        default=False,
         action="store_true",
         help="Use relative audio path in manifests",
     )
     parser.add_argument(
-        "--output_format",
-        default="json",
-        choices=["json"],
-        help="Output format for prepared LibriSpeech",
-    )
-    parser.add_argument(
         "--skip_download_data",
+        default=False,
         action="store_true",
         help="Skip downloading data and prepare manifest from existing files",
     )
     parser.add_argument(
         "--skip_prepare_manifests",
+        default=False,
         action="store_true",
         help="Skip preparing manifests and only download the dataset",
+    )
+    parser.add_argument(
+        "--convert_to_wav",
+        default=False,
+        action="store_true",
+        help="Convert audio from FLAC to WAV",
     )
 
     return parser
@@ -109,21 +116,11 @@ class LibriSpeech:
     def __init__(self, args):
         setup_logger()
 
-        self.skip_download_data = args.skip_download_data
-        self.skip_prepare_manifests = args.skip_prepare_manifests
-        self.data_dir = Path(args.data_dir).absolute()
-        self.dataset_parts = (
-            args.dataset_parts
-            if isinstance(args.dataset_parts, list)
-            else [args.dataset_parts]
-        )
-        self.source_url = args.source_url
-        self.force_download = args.force_download
-        self.num_jobs = args.num_jobs
-        self.use_relative_path = args.use_relative_path
-        self.output_format = args.output_format
-
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.args = args
+        self.args.data_dir = Path(self.args.data_dir).absolute()
+        self.args.libri_dir = self.args.data_dir / "LibriSpeech"
+        self.args.data_dir.mkdir(parents=True, exist_ok=True)
+        self.audio_format = "wav" if args.convert_to_wav else "flac"
 
     def download_data(self) -> None:
         """
@@ -135,10 +132,10 @@ class LibriSpeech:
             or a list of splits (e.g. "dev-clean") to download.
         :param force_download: Bool, if True, download the tars no matter if the tars exist.
         """
-        source_url: str = self.source_url
-        data_dir: Union[str, Path] = self.data_dir
-        dataset_parts: Union[str, Sequence[str]] = self.dataset_parts
-        force_download: bool = self.force_download
+        source_url = self.args.source_url
+        data_dir = self.args.data_dir
+        dataset_parts = self.args.dataset_parts
+        force_download = self.args.force_download
 
         # Download
         logging.info("Downloading LibriSpeech")
@@ -155,17 +152,27 @@ class LibriSpeech:
 
         # Extract tar files
         logging.info("Extracting *.tar files")
-
-        # Dont create another LibriSpeech subdir by unpacking
-        # into `data_dir`/LibriSpeech/LibriSpeech
-        if str(data_dir).endswith("LibriSpeech"):
-            untar_dir = data_dir.parent
-
         for part in dataset_parts:
             filepath = data_dir / f"{part}.tar.gz"
-            extract_tar(filepath=filepath, data_dir=untar_dir)
+            subdir = self.args.libri_dir / part
+            if self.args.force_download and subdir.is_dir():
+                shutil.rmtree(subdir)
+            extract_tar(filepath=filepath, data_dir=data_dir)
 
         logging.info("Download and extraction successful")
+
+    def convert_to_wav(self):
+        dataset_parts = self.args.dataset_parts
+        for part in dataset_parts:
+            subdir = self.args.libri_dir / Path(part)
+            audio_files = subdir.rglob("*[0-9].flac")
+
+            for flac_file in audio_files:
+                # Calling build() multiple times with the same tfm object can
+                # corrupt the output (especially if the input is multi-channel)
+                tfm = sox.Transformer()
+                wav_file = str(flac_file).replace("flac", "wav")
+                tfm.build(str(flac_file), wav_file)
 
     def parse_trans_file(self, trans_file: Union[str, Path]) -> Dict[str, str]:
         """
@@ -178,23 +185,20 @@ class LibriSpeech:
         }
 
     def prepare_manifests(self):
-        data_dir: Union[str, Path] = self.data_dir
-        dataset_parts: Union[str, Sequence[str]] = self.dataset_parts
-        use_relative_path: bool = self.use_relative_path
-        num_jobs: int = self.num_jobs
-        audio_ext = "flac"
+        dataset_parts = self.args.dataset_parts
+        use_relative_path = self.args.use_relative_path
+        num_jobs = self.args.num_jobs
         trans_ext = "trans.txt"
 
-        manifests = {}
         for part in dataset_parts:
             logging.info(f"Parsing audio and transcripts files for `{part}`")
-            subdir = data_dir / Path(part)
+            subdir = self.args.libri_dir / Path(part)
             trans_files = subdir.rglob(f"*.{trans_ext}")
-            audio_files = subdir.rglob(f"*[0-9].{audio_ext}")
-            if use_relative_path:
-                audio_files = [f.relative_to(data_dir) for f in audio_files]
+            audio_files = subdir.rglob(f"*[0-9].{self.audio_format}")
             audio_dict = {
-                str(f.name).removesuffix(f".{audio_ext}"): f.absolute()
+                str(f.name).removesuffix(f".{self.audio_format}"): (
+                    f.relative_to(self.args.libri_dir) if use_relative_path else f
+                )
                 for f in audio_files
             }
 
@@ -222,28 +226,39 @@ class LibriSpeech:
             # Create manifest
             logging.info("Generating manifest")
             manifest = prepare_manifest(
-                input_data, num_jobs, data_dir if use_relative_path else None
+                input_data,
+                num_jobs,
+                self.args.libri_dir if use_relative_path else None,
+                use_relative_path=use_relative_path,
             )
 
             logging.info("Validating manifest")
-            validate_manifest(manifest, data_dir if use_relative_path else None)
-            manifests[part] = manifest
+            validate_manifest(
+                manifest=manifest,
+                num_jobs=num_jobs,
+                data_dir=self.args.libri_dir if use_relative_path else None,
+            )
 
             # Save manifests
             logging.info(
-                f"Saving librispeech-{part}.json manifest to disk, "
+                f"Saving librispeech-{part}-{self.audio_format}.json manifest to disk, "
                 f"contains {len(manifest)} entries"
             )
-            manifest_path = self.data_dir / f"librispeech-{part}.{audio_ext}.json"
-            save_manifest(manifests[part], manifest_path)
+            manifest_path = (
+                self.args.libri_dir / f"librispeech-{part}-{self.audio_format}.json"
+            )
+            save_manifest(manifest, manifest_path)
 
     def run(self):
         # Download and extract
-        if not self.skip_download_data:
+        if not self.args.skip_download_data:
             self.download_data()
 
+        if self.args.convert_to_wav:
+            self.convert_to_wav()
+
         # Prepare and save manifests
-        if not self.skip_prepare_manifests:
+        if not self.args.skip_prepare_manifests:
             self.prepare_manifests()
 
 

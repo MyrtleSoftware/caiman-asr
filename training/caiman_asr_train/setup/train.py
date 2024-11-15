@@ -17,13 +17,11 @@ from caiman_asr_train.export.model_schema import check_schema_training
 from caiman_asr_train.log.tb_dllogger import init_log
 from caiman_asr_train.log.tee import start_logging_stdout_and_stderr
 from caiman_asr_train.rnnt import config
-from caiman_asr_train.rnnt.delay_schedules import (
-    ConstantDelayPenalty,
-    LinearDelayPenaltyScheduler,
-)
+from caiman_asr_train.rnnt.config import get_tokenizer_conf
 from caiman_asr_train.rnnt.model import RNNT
 from caiman_asr_train.rnnt.sub_models import RNNTSubModels
 from caiman_asr_train.setup.base import Setup, TrainingOnly
+from caiman_asr_train.setup.check_tokenizer import check_tokenizer_kw
 from caiman_asr_train.setup.core import CUDA, TRAIN, VAL, PipelineType
 from caiman_asr_train.train_utils.batch_splitting import train_step_batch_split
 from caiman_asr_train.train_utils.build_optimizer import build_optimizer
@@ -35,6 +33,11 @@ from caiman_asr_train.train_utils.grad_noise_scheduler import (
 )
 from caiman_asr_train.train_utils.lr import lr_policy
 from caiman_asr_train.train_utils.optimizer import OptimizerWrapper
+from caiman_asr_train.train_utils.schedule import (
+    ConstantSchedule,
+    Schedule,
+    StepSchedule,
+)
 from caiman_asr_train.utils.num_weights import num_weights
 from caiman_asr_train.utils.seed import set_seed
 
@@ -92,7 +95,9 @@ class TrainSetup(Setup):
 
         # load checkpoint
         meta = {"best_wer": 10**6, "start_epoch": 1, "step": 1}
-        checkpointer = Checkpointer(args.output_dir, "RNN-T")
+        checkpointer = Checkpointer(
+            args.output_dir, "RNN-T", allow_partial_load=args.allow_partial_checkpoint
+        )
 
         if args.resume or args.fine_tune:
             assert args.resume ^ args.fine_tune, "cannot both resume and fine_tune"
@@ -108,7 +113,7 @@ class TrainSetup(Setup):
         if args.resume:
             args.ckpt = args.ckpt or checkpointer.last_checkpoint()
             assert args.ckpt is not None, "no checkpoint to resume from"
-            previous_tokenizer_kw = checkpointer.load(
+            checkpoint_tokenizer_kw = checkpointer.load(
                 args.ckpt, model, ema_model, optimizer, meta
             )
 
@@ -123,21 +128,11 @@ class TrainSetup(Setup):
         # when fine-tuning, optimizer state and meta info are not kept
         if args.fine_tune:
             assert args.ckpt is not None, "no checkpoint to fine_tune from"
-            previous_tokenizer_kw = checkpointer.load(args.ckpt, model, ema_model)
+            checkpoint_tokenizer_kw = checkpointer.load(args.ckpt, model, ema_model)
 
         if args.resume or args.fine_tune:
-            if previous_tokenizer_kw is None:
-                print_once("WARNING: This is an old RNN-T checkpoint")
-                print_once(
-                    "Cannot check if you are resuming/fine-tuning using the correct "
-                    "tokenizer\n"
-                )
-            elif previous_tokenizer_kw != tokenizer_kw:
-                print_once(
-                    f"WARNING: The checkpoint's previous tokenizer keywords were "
-                    f"{previous_tokenizer_kw}, but the config file is trying to train "
-                    f"using {tokenizer_kw}\n"
-                )
+            check_tokenizer_kw(checkpoint_tokenizer_kw, tokenizer_kw)
+
         print_once(f"Using the tokenizer keywords {tokenizer_kw}")
 
         grad_noise_scheduler = self.build_grad_noise_scheduler(args, cfg)
@@ -151,6 +146,7 @@ class TrainSetup(Setup):
             optimizer_wrapper=optimizer_wrapper,
             train_step_fn=self.get_train_step_fn(args),
             dp_scheduler=self.build_delay_penalty_scheduler(args),
+            star_scheduler=self.build_star_scheduler(args),
         )
 
         return model, ema_model, training_only
@@ -173,16 +169,18 @@ class TrainSetup(Setup):
         return OptimizerWrapper(args, optimizer, scaler, lower_bound=bound)
 
     def build_tokenizer(
-        self, args: Namespace, cfg: dict
+        self, cfg: dict
     ) -> Tuple[Dict[PipelineType, Tokenizer], int, Dict[PipelineType, dict]]:
-        tokenizer_kw = config.tokenizer(cfg)
+        tokenizer_kw = get_tokenizer_conf(cfg)
         tokenizer = Tokenizer(**tokenizer_kw)
+
         blank_idx = tokenizer.num_labels
 
         # tokenizer for validation dataset remove sampling effect
-        tokenizer_kw_val = config.tokenizer(cfg)
+        tokenizer_kw_val = get_tokenizer_conf(cfg)
         tokenizer_kw_val["sampling"] = 0.0
         tokenizer_val = Tokenizer(**tokenizer_kw_val)
+
         return (
             {TRAIN: tokenizer, VAL: tokenizer_val},
             blank_idx,
@@ -211,19 +209,24 @@ class TrainSetup(Setup):
             grad_noise_scheduler = GradNoiseScheduler(**grad_noise_conf)
         return grad_noise_scheduler
 
-    def build_delay_penalty_scheduler(
-        self, args: Namespace
-    ) -> ConstantDelayPenalty | LinearDelayPenaltyScheduler:
-        if args.delay_penalty == "linear_schedule":
-            return LinearDelayPenaltyScheduler(
-                warmup_steps=args.dp_warmup_steps,
-                warmup_penalty=args.dp_warmup_penalty,
-                ramp_penalty=args.dp_ramp_penalty,
-                final_steps=args.dp_final_steps,
-                final_penalty=args.dp_final_penalty,
+    def build_star_scheduler(self, args: Namespace) -> StepSchedule:
+        return StepSchedule(
+            initial_value=args.star_initial_value,
+            final_value=args.star_final_value,
+            toggle_step=args.star_toggle_step,
+            wer_threshold=args.star_wer_threshold,
+        )
+
+    def build_delay_penalty_scheduler(self, args: Namespace) -> Schedule:
+        if args.delay_penalty == "wer_schedule":
+            return StepSchedule(
+                initial_value=args.dp_initial_value,
+                final_value=args.dp_final_value,
+                toggle_step=args.dp_toggle_step,
+                wer_threshold=args.dp_wer_threshold,
             )
         else:
-            return ConstantDelayPenalty(float(args.delay_penalty))
+            return ConstantSchedule(float(args.delay_penalty))
 
     def get_batch_sizes(self, args: Namespace) -> Dict[PipelineType, int]:
         # Effective batch size per GPU after grad accumulation

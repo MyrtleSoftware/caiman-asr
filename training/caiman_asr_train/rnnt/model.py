@@ -481,7 +481,7 @@ class RNNT(nn.Module):
             state_dict["joint_net.2.weight"].detach().clone()
         )
         state_dict["joint_fc.bias"] = state_dict["joint_net.2.bias"].detach().clone()
-        super().load_state_dict(state_dict, strict=strict)
+        return super().load_state_dict(state_dict, strict=strict)
 
 
 def label_collate(labels):

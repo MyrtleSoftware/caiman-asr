@@ -6,7 +6,7 @@ import torch
 from beartype.typing import Union
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from caiman_asr_train.rnnt.loss import ApexTransducerLoss
+from caiman_asr_train.rnnt.loss import IDENTITY_LOSS_MODIFIERS, ApexTransducerLoss
 from caiman_asr_train.rnnt.model import RNNT
 from caiman_asr_train.rnnt.sub_models import RNNTSubModels
 from caiman_asr_train.train_utils.batch_splitting import train_step_batch_split
@@ -19,6 +19,8 @@ from caiman_asr_train.utils.seed import set_seed
 def loss_fn(n_classes_fixture):
     return ApexTransducerLoss(
         blank_idx=n_classes_fixture - 1,
+        eos_idx=None,
+        star_idx=None,
         packed_input=False,
         validate_first_n_remaining=0,
     )
@@ -126,7 +128,7 @@ def test_batch_split_train_step_equiv(
         *data1,
         scaler=scaler1,
         rnnt_state=None,
-        delay_penalty=0.0,
+        loss_mods=IDENTITY_LOSS_MODIFIERS,
     )
 
     results2 = train_step(
@@ -136,7 +138,7 @@ def test_batch_split_train_step_equiv(
         *data2,
         scaler=scaler2,
         rnnt_state=None,
-        delay_penalty=0.0,
+        loss_mods=IDENTITY_LOSS_MODIFIERS,
     )
 
     compare_step_results(results1, results2, model1, model2, scaler1, scaler2)

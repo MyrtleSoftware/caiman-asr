@@ -17,14 +17,17 @@ from beartype import beartype
 from beartype.typing import List
 from numpy import random
 
+from caiman_asr_train.data.unk_handling import UnkHandling, check_tokenized_transcript
+
 
 @beartype
 class Tokenizer:
     def __init__(
         self,
         labels: List[str],
+        unk_handling: UnkHandling,
         sentpiece_model: str,
-        sampling: float = 0.0,
+        sampling: float,
     ):
         """Converts transcript to a sequence of tokens.
 
@@ -34,12 +37,14 @@ class Tokenizer:
             sampling (float): probability of random sampling from
                              tokens when encoding text.
         """
-        # Other code reads this attribute:
         self.charset = labels
+        self.sentpiece_model = sentpiece_model
+        self.sampling = sampling
+        self.unk_handling = unk_handling
 
         self.sentpiece = spm.SentencePieceProcessor(model_file=sentpiece_model)
+
         self.num_labels = len(self.sentpiece)
-        self.sampling = sampling
 
     def tokenize(self, transcript: str) -> List[int]:
         """
@@ -54,10 +59,19 @@ class Tokenizer:
         if self.sampling > 0.0:
             do_sampling = random.random_sample() < self.sampling
 
-        inds = self.sentpiece.encode(
-            transcript, out_type=int, enable_sampling=do_sampling
-        )
-        assert 0 not in inds, f"<unk> found during tokenization (OOV?)\n{transcript}"
+        for _ in range(5):
+            # This is a hack to work around a bug in SentencePiece where it
+            # can split up a user defined symbol when sampling is enabled.
+
+            inds = self.sentpiece.encode(
+                transcript, out_type=int, enable_sampling=do_sampling
+            )
+
+            if 0 not in inds:
+                break
+        else:
+            check_tokenized_transcript(inds, transcript, self.unk_handling)
+
         return inds
 
     def detokenize(self, inds: int | List[int]) -> str:

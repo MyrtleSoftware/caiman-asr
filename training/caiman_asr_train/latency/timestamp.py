@@ -1,7 +1,40 @@
 from dataclasses import dataclass
 
 from beartype import beartype
-from beartype.typing import List
+from beartype.typing import List, TypeAlias, Union
+
+
+@beartype
+@dataclass
+class Silence:
+    """
+    Indicates that the utterance was terminated due to a silence.
+    """
+
+    final_time: float
+
+
+@beartype
+@dataclass
+class EOS:
+    """
+    Indicates that the utterance was terminated due to an end-of-sentence token.
+    """
+
+    final_time: float
+
+
+@beartype
+@dataclass
+class Never:
+    """
+    Indicates that the utterance was not terminated during the evaluation.
+    """
+
+    pass
+
+
+Termination: TypeAlias = Union[Silence, Never, EOS]
 
 
 @beartype
@@ -20,6 +53,7 @@ class SequenceTimestamp:
     """List of PerWordTimestamps for a sentence."""
 
     seqs: List[PerWordTimestamp]
+    eos: Termination
 
 
 @beartype
@@ -27,6 +61,7 @@ def group_timestamps(
     subwords_list: List[List[str]],
     timestamps_list: List[List[int]],
     sentences: List[str],
+    last_emit_time: List[Termination],
 ) -> List[SequenceTimestamp]:
     """Return word-level timestamps.
 
@@ -43,11 +78,19 @@ def group_timestamps(
         List of lists of single timestamps corresponding to each token/subword.
     sentences:
         List of detokenized predicted sentences.
+    last_emit_time:
+        Time of EOS/final emit for each sentence.
 
     Returns
     -------
     A list of SequenceTimestamps for each sentence.
     """
+    assert (
+        len(sentences)
+        == len(subwords_list)
+        == len(timestamps_list)
+        == len(last_emit_time)
+    )
     results = []
     for i, sentence in enumerate(sentences):
         subwords, timestamps = subwords_list[i], timestamps_list[i]
@@ -59,15 +102,18 @@ def group_timestamps(
         for word in sentence_words:
             word_tokens = []
             # Gather all subwords that could make up this word
-            while index < len(subwords) and "".join(word_tokens) != word:
-                word_tokens.append(subwords[index])
+            while index < len(subwords) and "".join(word_tokens).strip() != word:
+                # Trim leading spaces
+                if word_tokens or subwords[index].strip() != "":
+                    word_tokens.append(subwords[index])
+
                 index += 1
 
-            # Start time is the timestamp of the first token
-            start_time = timestamps[index - len(word_tokens)]
-            # End time is the timestamp of the last token
-            end_time = timestamps[index - 1]
+            word_span = timestamps[index - len(word_tokens) : index]
+            start_time = min(word_span)
+            end_time = max(word_span)
+
             new_timestamps.append(PerWordTimestamp(word, start_time, end_time))
 
-        results.append(SequenceTimestamp(new_timestamps))
+        results.append(SequenceTimestamp(new_timestamps, last_emit_time[i]))
     return results

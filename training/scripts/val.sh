@@ -18,7 +18,6 @@ export OMP_NUM_THREADS=1
 
 : ${PYTHON_COMMAND:="./caiman_asr_train/val.py"}
 
-
 TIMESTAMP=$(date '+%Y_%m_%d_%H_%M_%S')
 
 ARGS+=" --timestamp=$TIMESTAMP"

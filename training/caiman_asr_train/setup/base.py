@@ -18,18 +18,17 @@ from caiman_asr_train.data.build_dataloader import build_dali_loader
 from caiman_asr_train.data.dali import sampler as dali_sampler
 from caiman_asr_train.data.dali.data_loader import DaliDataLoader
 from caiman_asr_train.data.tokenizer import Tokenizer
+from caiman_asr_train.evaluate.error_rates import ErrorRate, get_error_rate
 from caiman_asr_train.export.checkpointer import Checkpointer
 from caiman_asr_train.lm.kenlm_ngram import NgramInfo, find_ngram_path
 from caiman_asr_train.rnnt import config
 from caiman_asr_train.rnnt.batched_greedy import RNNTBatchedGreedyDecoder
 from caiman_asr_train.rnnt.beam import RNNTBeamDecoder
 from caiman_asr_train.rnnt.decoder import RNNTDecoder
-from caiman_asr_train.rnnt.delay_schedules import (
-    ConstantDelayPenalty,
-    LinearDelayPenaltyScheduler,
-)
+from caiman_asr_train.rnnt.eos_strategy import EOSBlank, EOSIgnore, EOSPredict
 from caiman_asr_train.rnnt.loss import ApexTransducerLoss
 from caiman_asr_train.rnnt.model import RNNT
+from caiman_asr_train.rnnt.parallel_decoder import ParallelDecoder, get_num_procs
 from caiman_asr_train.rnnt.sub_models import RNNTSubModels
 from caiman_asr_train.setup.core import CPU, TRAIN, VAL, PipelineType
 from caiman_asr_train.setup.dali import build_dali_yaml_config
@@ -37,6 +36,10 @@ from caiman_asr_train.setup.mel_normalization import build_mel_feat_normalizer
 from caiman_asr_train.train_utils.distributed import print_once
 from caiman_asr_train.train_utils.grad_noise_scheduler import GradNoiseScheduler
 from caiman_asr_train.train_utils.optimizer import OptimizerWrapper
+from caiman_asr_train.train_utils.schedule import Schedule
+from caiman_asr_train.utils.frame_width import encoder_output_frame_width
+from caiman_asr_train.utils.user_tokens import get_user_token
+from caiman_asr_train.utils.user_tokens_lite import get_all_user_tokens
 
 
 @beartype
@@ -48,7 +51,8 @@ class TrainingOnly:
     grad_noise_scheduler: Optional[GradNoiseScheduler]
     optimizer_wrapper: OptimizerWrapper
     train_step_fn: Callable
-    dp_scheduler: ConstantDelayPenalty | LinearDelayPenaltyScheduler
+    dp_scheduler: Schedule
+    star_scheduler: Schedule
 
 
 @beartype
@@ -74,6 +78,7 @@ class BuiltObjects:
     feat_procs: Dict[PipelineType, torch.nn.Module]
     training_only: Optional[TrainingOnly]
     data_objects: Dict[PipelineType, DataObject]
+    error_rate: ErrorRate
 
 
 @beartype
@@ -89,6 +94,8 @@ class Setup(ABC):
         (
             tokenizers,
             blank_idx,
+            eos_idx,
+            star_idx,
             tokenizers_kw,
             default_tokenizer,
             default_tokenizer_kw,
@@ -101,8 +108,10 @@ class Setup(ABC):
             args,
             cfg,
             blank_idx,
+            eos_idx,
+            star_idx,
             default_tokenizer,
-            default_tokenizer_kw,
+            world_size,
         )
         data_objects, feat_procs = self.build_data_and_feat_proc(
             args, np_rng, world_size, batch_sizes, cfg, tokenizers, training_only
@@ -120,6 +129,7 @@ class Setup(ABC):
             world_size=world_size,
             tokenizers_kw=tokenizers_kw,
             training_only=training_only,
+            error_rate=get_error_rate(self.get_default(data_objects).dataset_kw),
         )
 
     def initial_setup(
@@ -135,14 +145,40 @@ class Setup(ABC):
     def build_all_tokenizers(
         self, args: Namespace, cfg: dict
     ) -> Tuple[
-        Dict[PipelineType, Tokenizer], int, Dict[PipelineType, dict], Tokenizer, dict
+        Dict[PipelineType, Tokenizer],
+        int,
+        Optional[int],
+        Optional[int],
+        Dict[PipelineType, dict],
+        Tokenizer,
+        dict,
     ]:
-        tokenizers, blank_idx, tokenizers_kw = self.build_tokenizer(args, cfg)
+        tokenizers, blank_idx, tokenizers_kw = self.build_tokenizer(cfg)
+
+        assert tokenizers, "No tokenizers built"
+        eos_idxs = [get_user_token("eos", cfg, tok) for tok in tokenizers.values()]
+        assert all(eos_idxs[0] == idx for idx in eos_idxs), "Tokenizers disparate EOS"
+        eos_idx = eos_idxs[0]
+
+        if eos_idx is not None:
+            assert args.eos_decoding != "none", "EOS decoding strategy not specified!"
+        else:
+            assert args.eos_decoding == "none", "EOS decoding specified, no EOS token!"
+            assert args.eos_alpha == 1.0, "EOS alpha specified but no EOS token!"
+            assert args.eos_beta == 0.0, "EOS beta specified but no EOS token!"
+            assert not args.eos_is_terminal, "EOS terminal specified but no EOS token!"
+
+        star_idxs = [get_user_token("star", cfg, tok) for tok in tokenizers.values()]
+        assert all(star_idxs[0] == idx for idx in star_idxs)
+        star_idx = star_idxs[0]
+
         default_tokenizer = self.get_default(tokenizers)
         default_tokenizer_kw = self.get_default(tokenizers_kw)
         return (
             tokenizers,
             blank_idx,
+            eos_idx,
+            star_idx,
             tokenizers_kw,
             default_tokenizer,
             default_tokenizer_kw,
@@ -154,14 +190,22 @@ class Setup(ABC):
         args: Namespace,
         cfg: dict,
         blank_idx: int,
+        eos_idx: Optional[int],
+        star_idx: Optional[int],
         default_tokenizer: Tokenizer,
-        default_tokenizer_kw: dict,
+        world_size: int,
     ) -> Tuple[RNNTDecoder, ApexTransducerLoss]:
-        loss_fn = self.build_loss_fn(blank_idx, cfg)
-        lm_info = self.build_lm_info(args, default_tokenizer, default_tokenizer_kw)
+        loss_fn = self.build_loss_fn(blank_idx, eos_idx, star_idx, cfg)
         ngram_info = self.build_ngram_info(args, cfg.get("ngram"))
         decoder = self.build_decoder(
-            ema_model, args, blank_idx, default_tokenizer, lm_info, ngram_info
+            ema_model,
+            args,
+            blank_idx,
+            eos_idx,
+            default_tokenizer,
+            ngram_info,
+            world_size,
+            user_tokens=[i for i in [star_idx, eos_idx] if i is not None],
         )
         return decoder, loss_fn
 
@@ -207,40 +251,81 @@ class Setup(ABC):
         ema_model,
         args: Namespace,
         blank_idx: int,
+        eos_idx: Optional[int],
         tokenizer: Tokenizer,
-        lm_info: Optional[Tuple],
         ngram_info: Optional[NgramInfo],
+        world_size: int,
+        user_tokens: List[int],
     ) -> RNNTDecoder:
+        if eos_idx is None:
+            eos_strategy = None
+            assert args.eos_decoding == "none"
+        elif args.eos_decoding == "ignore":
+            eos_strategy = EOSIgnore(eos_idx=eos_idx)
+        elif args.eos_decoding == "blank":
+            eos_strategy = EOSBlank(eos_idx=eos_idx)
+        elif args.eos_decoding == "predict":
+            eos_strategy = EOSPredict(
+                eos_idx=eos_idx, alpha=args.eos_alpha, beta=args.eos_beta
+            )
+        else:
+            raise ValueError(f"Unknown EOS decoding strategy: {args.eos_decoding}")
+
         if args.decoder == "greedy":
             return RNNTBatchedGreedyDecoder(
                 model=ema_model,
                 blank_idx=blank_idx,
+                eos_strategy=eos_strategy,
                 max_inputs_per_batch=args.max_inputs_per_batch,
                 max_symbol_per_sample=args.max_symbol_per_sample,
+                tokenizer=tokenizer,
             )
         else:
-            return RNNTBeamDecoder(
-                model=ema_model,
-                blank_idx=blank_idx,
-                max_inputs_per_batch=args.max_inputs_per_batch,
-                max_symbol_per_sample=args.max_symbol_per_sample,
-                beam_width=args.beam_width,
-                tokenizer=tokenizer,
-                temperature=args.temperature,
-                beam_prune_score_thresh=args.beam_prune_score_thresh,
-                beam_prune_topk_thresh=args.beam_prune_topk_thresh,
-                ngram_info=ngram_info,
-                fuzzy_topk_logits=args.fuzzy_topk_logits,
-            )
+            inf = float("inf")
 
-    def build_lm_info(
-        self, args: Namespace, tokenizer: Tokenizer, tokenizer_kw: dict
-    ) -> None:
-        return None
+            if args.eos_vad_threshold != inf or args.beam_final_emission_thresh != inf:
+                width = encoder_output_frame_width(args.model_config)
+            else:
+                width = None
+
+            kwargs = {
+                "model": ema_model,
+                "blank_idx": blank_idx,
+                "eos_strategy": eos_strategy,
+                "max_inputs_per_batch": args.max_inputs_per_batch,
+                "max_symbol_per_sample": args.max_symbol_per_sample,
+                "beam_width": args.beam_width,
+                "sentpiece_model": tokenizer.sentpiece_model,
+                "temperature": args.temperature,
+                "beam_prune_score_thresh": args.beam_prune_score_thresh,
+                "beam_prune_topk_thresh": args.beam_prune_topk_thresh,
+                "ngram_info": ngram_info,
+                "fuzzy_topk_logits": args.fuzzy_topk_logits,
+                "return_partials": not args.beam_no_partials,
+                "user_tokens": user_tokens,
+                "eos_is_terminal": args.eos_is_terminal,
+                "eos_vad_threshold": args.eos_vad_threshold,
+                "final_emission_thresh": args.beam_final_emission_thresh,
+                "frame_width": width,
+            }
+
+            nprocs = get_num_procs(args, world_size)
+
+            if nprocs > 1:
+                return ParallelDecoder(
+                    nprocs,
+                    args.beam_min_decode_batch_size_per_proc,
+                    RNNTBeamDecoder,
+                    **kwargs,
+                )
+
+            return RNNTBeamDecoder(**kwargs)
 
     def build_loss_fn(
         self,
         blank_idx: int,
+        eos_idx: Optional[int],
+        star_idx: Optional[int],
         cfg: dict,
     ) -> ApexTransducerLoss:
         """set up the loss function: if the TransducerJoint has packed_output=True then the
@@ -250,6 +335,8 @@ class Setup(ABC):
 
         return ApexTransducerLoss(
             blank_idx=blank_idx,
+            eos_idx=eos_idx,
+            star_idx=star_idx,
             packed_input=rnnt_config["joint_apex_transducer"] == "pack",
         )
 
@@ -287,8 +374,11 @@ class Setup(ABC):
         (dataset_kw, features_kw, _, _) = config.input(
             cfg, self.pipeline_type_to_str(pipeline_type)
         )
+        user_symbols = list(get_all_user_tokens(cfg).values())
         dali_yaml_config = build_dali_yaml_config(
-            config_data=dataset_kw, config_features=features_kw
+            config_data=dataset_kw,
+            config_features=features_kw,
+            user_symbols=user_symbols,
         )
         mel_feat_normalizer = build_mel_feat_normalizer(
             args,
@@ -321,6 +411,7 @@ class Setup(ABC):
         self, args: Namespace, ngram_cfg: Optional[dict]
     ) -> Optional[NgramInfo]:
         """Build n-gram info if beam search is used and n-gram is not disabled."""
+
         if args.decoder == "beam" and not args.skip_ngram and ngram_cfg is not None:
             ngram_path = args.override_ngram_path or self._find_ngram_file(
                 ngram_cfg["ngram_path"]
@@ -344,7 +435,7 @@ class Setup(ABC):
 
     @abstractmethod
     def build_tokenizer(
-        self, args: Namespace, cfg: dict
+        self, cfg: dict
     ) -> Tuple[Dict[PipelineType, Tokenizer], int, Dict[PipelineType, dict]]:
         pass
 

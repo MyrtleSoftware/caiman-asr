@@ -6,6 +6,7 @@ import sentencepiece as spm
 
 from caiman_asr_train.data.webdataset import WebDatasetReader
 from caiman_asr_train.rnnt import config
+from caiman_asr_train.rnnt.config import get_tokenizer_conf
 from caiman_asr_train.setup.text_normalization import normalize_config_from_full_yaml
 
 
@@ -36,19 +37,22 @@ def parse_args() -> Namespace:
 def create_webdataset_spm(args):
     cfg = config.load(args.model_config)
 
+    normalize_config = normalize_config_from_full_yaml(cfg)
+
     wds = WebDatasetReader(
         tokenizer=None,
-        charset=config.tokenizer(cfg)["labels"],
+        charset=get_tokenizer_conf(cfg)["labels"],
         shuffle=False,
         file_root=args.dataset_dir,
         tar_files=args.train_tar_files,
-        normalize_config=normalize_config_from_full_yaml(cfg),
+        normalize_config=normalize_config,
         skip_audio=True,
     )
     with NamedTemporaryFile("w", suffix=".txt") as f:
-        for _, transcript, _ in wds:
+        for _, transcript, _, _ in wds:
             f.write(transcript + "\n")
 
+        f.flush()
         spm.SentencePieceTrainer.train(
             input=f.name,
             model_prefix=args.spm_name,
@@ -58,6 +62,7 @@ def create_webdataset_spm(args):
             eos_id=-1,
             model_type="unigram",
             train_extremely_large_corpus=True,
+            user_defined_symbols=",".join(normalize_config.user_symbols),
         )
 
 

@@ -1,7 +1,7 @@
 # Saving Predictions
 
-`val.sh` dumps the predicted text for a list of input wav files
-to `/results/preds[rank]_[timestamp].txt`, as in this command:
+`val.sh` dumps the predicted text and per-file WER for a list of input files
+to `/results/preds[rank]_[timestamp]_[step].json`, as in this command:
 
 ```
 ./scripts/val.sh --val_manifests /results/your-inference-list.json

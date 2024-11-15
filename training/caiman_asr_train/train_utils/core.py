@@ -10,7 +10,7 @@ from torch.cuda.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from caiman_asr_train.log.tb_dllogger import log
-from caiman_asr_train.rnnt.loss import ApexTransducerLoss
+from caiman_asr_train.rnnt.loss import ApexTransducerLoss, LossModifiers
 from caiman_asr_train.rnnt.model import RNNT
 from caiman_asr_train.rnnt.model_forward import model_loss_forward_train
 from caiman_asr_train.rnnt.state import RNNTState
@@ -65,14 +65,14 @@ def train_step(
     txt_lens: torch.Tensor,
     scaler: Optional[GradScaler],
     rnnt_state: Optional[RNNTState],
-    delay_penalty: float,
+    loss_mods: LossModifiers,
 ) -> Tuple[float, bool, Optional[RNNTState]]:
     """
     Run a step of training.
     """
     model_fwd_fn = maybe_autocast(model_loss_forward_train, not args.no_amp)
     loss, new_rnnt_state = model_fwd_fn(
-        model, loss_fn, args, feats, feat_lens, txt, txt_lens, rnnt_state, delay_penalty
+        model, loss_fn, args, feats, feat_lens, txt, txt_lens, rnnt_state, loss_mods
     )
     loss_nan = is_loss_nan(loss, args.num_gpus)
     if loss_nan:

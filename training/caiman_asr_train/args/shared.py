@@ -6,6 +6,7 @@ from beartype import beartype
 from beartype.typing import Optional
 
 from caiman_asr_train.args.decoder import add_decoder_args
+from caiman_asr_train.args.eos import add_eos_shared_args
 from caiman_asr_train.args.hugging_face import add_basic_hugging_face_args
 from caiman_asr_train.args.mel_feat_norm import (
     add_mel_feat_norm_args,
@@ -112,11 +113,18 @@ def add_shared_args(parser: ArgumentParser) -> None:
         default=False,
         help="Export timestamps per word to .ctm file and calculate emission latencies",
     )
+    parser.add_argument(
+        "--allow_partial_checkpoint",
+        action="store_true",
+        default=False,
+        help="Allow loading a checkpoint from an incomplete state dict",
+    )
     add_state_reset_args(parser)
     add_mel_feat_norm_args(parser)
     add_basic_hugging_face_args(parser)
     add_wer_analysis_args(parser)
     add_decoder_args(parser)
+    add_eos_shared_args(parser)
 
 
 @beartype
@@ -188,6 +196,22 @@ def check_shared_args(args: Namespace) -> None:
         val_multiple = len(args.val_manifests) > 1
         check_latency_args(args, val_multiple)
 
+    if args.eos_is_terminal:
+        assert args.eos_decoding == "predict", (
+            "If --eos_is_terminal is set, --eos_decoding must be 'predict'. "
+            "This is because the decoder cannot terminate on the EOS token if "
+            "the model never predicts it."
+        )
+
+    if (
+        args.calculate_emission_latency
+        and args.decoder == "beam"
+        and args.beam_no_partials
+    ):
+        raise ValueError(
+            "Cannot calculate emission latency for beam search if --beam_no_partials is set"
+        )
+
     check_mel_feat_norm_args(args)
 
 
@@ -258,9 +282,6 @@ def check_latency_args(args: Namespace, val_multiple: bool = False):
     assert (
         not args.use_hugging_face
     ), "Emission latency and Hugging Face datasets are incompatible"
-    assert (
-        args.decoder != "beam"
-    ), "Returning model timestamps is not supported with the beam decoder"
 
     if val_multiple:
         assert (

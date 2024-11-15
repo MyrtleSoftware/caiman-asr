@@ -85,6 +85,10 @@ def unique_log_fpath(log_fpath):
 
 
 def stdout_step_format(step):
+    """
+    Args:
+        step: tuple of (epoch, step_in_epoch, steps_per_epoch, step)
+    """
     if isinstance(step, str):
         return step
     fields = []

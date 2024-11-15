@@ -14,8 +14,10 @@ from caiman_asr_train.export.checkpointer import Checkpointer
 from caiman_asr_train.log.tb_dllogger import init_log
 from caiman_asr_train.log.tee import start_logging_stdout_and_stderr
 from caiman_asr_train.rnnt import config
+from caiman_asr_train.rnnt.config import get_tokenizer_conf
 from caiman_asr_train.rnnt.model import RNNT
 from caiman_asr_train.setup.base import Setup, TrainingOnly
+from caiman_asr_train.setup.check_tokenizer import check_tokenizer_kw
 from caiman_asr_train.setup.core import CPU, CUDA, VAL, PipelineType
 from caiman_asr_train.train_utils.distributed import print_once
 from caiman_asr_train.utils.num_weights import num_weights
@@ -48,46 +50,32 @@ class BaseValSetup(Setup):
             model = DDP(model)
 
         # setup checkpointer
-        checkpointer = Checkpointer(args.output_dir, "RNN-T")
+        checkpointer = Checkpointer(
+            args.output_dir, "RNN-T", allow_partial_load=args.allow_partial_checkpoint
+        )
 
         # load checkpoint (modified to not need optimizer / meta args)
-        checkpointer.load(args.ckpt, model, ema_model)
+        checkpoint_tokenizer_kw = checkpointer.load(args.ckpt, model, ema_model)
+
+        check_tokenizer_kw(checkpoint_tokenizer_kw, tokenizer_kw)
 
         return model, ema_model, None
 
     def build_tokenizer(
-        self, args: Namespace, cfg: dict
+        self, cfg: dict
     ) -> Tuple[Dict[PipelineType, Tokenizer], int, Dict[PipelineType, dict]]:
-        checkpoint_tokenizer_kw = torch.load(args.ckpt, map_location=CPU).get(
-            "tokenizer_kw"
-        )
-        tokenizer_kw = config.tokenizer(cfg)
-
-        if checkpoint_tokenizer_kw is None:
-            print_once("WARNING: This is an old RNN-T checkpoint")
-            print_once("Cannot check if you are using the correct tokenizer\n")
-            print_once(
-                "Using the tokenizer keywords from the config file, which are "
-                f"{tokenizer_kw}"
-            )
-        else:
-            tokenizer_kw = checkpoint_tokenizer_kw
-            print_once(
-                "Using the tokenizer keywords from the RNN-T checkpoint, which are "
-                f"{tokenizer_kw}"
-            )
+        tokenizer_kw = get_tokenizer_conf(cfg)
 
         # Notify user the sampling is off during evaluation
-        # The default value is here for checkpoints that have a saved
-        # checkpoint_tokenizer_kw without the key "sampling".
-        tkn_samp = tokenizer_kw.get("sampling", 0.0)
-        if float(tkn_samp) > 0:
+        if float(tokenizer_kw["sampling"]) > 0:
             print_once("Please note that sampling is off during evaluation.")
         tokenizer_kw["sampling"] = 0.0
 
         # Initialize Tokenizer w/ tokenizer_kw from checkpoint or from base*.yaml file
         tokenizer = Tokenizer(**tokenizer_kw)
+
         blank_idx = tokenizer.num_labels
+
         return ({VAL: tokenizer}, blank_idx, {VAL: tokenizer_kw})
 
     def get_batch_sizes(self, args: Namespace) -> Dict[PipelineType, int]:

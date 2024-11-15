@@ -25,6 +25,7 @@ class HuggingFaceReader:
         normalize_config: NormalizeConfig,
         max_duration: int | float,
         max_transcript_length: int | float,
+        min_duration: int | float = 0.05,
     ):
         dataset = load_dataset(
             hugging_face_args.dataset,
@@ -46,7 +47,11 @@ class HuggingFaceReader:
             hugging_face_args.transcript_key, "transcript"
         )
         filter_fn = partial(
-            is_utterance_short, max_duration, sample_rate, max_transcript_length
+            is_utterance_short,
+            max_duration,
+            sample_rate,
+            max_transcript_length,
+            min_duration=min_duration,
         )
         filtered_dataset = renamed_dataset.filter(filter_fn)
         map_fn = partial(tokenize_transcript, tokenizer, normalize_config)
@@ -62,6 +67,7 @@ class HuggingFaceReader:
             example["audio"]["array"],
             example["tokenized_transcript"],
             example["raw_transcript_array"],
+            str_to_numpy_unicode(get_fname(example)),
         )
 
 
@@ -71,10 +77,12 @@ def is_utterance_short(
     sample_rate: int,
     max_transcript_length: int | float,
     example: dict,
+    min_duration: int | float = 0.05,
 ) -> bool:
     return (
         len(example["transcript"]) < max_transcript_length
         and len(example["audio"]["array"]) < max_duration * sample_rate
+        and len(example["audio"]["array"]) > min_duration * sample_rate
     )
 
 
@@ -112,3 +120,14 @@ def check_transcript_key(dataset, transcript_key: str, dataset_name: str) -> Non
             f"have a column named '{transcript_key}'. "
             f"Try setting the transcript key to one of {dataset.column_names}"
         )
+
+
+@beartype
+def get_fname(example: dict) -> str:
+    # This could be expanded to check for more keys,
+    # or to take a user-configurable key
+    if "id" in example:
+        return example["id"]
+    if "audio_id" in example:
+        return example["audio_id"]
+    return "No ID found in example"

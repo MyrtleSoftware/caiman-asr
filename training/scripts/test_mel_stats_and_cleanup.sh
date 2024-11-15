@@ -1,11 +1,14 @@
 #!/bin/bash
 
+export CUDA_VISIBLE_DEVICES=""
+
 python caiman_asr_train/data/generate_mel_stats.py \
-    --output_dir /tmp \
-    --model_config configs/testing-1023sp_run.yaml \
-    --dataset_dir tests/test_data \
-    --train_manifests peoples-speech-short.json \
-    --dump_mel_stats_batch_size 2
+	--output_dir /tmp \
+	--model_config configs/testing-1023sp_run.yaml \
+	--dataset_dir tests/test_data \
+	--train_manifests peoples-speech-short.json \
+	--dali_train_device cpu \
+	--dump_mel_stats_batch_size 2
 
 TEST_EXIT_CODE=$?
 

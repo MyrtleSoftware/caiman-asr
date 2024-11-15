@@ -5,8 +5,11 @@ import random
 import tempfile
 from pathlib import Path
 
+import sox
 from beartype import beartype
 from beartype.typing import Callable, Dict, Optional, Tuple, Union
+
+from caiman_asr_train.utils.fast_json import fast_read_json
 
 
 @beartype
@@ -25,12 +28,9 @@ def generate_json(
                 "fname": "train-clean-100/1502/122619/1502-122619-0000.flac",
               }
             ],
-            "original_duration": 0.0,
+            "original_duration": 10.74,
           },
      ]
-
-     The "original_duration" is set to 0.0, because the duration of the audio files
-     will not be used in the DALI pipeline with filetype="val".
 
     Args:
         audio_list: list of audio files
@@ -48,7 +48,8 @@ def generate_json(
             text = f.readline().strip("\n")
             dictionary["transcript"] = text
         dictionary["files"] = [{"fname": str(audio.relative_to(datadir_path))}]
-        dictionary["original_duration"] = 0.0
+        file_info = sox.file_info.info(str(audio))
+        dictionary["original_duration"] = file_info["duration"]
         all_transcripts.append(dictionary)
     # generate json temporary file
     json_tempfile = tempfile.NamedTemporaryFile(mode="w", delete=False)
@@ -89,13 +90,16 @@ def get_path_files(
 
 @beartype
 def set_predicate(
-    max_duration: int | float, max_transcript_len: int | float
+    max_duration: int | float,
+    max_transcript_len: int | float,
+    min_duration: int | float = 0.05,
 ) -> Callable[[dict], bool]:
     """Returns a function that decides whether an utterance is short enough
     for the dataset. Typically in validation this will always return true
     since max_duration == max_transcript_len == float("inf")"""
     return (
         lambda json: json["original_duration"] <= max_duration
+        and json["original_duration"] > min_duration
         and len(json["transcript"]) < max_transcript_len
     )
 
@@ -121,12 +125,11 @@ def _parse_json(
             assigned by DALI
         transcripts: dictionary, that maps label assigned by DALI to the transcript
     """
-    with open(json_path) as f:
-        librispeech_json = json.load(f)
+    manifest = fast_read_json(json_path)
     output_files = {}
     transcripts = {}
     curr_label = start_label
-    for original_sample in librispeech_json:
+    for original_sample in manifest:
         if not predicate(original_sample):
             continue
         transcripts[curr_label] = original_sample["transcript"]

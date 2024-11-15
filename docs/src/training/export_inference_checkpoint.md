@@ -10,7 +10,7 @@ To create a hardware checkpoint run:
 python ./caiman_asr_train/export/hardware_ckpt.py \
     --ckpt /results/RNN-T_best_checkpoint.pt \
     --config <path/to/config.yaml> \
-    --output_ckpt /results/hardware_checkpoint.testing.example.pt
+    --output_ckpt /results/hardware_checkpoint.example.pt
 ```
 
 where `/results/RNN-T_best_checkpoint.pt` is your best checkpoint.
@@ -26,7 +26,7 @@ However, this is optional, and can be skipped by passing the `--skip_ngram` flag
 python ./caiman_asr_train/export/hardware_ckpt.py \
     --ckpt /results/RNN-T_best_checkpoint.pt \
     --config <path/to/config.yaml> \
-    --output_ckpt /results/hardware_checkpoint.testing.example.pt
+    --output_ckpt /results/hardware_checkpoint.example.pt
     --skip_ngram
 ```
 
@@ -36,7 +36,7 @@ To include an n-gram that was generated on a different dataset, use the `--overr
 python ./caiman_asr_train/export/hardware_ckpt.py \
     --ckpt /results/RNN-T_best_checkpoint.pt \
     --config <path/to/config.yaml> \
-    --output_ckpt /results/hardware_checkpoint.testing.example.pt \
+    --output_ckpt /results/hardware_checkpoint.example.pt \
     --override_ngram_path /path/to/ngram.binary
 ```
 

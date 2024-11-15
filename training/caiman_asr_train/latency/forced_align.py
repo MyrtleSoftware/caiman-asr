@@ -3,7 +3,6 @@
 # https://pytorch.org/audio/master/tutorials/ctc_forced_alignment_api_tutorial.html
 
 import argparse
-import json
 import os
 import tarfile
 from argparse import Namespace
@@ -13,18 +12,25 @@ from pathlib import Path
 import torch
 import torchaudio
 import torchaudio.functional as F
+import yaml
 from beartype import beartype
 from beartype.typing import Generator, List, Tuple, Union
 from torchaudio.functional import TokenSpan
 from torchaudio.transforms import Resample
 from tqdm import tqdm
 
+from caiman_asr_train.data.text.preprocess import norm_and_tokenize
 from caiman_asr_train.latency.ctm import get_abs_manifest_paths, get_abs_tar_paths
+from caiman_asr_train.setup.text_normalization import (
+    NormalizeConfig,
+    normalize_config_from_full_yaml,
+)
 from caiman_asr_train.train_utils.distributed import print_once
+from caiman_asr_train.utils.fast_json import fast_read_json
 
 
 def parse_args() -> Namespace:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser("Perform forced alignment and write CTM files.")
     parser.add_argument(
         "--dataset_dir", required=True, type=str, help="Root dir of dataset"
     )
@@ -54,14 +60,25 @@ def parse_args() -> Namespace:
     parser.add_argument(
         "--output_dir",
         type=str,
-        help="Optional directory to output .ctm files",
+        help="Optional directory to output .ctm files. Defaults to --dataset_dir.",
     )
     parser.add_argument(
         "--cpu", action="store_true", default=False, help="Use CPU instead of GPU."
     )
     parser.add_argument(
-        "--segment_len", type=int, default=5, help="Segment length in minutes"
+        "--segment_len",
+        type=int,
+        default=5,
+        help="""Audio is split into segments of this length in minutes. Forced
+        alignment is run on each segment and the results are then concatenated.""",
     )
+    parser.add_argument(
+        "--model_config",
+        type=str,
+        required=True,
+        help="Only reads the allowed characters from the model config file",
+    )
+
     return parser.parse_args()
 
 
@@ -94,9 +111,11 @@ def unflatten(token_list: List[TokenSpan], lengths: List[int]) -> List[List[Toke
     assert len(token_list) == sum(lengths)
     i = 0
     result = []
+
     for length in lengths:
         result.append(token_list[i : i + length])
         i += length
+
     return result
 
 
@@ -223,8 +242,7 @@ def process_manifest_file(
         Generator[AlignmentData]: A generator of AlignmentData objects, containing
         waveform tensor, transcript, and path to audio.
     """
-    with open(manifest_path, "r") as file:
-        data = json.load(file)
+    data = fast_read_json(manifest_path)
 
     for sample in data:
         transcript = sample["transcript"].split()  # Words
@@ -245,9 +263,8 @@ def count_files_in_manifest(manifest_path: str) -> int:
     Returns:
     int: The number of files listed in the manifest.
     """
-    with open(manifest_path, "r") as file:
-        data = json.load(file)
-        return len(data)
+
+    return len(fast_read_json(manifest_path))
 
 
 @beartype
@@ -263,6 +280,7 @@ def get_output_filepath(data_filepath: str, output_dir: str) -> str:
     # Check if the file already exists
     if os.path.exists(output_file):
         raise FileExistsError(f"The file {output_file} already exists.")
+
     return output_file
 
 
@@ -297,7 +315,21 @@ def split_and_process_waveform(
             outputs.append(emission)
             start = end
     # Concatenate model outputs for each segment
+
     return torch.cat(outputs, dim=1)
+
+
+@beartype
+def normalise(
+    transcript: List[str],
+    normalize_config: NormalizeConfig,
+    charset: List[str],
+):
+    raw_transcript = " ".join(transcript)
+    raw_transcript = norm_and_tokenize(raw_transcript, normalize_config, None, charset)
+    raw_transcript = raw_transcript.split()
+
+    return raw_transcript
 
 
 @beartype
@@ -309,6 +341,8 @@ def perform_forced_alignment(
     output_file: str,
     bundle_sample_rate: int,
     device: str,
+    normalize_config: NormalizeConfig,
+    charset: List[str],
     segment_length: int = 5,
 ) -> None:
     """
@@ -325,22 +359,39 @@ def perform_forced_alignment(
         bundle_sample_rate (int): The sample rate expected by the model.
         device (str): CUDA or CPU.
     """
+
     pbar = tqdm(total=num_samples)
     # Iterate over utterances
     for sample in data_generator:
         # Obtain model emissions
         emission = split_and_process_waveform(sample.waveform, model, segment_length)
 
+        normalized_transcript = normalise(sample.transcript, normalize_config, charset)
+
         tokenized_transcript = [
-            tokenizer[c] for word in sample.transcript for c in word
+            tokenizer[c] for word in normalized_transcript for c in word
         ]
 
-        aligned_tokens, alignment_scores = align(
-            emission, tokenized_transcript, device=device
-        )
+        try:
+            aligned_tokens, alignment_scores = align(
+                emission, tokenized_transcript, device=device
+            )
+        except Exception as err:
+            msg = [
+                "WARNING: align failed:",
+                f"\t{normalized_transcript=}",
+                f"\t{sample.transcript=}",
+                f"\t{err=}",
+            ]
+            print("\n".join(msg))
+
+            continue
+
         # remove repeated and blank tokens
         token_spans = F.merge_tokens(aligned_tokens, alignment_scores)
-        word_spans = unflatten(token_spans, [len(word) for word in sample.transcript])
+        word_spans = unflatten(
+            token_spans, [len(word) for word in normalized_transcript]
+        )
 
         num_frames = emission.size(1)
         ratio = sample.waveform.size(1) / num_frames
@@ -350,7 +401,7 @@ def perform_forced_alignment(
             sample.audio_filepath,
             word_spans,
             ratio,
-            sample.transcript,
+            normalized_transcript,
             sample_rate=bundle_sample_rate,
         )
         del emission, sample
@@ -371,14 +422,21 @@ def main(args: Namespace):
 
     data_dir = args.dataset_dir
     # By default, export CTM files to dataset directory
+
     if args.output_dir:
         os.makedirs(args.output_dir, exist_ok=True)
         output_dir = args.output_dir
     else:
         output_dir = data_dir
 
+    with open(args.model_config) as f:
+        model_config = yaml.safe_load(f)
+        normalize_config = normalize_config_from_full_yaml(model_config)
+        allowed_chars = model_config["tokenizer"]["labels"]
+
     if args.read_from_tar:
         tar_paths = get_abs_tar_paths(data_dir, args.tar_files)
+
         for tar_path in tar_paths:
             output_file = get_output_filepath(tar_path, output_dir)
             data_generator = process_tar_file(
@@ -394,9 +452,12 @@ def main(args: Namespace):
                 bundle.sample_rate,
                 device=device,
                 segment_length=args.segment_len,
+                charset=allowed_chars,
+                normalize_config=normalize_config,
             )
     else:
         manifests = get_abs_manifest_paths(data_dir, args.manifests)
+
         for manifest in manifests:
             output_file = get_output_filepath(manifest, output_dir)
             data_generator = process_manifest_file(
@@ -412,6 +473,8 @@ def main(args: Namespace):
                 bundle.sample_rate,
                 device=device,
                 segment_length=args.segment_len,
+                charset=allowed_chars,
+                normalize_config=normalize_config,
             )
 
 

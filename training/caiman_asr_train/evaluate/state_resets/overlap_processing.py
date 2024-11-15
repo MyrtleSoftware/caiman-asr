@@ -4,14 +4,20 @@ from math import ceil
 from beartype import beartype
 from beartype.typing import List, Optional, Tuple, Union
 
+from caiman_asr_train.evaluate.state_resets.timestamp import (
+    Timestamp,
+    add_frames,
+    model_time,
+)
+
 
 @beartype
 def process_time(
-    timestamps: List[List[int]],
+    timestamps: List[List[Timestamp]],
     enc_time_reduction: int,
     segment_frames: int,
     overlap_frames: int,
-) -> List[int]:
+) -> List[Timestamp]:
     """Adjusts segmented decoder timestamps to simulate continuous decoding.
 
     This function converts segmented timestamps to a continuous timeline by
@@ -51,7 +57,7 @@ def process_time(
     time_shifted = timestamps[0]
 
     for itm, lst in enumerate(timestamps[1:]):
-        items = [i + (itm + 1) * max_time_per_segment for i in lst]
+        items = [add_frames(t, (itm + 1) * max_time_per_segment) for t in lst]
         time_shifted.extend(items)
 
     return time_shifted
@@ -60,12 +66,12 @@ def process_time(
 @beartype
 def get_unique_predictions(
     pred: List[List[int]],
-    timestamps: List[List[int]],
+    timestamps: List[List[Timestamp]],
     probs: List[List[float]],
     enc_time_reduction: int,
     overlap_frames: int,
     lookahead: int = 3,
-) -> Tuple[List[List[int]], List[List[int]], Optional[List[List[float]]]]:
+) -> Tuple[List[List[int]], List[List[Timestamp]], Optional[List[List[float]]]]:
     """Return transcripts without the overlapping segment.
 
     This function receives the segments of the transcripts and their corresponding
@@ -135,7 +141,8 @@ def get_unique_predictions(
         # Decide how many tokens to omit from the start of the current segment
         to_omit = 0
         for timestamp in curr_timestamps:
-            if timestamp < overlap_dur:
+            # Use model timestamps to decide how many tokens to omit
+            if model_time(timestamp) < overlap_dur:
                 to_omit += 1
             else:
                 break
@@ -180,11 +187,11 @@ def get_unique_predictions(
 @beartype
 def manage_boundary_common_tokens(
     segm: List[int],
-    t_st: List[int],
+    t_st: List[Timestamp],
     probs: Optional[List[float]],
     trusted_list: List[int],
     lookahead: int,
-) -> Tuple[List[int], List[int], Optional[List[float]]]:
+) -> Tuple[List[int], List[Timestamp], Optional[List[float]]]:
     """
     Return segment tokens, timestamps, and probs without duplicates from previous segment.
 

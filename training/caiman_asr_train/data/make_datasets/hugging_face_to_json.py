@@ -4,7 +4,6 @@ from argparse import ArgumentParser, Namespace
 from functools import partial
 from itertools import starmap
 from pathlib import Path
-from time import strftime
 
 import datasets
 import filetype
@@ -15,6 +14,7 @@ from tqdm import tqdm
 from caiman_asr_train.data.hugging_face.core import check_transcript_key
 from caiman_asr_train.data.make_datasets.manifest import prepare_manifest, save_manifest
 from caiman_asr_train.data.make_datasets.sox_utils import convert_to_standard_format
+from caiman_asr_train.utils.timeprint import timeprint
 
 
 @beartype
@@ -100,10 +100,6 @@ def make_argparser() -> ArgumentParser:
     )
 
     return parser
-
-
-def timeprint(string):
-    print(strftime("%c"), string)
 
 
 @beartype

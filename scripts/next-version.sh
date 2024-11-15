@@ -9,11 +9,11 @@ version=$1
 # next-version.sh 1.2 will return 1.3
 
 if [[ $version =~ ^v?[0-9]+\.[0-9]+ ]]; then
-    # edited from https://unix.stackexchange.com/questions/23174/increment-number-in-bash-variable-string:
-    [[ "$version" =~ (.*[^0-9])([0-9]+)$ ]] && version="${BASH_REMATCH[1]}$((${BASH_REMATCH[2]} + 1))";
-    echo "v$version";
+	# edited from https://unix.stackexchange.com/questions/23174/increment-number-in-bash-variable-string:
+	[[ $version =~ (.*[^0-9])([0-9]+)$ ]] && version="${BASH_REMATCH[1]}$((${BASH_REMATCH[2]} + 1))"
+	echo "v$version"
 else
-    echo "Invalid version tag: '$version'"
-    exit 1
+	echo "Invalid version tag: '$version'"
+	exit 1
 
 fi

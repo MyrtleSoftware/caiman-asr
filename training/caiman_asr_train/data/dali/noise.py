@@ -19,6 +19,9 @@ class NoiseAugmentationIterator:
         self.low = low
         self.high = high
 
+    def get_range(self):
+        return self.low, self.high
+
     def __iter__(self):
         return self
 
@@ -87,12 +90,25 @@ class NoiseSchedule(object):
         if self.train_loader.pipeline.do_babble_noise_aug:
             self.train_loader.pipeline.babble_noise_iterator.set_range(low, high)
 
+    def get_noise(self):
+        if self.train_loader.pipeline.do_background_noise_aug:
+            bg = self.train_loader.pipeline.background_noise_iterator.get_range()
+        else:
+            bg = (-1, -1)
+
+        if self.train_loader.pipeline.do_babble_noise_aug:
+            bb = self.train_loader.pipeline.babble_noise_iterator.get_range()
+        else:
+            bb = (-1, -1)
+
+        return bg, bb
+
     def adjust_snrs(self, step):
         # Set low and high to their initial settings until step passes delay_steps.
         if step <= self.delay_steps:
             self.background_noise_set_range(self.initial_low, self.initial_high)
             self.babble_noise_set_range(self.initial_low, self.initial_high)
-            return
+            return self.get_noise()
         if step >= self.delay_steps + self.ramp_steps:
             # The final values for background noise are chosen to be 0dB / 30dB
             self.background_noise_set_range(0, 30)
@@ -100,7 +116,7 @@ class NoiseSchedule(object):
             # babble noise must be significantly quieter than the speech signal for ASR
             # system to have any chance of transcribing the correct signal.
             self.babble_noise_set_range(15, 30)
-            return
+            return self.get_noise()
         # low and high are both linearly interpolated over the ramp from their initial
         # to final values.
         highdelta = int(
@@ -118,7 +134,7 @@ class NoiseSchedule(object):
         self.babble_noise_set_range(
             self.initial_low - lowdelta_babble, self.initial_high - highdelta
         )
-        return
+        return self.get_noise()
 
 
 @jit(nopython=True)

@@ -1,12 +1,13 @@
 import torch
 from beartype import beartype
-from beartype.typing import List, Optional, Tuple, Union
+from beartype.typing import List, Optional, Tuple
 
 from caiman_asr_train.evaluate.state_resets.core import (
     get_state_resets_stats,
     state_resets_merge_segments,
     state_resets_reshape_feats,
 )
+from caiman_asr_train.evaluate.state_resets.timestamp import Timestamp
 
 
 @beartype
@@ -82,11 +83,12 @@ def state_resets_reshape_batched_feats(
 @beartype
 def state_resets_merge_batched_segments(
     pred: List[List[int]],
-    timestamps: List[List[int]],
+    timestamps: List[List[Timestamp]],
     probs: List[List[float]],
     enc_time_reduction: int,
     meta: List[Tuple[int, int, int]],
-) -> Tuple[List[List[int]], List[List[Union[int, float]]], Optional[List[List[float]]]]:
+    eos_idx: Optional[int],
+) -> Tuple[List[List[int]], List[List[Timestamp]], Optional[List[List[float]]]]:
     """Return prediction tokens and timestamps for all segments concatenated.
 
     This function will return the prediction tokens and the timestamps without
@@ -105,6 +107,9 @@ def state_resets_merge_batched_segments(
         factor for time reduction in the encoder
     meta
         meta data from state_resets_reshape_batched_feats
+    eos_idx
+        index of the end of sequence token, if this is not None then merging
+        will stop at the first occurrence of this token.
 
     Returns
     -------
@@ -126,6 +131,15 @@ def state_resets_merge_batched_segments(
         l_pred = pred[acc : acc + i]
         l_timestamps = timestamps[acc : acc + i]
         l_probs = probs[acc : acc + i]
+
+        if eos_idx is not None:
+            for j, pr in enumerate(l_pred):
+                if eos_idx in pr:
+                    break
+
+            l_pred = l_pred[: j + 1]
+            l_timestamps = l_timestamps[: j + 1]
+            l_probs = l_probs[: j + 1]
 
         l_pred, l_timestamps, l_probs = state_resets_merge_segments(
             l_pred,

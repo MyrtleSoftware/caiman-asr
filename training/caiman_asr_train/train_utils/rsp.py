@@ -81,8 +81,9 @@ def rsp_end_step(
     step: int,
     args: Namespace,
     batches_until_history_reset: int,
-) -> Tuple[Optional[RNNTState], int]:
+) -> Tuple[Optional[RNNTState], int, bool]:
     rsp_on = is_random_state_passing_on(args.rsp_seq_len_freq)
+
     if not loss_nan:
         if rsp_on and step >= args.rsp_delay:
             # In this case the model should have output a non-None state
@@ -99,7 +100,8 @@ def rsp_end_step(
     if batches_until_history_reset == 0:
         rnnt_state = None
         batches_until_history_reset = generate_batch_history(args.rsp_seq_len_freq)
-    return rnnt_state, batches_until_history_reset
+
+    return rnnt_state, batches_until_history_reset, rsp_on and step >= args.rsp_delay
 
 
 @jaxtyped(typechecker=beartype)

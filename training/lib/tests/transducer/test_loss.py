@@ -64,9 +64,14 @@ def gen_hidden(pack, f, g, f_lens, g_lens):
 
 @pytest.mark.parametrize("batch_size", [2, 8])
 @pytest.mark.parametrize("time_dim", [1, 2, 7])
-@pytest.mark.parametrize("lam", [0.0, 0.05])
+@pytest.mark.parametrize("delay_penalty", [0.0, 0.05])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float32, torch.float64])
-def test_pack_no_pack_equivalent(batch_size, time_dim, lam, dtype):
+@pytest.mark.parametrize("eos_penalty", [0.0, 0.1, 0.5])
+@pytest.mark.parametrize("eos_idx", [None, 1])
+@pytest.mark.parametrize("star_idx", [None, 2])
+def test_pack_no_pack_equivalent(
+    batch_size, time_dim, delay_penalty, dtype, eos_penalty, eos_idx, star_idx
+):
     """
     In this test we assume that there is no joint_net so the vocab size is
     the same as the joint hidden dimension.
@@ -89,9 +94,12 @@ def test_pack_no_pack_equivalent(batch_size, time_dim, lam, dtype):
         f_lens,
         y_lens,
         blank_offset,
+        eos_idx=eos_idx,
+        star_idx=star_idx,
         batch_offset=batch_offset,
         max_f_len=max_f_len,
-        delay_penalty=lam,
+        delay_penalty=delay_penalty,
+        eos_penalty=eos_penalty,
     )
 
     loss_pack = TransducerLoss(
@@ -104,7 +112,10 @@ def test_pack_no_pack_equivalent(batch_size, time_dim, lam, dtype):
         blank_offset,
         batch_offset=batch_offset,
         max_f_len=max_f_len,
-        delay_penalty=lam,
+        delay_penalty=delay_penalty,
+        eos_idx=eos_idx,
+        star_idx=star_idx,
+        eos_penalty=eos_penalty,
     )
 
     assert len(h_no_pack.shape) == 4
@@ -197,11 +208,34 @@ def test_match_apex(batch_size, time_dim, pack, dtype):
 @pytest.mark.parametrize("batch_size", [1, 2, 8])
 @pytest.mark.parametrize("time_dim", [4, 7])
 @pytest.mark.parametrize("pack", [False, True])
-@pytest.mark.parametrize("lam", [0.0, 0.05, 0.99, 1.0, 2])
-def test_grad(batch_size, time_dim, pack, lam):
+@pytest.mark.parametrize("delay_penalty", [0.0, 0.05, 0.99, 1.0, 2])
+@pytest.mark.parametrize("eos_penalty", [0.0, 0.1, 0.5])
+@pytest.mark.parametrize("eos_idx", [None, 1])
+@pytest.mark.parametrize("star_idx", [None, 2])
+@pytest.mark.parametrize("star_penalty", [0.0, 0.1, 0.5])
+def test_grad(
+    batch_size,
+    time_dim,
+    pack,
+    delay_penalty,
+    eos_penalty,
+    eos_idx,
+    star_idx,
+    star_penalty,
+):
     blank_offset, f, f_lens, g, g_lens, y, y_lens = mock_data(
         batch_size, time_dim, dtype=torch.float64
     )
+
+    if eos_idx is not None:
+        for i in range(batch_size):
+            y[i, y_lens[i].item() - 1] = eos_idx
+
+    if star_idx is not None:
+        while star_idx not in y:
+            # Set some fraction of the labels to star_idx
+            mask = torch.rand_like(y, dtype=torch.float32) < 0.1
+            y = torch.where(mask, star_idx, y)
 
     h, batch_offset = gen_hidden(pack, f, g, f_lens, g_lens)
 
@@ -212,9 +246,13 @@ def test_grad(batch_size, time_dim, pack, lam):
             f_lens,
             y_lens,
             batch_offset if pack else torch.empty(0),
-            lam,  # lambda/delay_penalty
+            delay_penalty,
             torch.max(f_lens).item(),
             blank_offset,
+            eos_penalty,
+            eos_idx,
+            star_penalty,
+            star_idx,
             None,
             pack,
         )

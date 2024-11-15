@@ -17,10 +17,14 @@
 # recommendations made in the training README may yield an RNN-T model that is
 # incompatible with Myrtle's existing hardware accelerated inference server.
 
+user_tokens:
+    eos: "<EOS>"
+
 tokenizer:
-    sentpiece_model: /datasets/sentencepieces/librispeech1023.model
+    sentpiece_model: /datasets/sentencepieces/librispeech1023.eos.model
     labels: [" ", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
              "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "'"]
+
     sampling: 0.05
 
 # For validation we don't trim silence: its effect on WER is very small, it pushes WER on clean and noisy speech
@@ -33,6 +37,7 @@ input_val:
     standardize_wer: true
     replacements:
     remove_tags: true
+    error_rate: word
 
   filterbank_features: &val_features
     normalize: per_feature
@@ -55,6 +60,7 @@ input_train:
     trim_silence: true
     max_duration: 16.7
     max_transcript_len: 450
+    min_duration: 0.05
     speed_perturbation:
         min_rate: 0.85
         max_rate: 1.15
@@ -106,5 +112,5 @@ grad_noise_scheduler:
   start_step: 2000
 
 ngram:
-  ngram_path: /datasets/ngrams/librispeech1023
+  ngram_path: /datasets/ngrams/librispeech1023_eos
   scale_factor: 0.05

@@ -22,7 +22,8 @@ from beartype.typing import Any, Dict
 
 from caiman_asr_train.args.shared import check_shared_args
 from caiman_asr_train.args.val import check_val_arguments, val_arg_parser
-from caiman_asr_train.evaluate import evaluate
+from caiman_asr_train.evaluate.core import evaluate
+from caiman_asr_train.evaluate.error_rates import error_rate_abbrev, error_rate_long
 from caiman_asr_train.log.profiling import finish_profiling, set_up_profiling
 from caiman_asr_train.log.tb_dllogger import flush_log
 from caiman_asr_train.setup.base import BuiltObjects
@@ -65,8 +66,9 @@ def validate(
         calculate_loss=args.calculate_loss,
         nth_batch_only=args.nth_batch_only,
         using_cpu=args.cpu,
+        error_rate=val_objects.error_rate,
     )
-    wer = results["wer"]
+    wer = results[error_rate_abbrev(val_objects.error_rate)]
     flush_log()
     if not args.val_from_dir:
         if args.read_from_tar:
@@ -83,10 +85,14 @@ def validate(
         val_files_str = " ".join(val_files)
         if len(val_files_str) > 200:
             val_files_str = val_files_str[:200] + "..."
-        print_once(f'\nWord Error Rate: {wer*100.0:5.3f}% on "{val_files_str}"\n')
+        print_once(
+            f"\n{error_rate_long(val_objects.error_rate)}: "
+            f'{wer*100.0:5.3f}% on "{val_files_str}"\n'
+        )
     else:
         print_once(
-            f"\nWord Error Rate: {wer*100.0:5.3f}% on {args.val_audio_dir=} and "
+            f"\n{error_rate_long(val_objects.error_rate)}: "
+            f"{wer*100.0:5.3f}% on {args.val_audio_dir=} and "
             f"{args.val_txt_dir=}\n"
         )
 
@@ -120,9 +126,11 @@ def validation_routine(args, build_objects_func, validation_func):
                 print(f"{i+1}/{len(ckpt_files)} Validating checkpoint: {ckpt_file}")
             val_objects, profilers = build_objects_func(args)
             results = validation_func(args, val_objects)
-            wers[ckpt_file] = round(results["wer"] * 100, 3)
+            wers[ckpt_file] = round(
+                results[error_rate_abbrev(val_objects.error_rate)] * 100, 3
+            )
             finish_profiling(args.profiler, args.output_dir, profilers, args.timestamp)
-        print_once(f"WERs: {wers}")
+        print_once(f"{error_rate_abbrev(val_objects.error_rate).upper()}s: {wers}")
 
     else:
         if args.local_rank == 0:

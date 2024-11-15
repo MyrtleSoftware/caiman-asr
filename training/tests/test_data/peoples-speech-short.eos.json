@@ -1,0 +1,30 @@
+[
+  {
+    "transcript": "order <EOS> even though it may have been brought by a final application that it was only an interim order and because it was an interim order the court didn't have jurisdiction",
+    "files": [
+      {
+        "channels": 1,
+        "sample_rate": 16000.0,
+        "duration": 8.89,
+        "num_samples": 142240,
+        "fname": "gov_DOT_uscourts_DOT_ca9_DOT_04-56618_DOT_2006-02-16_DOT_mp3_00027.flac"
+      }
+    ],
+    "original_duration": 8.89,
+    "original_num_samples": 142240
+  },
+  {
+    "transcript": "second clip is repeated <EOS>",
+    "files": [
+      {
+        "channels": 1,
+        "sample_rate": 16000.0,
+        "duration": 8.89,
+        "num_samples": 142240,
+        "fname": "duplicate_clip.flac"
+      }
+    ],
+    "original_duration": 8.89,
+    "original_num_samples": 142240
+  }
+]

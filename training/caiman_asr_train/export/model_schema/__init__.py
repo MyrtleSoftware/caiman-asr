@@ -7,7 +7,6 @@ class CheckpointNotSupportedError(Exception):
 
 
 class ModelVariant(Enum):
-    TESTING = "testing"
     BASE = "base"
     LARGE = "large"
 

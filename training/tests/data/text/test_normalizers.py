@@ -20,7 +20,9 @@ def test_digit_normalize():
 
     def norm(x):
         return select_and_normalize(
-            x, allowed_chars, NormalizeConfig(NormalizeLevel.DIGIT_TO_WORD, [], False)
+            x,
+            allowed_chars,
+            NormalizeConfig(NormalizeLevel.DIGIT_TO_WORD, [], False, []),
         )
 
     assert norm("Testing, 1, 2, 3.") == "Testing, one, two, three."
@@ -85,7 +87,7 @@ def test_digit_normalize():
 def test_variants(normalizer, remove_tags, expected):
     charset = list(string.ascii_letters + " -")
     text = "<silence> Mr. Smith visited the café @ 123rd Street."
-    normalize_config = NormalizeConfig(normalizer, [], remove_tags)
+    normalize_config = NormalizeConfig(normalizer, [], remove_tags, [])
     result = norm_and_tokenize(
         text, tokenizer=None, normalize_config=normalize_config, charset=charset
     )
@@ -96,7 +98,7 @@ def test_variants(normalizer, remove_tags, expected):
 def test_implemented(normalizer):
     """Make sure norm_and_tokenize can handle all NormalizeLevels,
     including ones added later"""
-    normalize_config = NormalizeConfig(normalizer, [], False)
+    normalize_config = NormalizeConfig(normalizer, [], False, [])
     norm_and_tokenize(
         "foo",
         tokenizer=None,
@@ -117,7 +119,7 @@ def test_implemented(normalizer):
     ],
 )
 def test_no_forbidden_chars(input_text, default_charset, normalizer, remove_tags):
-    normalize_config = NormalizeConfig(normalizer, [], remove_tags)
+    normalize_config = NormalizeConfig(normalizer, [], remove_tags, [])
     result = norm_and_tokenize(
         input_text,
         tokenizer=None,
@@ -147,7 +149,7 @@ def test_replacements(normalizer, expected):
         {"old": "colour", "new": "color"},
     ]
     text = "Blue is a colour; red is a colour; yellow is---also a colour"
-    normalize_config = get_normalize_config(normalizer, replacements, False)
+    normalize_config = get_normalize_config(normalizer, replacements, False, [])
     result = norm_and_tokenize(
         text, tokenizer=None, normalize_config=normalize_config, charset=charset
     )
@@ -157,7 +159,7 @@ def test_replacements(normalizer, expected):
 def test_tag_removal(default_charset):
     def norm(x):
         return select_and_normalize(
-            x, default_charset, NormalizeConfig(NormalizeLevel.LOWERCASE, [], True)
+            x, default_charset, NormalizeConfig(NormalizeLevel.LOWERCASE, [], True, [])
         )
 
     assert norm("<tags> <like_these> are removed") == "  are removed"

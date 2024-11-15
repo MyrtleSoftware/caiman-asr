@@ -85,11 +85,27 @@ After seeing the pass/fail pytest output you will need to KeyboardInterrupt this
 
 We use [beartype](https://beartype.readthedocs.io/en/latest/) to check type annotations at runtime, and [jaxtyping](https://docs.kidger.site/jaxtyping/) to check tensor shapes.
 
-When applying jaxtyped, use it like this:
+When applying jaxtyped, we have some aliases defined in `caiman_asr_train.utils.type`, this includes the `@bearjax` decorator. See below:
+
+__Plain jaxtyping:__
 
 ```python
+from beartype import beartype
+from jaxtyping import Float,  jaxtyped
+from torch import Tensor
+
 @jaxtyped(typechecker=beartype)
-def function(...) -> ...:
+def transpose(x : Float[Tensor, "m n"]) -> Float[Tensor, "n m"]:
+   ...
+```
+
+__With our aliases:__
+
+```python
+from caiman_asr_train.utils.type import FT, bearjax
+
+@bearjax
+def transpose(x : FT["m n"]) -> FT["n m"]:
    ...
 ```
 

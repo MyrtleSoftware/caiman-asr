@@ -19,11 +19,11 @@ PATH_TO_ARPA=$NGRAM_DIR/ngram.arpa
 PATH_TO_BINARY=$NGRAM_DIR/ngram.binary
 
 # populate run config
-cat $CONFIG | \
-    sed s/SENTENCEPIECE/$SPM_NAME/g | \
-    sed s/STATS_SUBDIR/$STATS_SUBDIR/g | \
-    sed s/MAX_DURATION/$MAX_DURATION_SECS/g | \
-    sed s/NGRAM_SUBDIR/$SPM_NAME/g > $RUN_CONFIG
+cat $CONFIG |
+	sed s/SENTENCEPIECE/$SPM_NAME/g |
+	sed s/STATS_SUBDIR/$STATS_SUBDIR/g |
+	sed s/MAX_DURATION/$MAX_DURATION_SECS/g |
+	sed s/NGRAM_SUBDIR/$SPM_NAME/g >$RUN_CONFIG
 
 echo "Setting env variables:"
 echo ""

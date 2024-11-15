@@ -6,7 +6,11 @@ from beartype import beartype
 from beartype.typing import Optional, Tuple
 from torch.cuda.amp import GradScaler
 
-from caiman_asr_train.rnnt.loss import ApexTransducerLoss, get_packing_meta_data
+from caiman_asr_train.rnnt.loss import (
+    ApexTransducerLoss,
+    LossModifiers,
+    get_packing_meta_data,
+)
 from caiman_asr_train.rnnt.state import RNNTState
 from caiman_asr_train.rnnt.sub_models import RNNTSubModels
 from caiman_asr_train.train_utils.core import is_loss_nan, maybe_autocast
@@ -23,7 +27,7 @@ def joint_and_loss(
     txt: torch.Tensor,
     txt_lens: torch.Tensor,
     meta_data: dict,
-    delay_penalty: float,
+    loss_mods: LossModifiers,
 ) -> torch.Tensor:
     """
     Run joint and loss.
@@ -37,7 +41,7 @@ def joint_and_loss(
         txt_lens,
         meta_data["batch_offset"],
         meta_data["max_f_len"],
-        delay_penalty=delay_penalty,
+        loss_mods=loss_mods,
     )
 
     loss /= args.grad_accumulation_batches * args.batch_split_factor
@@ -57,7 +61,7 @@ def train_step_batch_split(
     txt_lens: torch.Tensor,
     scaler: Optional[GradScaler],
     rnnt_state: Optional[RNNTState],
-    delay_penalty: float,
+    loss_mods: LossModifiers,
 ) -> Tuple[float, bool, Optional[RNNTState]]:
     """
     Run a step of training when batch_split_factor > 1.
@@ -117,7 +121,7 @@ def train_step_batch_split(
             txt=txt[i * b_split : (i + 1) * b_split],
             txt_lens=txt_lens[i * b_split : (i + 1) * b_split],
             meta_data=meta_data[i],
-            delay_penalty=delay_penalty,
+            loss_mods=loss_mods,
         )
 
         if is_loss_nan(loss, args.num_gpus):

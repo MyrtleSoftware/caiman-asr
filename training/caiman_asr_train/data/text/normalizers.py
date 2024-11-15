@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-import re
 import warnings
 
 import inflect
 from beartype import beartype
 from text_unidecode import unidecode
 
+from caiman_asr_train.data.text.is_tag import actually_remove_tags
 from caiman_asr_train.data.text.ito import _clean_text, punctuation_map
 from caiman_asr_train.data.text.ito.numbers import normalize_numbers
 from caiman_asr_train.setup.text_normalization import NormalizeConfig, NormalizeLevel
@@ -42,15 +42,6 @@ def lowercase_normalize(
         raise
     else:
         return text
-
-
-def actually_remove_tags(text):
-    """
-    Remove tags or codes inside angled brackets
-    >>> actually_remove_tags('testing <unk> <inaudible> one <foreign_word> three')
-    'testing   one  three'
-    """
-    return re.sub("<[a-z_]+>", "", text)
 
 
 @beartype

@@ -5,14 +5,17 @@ from collections import OrderedDict
 
 import torch
 import torch.distributed as dist
+from beartype import beartype
 
 from caiman_asr_train.train_utils.distributed import print_once, unwrap_ddp
 
 
 class Checkpointer(object):
-    def __init__(self, save_dir, model_name):
+    @beartype
+    def __init__(self, save_dir, model_name, allow_partial_load: bool = False):
         self.save_dir = save_dir
         self.model_name = model_name
+        self.allow_partial_load = allow_partial_load
 
         tracked = [
             (int(re.search(r"step(\d+)_", f).group(1)), f)
@@ -75,9 +78,9 @@ class Checkpointer(object):
             "step": step,
             "best_wer": best_wer,
             "state_dict": unwrap_ddp(model).state_dict(),
-            "ema_state_dict": unwrap_ddp(ema_model).state_dict()
-            if ema_model is not None
-            else None,
+            "ema_state_dict": (
+                unwrap_ddp(ema_model).state_dict() if ema_model is not None else None
+            ),
             "optimizer": optimizer.state_dict(),
             "tokenizer_kw": tokenizer_kw,
             "logmel_norm_weight": logmel_norm_weight,
@@ -104,14 +107,58 @@ class Checkpointer(object):
         else:
             return None
 
+    def _load(self, model, state_dict, quiet=False):
+        """
+        Load a model from a state dict using strict=False, and print warnings
+        about missing or unexpected keys. Throws an error if no keys are loaded.
+        """
+
+        missing, unexpected = model.load_state_dict(
+            state_dict, strict=not self.allow_partial_load
+        )
+
+        maybe_print_once = lambda _: None if quiet else print_once  # noqa: E731
+
+        if not unexpected and not missing:
+            maybe_print_once("Loaded all parameters from checkpoint.")
+            return
+
+        if loaded_keys := set(k for k in state_dict.keys() if k not in unexpected):
+            maybe_print_once("WARNING: Checkpoint is partially loaded, using:")
+            for key in loaded_keys:
+                maybe_print_once(f"  {key}")
+        else:
+            # Always print as we will raise an error
+            print_once("In checkpoint:")
+            for key in state_dict.keys():
+                print_once(f"  {key}")
+
+            print_once("Model expects:")
+            for key in model.state_dict().keys():
+                print_once(f"  {key}")
+
+            raise ValueError("No keys loaded from the checkpoint.")
+
+        if quiet:
+            return
+
+        if unexpected:
+            print_once("WARNING: Unused keys in the checkpoint:")
+            for key in unexpected:
+                print_once(f"  {key}")
+
+        if missing:
+            print_once("WARNING: Missing keys in the checkpoint:")
+            for key in missing:
+                print_once(f"  {key}")
+
     def load(self, fpath, model, ema_model, optimizer=None, meta=None):
         """Modified to support Test data evaluations which don't need optimizers/meta"""
 
         print_once(f"Loading model from {fpath}")
         checkpoint = torch.load(fpath, map_location="cpu")
 
-        state_dict = checkpoint["state_dict"]
-        unwrap_ddp(model).load_state_dict(state_dict, strict=True)
+        self._load(unwrap_ddp(model), checkpoint["state_dict"])
 
         if ema_model is not None:
             if checkpoint.get("ema_state_dict") is not None:
@@ -120,8 +167,8 @@ class Checkpointer(object):
                 key = "state_dict"
                 print_once("WARNING: EMA weights not found in the checkpoint.")
                 print_once("WARNING: Initializing EMA model with regular params.")
-            state_dict = checkpoint[key]
-            unwrap_ddp(ema_model).load_state_dict(state_dict, strict=True)
+
+            self._load(unwrap_ddp(ema_model), checkpoint[key], quiet=True)
 
         if optimizer is not None:
             optimizer.load_state_dict(checkpoint["optimizer"])

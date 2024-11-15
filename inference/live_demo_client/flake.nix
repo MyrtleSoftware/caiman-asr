@@ -37,6 +37,7 @@
               (python.withPackages (ps: with ps; [
                 pyaudio
                 websocket-client
+                beartype
               ]))
             ];
           };

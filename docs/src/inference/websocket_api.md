@@ -136,20 +136,22 @@ When decoding with a beam search, the server will return two types of response, 
 
 It is recommended to use partials for low-latency streaming applications and finals for the ultimate transcription output. If latency is not a concern you can ignore the partials and concatenate the finals.
 
-Detection of finals is done by checking beam hypotheses for a shared prefix. Typically it takes no more than 1.5 seconds to get finals (and often they are much faster) but it is possible that two similar hypotheses with similar scores are maintained in the beam for a long period of time. As such it is always recommended to use partials with state-resets enabled (see [state-reset docs](../training/state_resets.md)).
+Detection of finals is done by checking beam hypotheses for a shared prefix. Once this shared prefix is detected and sent in as a final, all following partials and finals will have that prefix removed. Hence it's possible to get the full transcript by concatenating all the `transcript` fields in the finals.
+
+Typically it takes no more than 1 second to get finals (and often they are much faster) to ensure a hard-cap on final latency beam time/depth pruning can be enabled, which discards the least likely hypothesis to ensure that the time between final emissions is bounded.
 
 When running the asr server, partial responses are marked with `"is_provisional": true` and finals with `"is_provisional": false` and partials can be one of the many `"alternatives: [...]"`.
 During a partial response,
 the alternatives are ordered from most confident to least.
 
-At each frame,
-it's guaranteed that the server will send
-a final or partial response, and perhaps both, as explained
-[`here`](https://github.com/MyrtleSoftware/caiman-asr/blob/main/training/caiman_asr_train/rnnt/response.py):
+During every frame other than the last one,
+the server will send partials
+and may also send a final.
+At the last frame, the server will not send any partials,
+but may send a final if there is outstanding text.
 
-```
-{{#include ../../../training/caiman_asr_train/rnnt/response.py:finals_partials_in_mdbook}}
-```
+When the server sends a final and a partial for the same frame,
+the final will be sent first.
 
 ## Closing the Connection
 

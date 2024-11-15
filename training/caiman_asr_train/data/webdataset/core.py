@@ -35,7 +35,7 @@ class WebDatasetReader:
     """
     This class reads samples of data from tar-file webdatasets.
 
-    This format enables reading from a tar file shard containing a collection of samples
+    This format enables reading from a tar/zip file shard containing a collection of samples
     with the convention that all files associated with a single sample have the same key.
     For example, for a simple audio dataset shard with just two samples might include
     the following four files:
@@ -65,17 +65,18 @@ class WebDatasetReader:
     shuffle
         Whether to shuffle the data.
     file_root
-        The root directory for the tar file paths. This is passed to the root argument
+        The root directory for the tar/zip file paths. This is passed to the root argument
         of the torchdata FileLister class.
     tar_files
-        List of tar files to read from. This is passed to the masks argument
+        List of tar/zip files to read from. This is passed to the masks argument
         of the torchdata FileLister class.
         There are two modes for this argument:
         1) (If file_root is passed): this should be a list of filenames (or fileglobs)
-        within the file_root directory. NOTE: in this mode, all of your tar files must
+        within the file_root directory. NOTE: in this mode, all of your tar/zip files must
         be in a single flat directory.
         2) (If file_root is falsy or == "/"): this should be a list of absolute paths
-        or globs of the tar files.
+        or globs of the tar/zip files.
+        3) The files parsed must be in either tar or zip format, and not a mix of both.
     charset
         Optional List of strings containing the supported characters. This is passed as
         an alternative to Tokenizer when the transcripts are not tokenized.
@@ -106,6 +107,9 @@ class WebDatasetReader:
         I/O and audio decoding if you just want to view the transcripts.
     sample_rate
         The sample rate of the audio files.
+    min_duration
+        The minimum duration of a sample in seconds. If a sample is shorter than this it
+        is filtered out.
     """
 
     audio_suffixes = {".flac", ".wav"}
@@ -119,13 +123,14 @@ class WebDatasetReader:
         charset: Optional[List[str]] = None,
         normalize_config: NormalizeConfig = IDENTITY_NORMALIZE_CONFIG,
         shuffle_buffer_size: int = 20000,
-        max_duration=float("inf"),
-        max_transcript_len=float("inf"),
+        max_duration: float = float("inf"),
+        max_transcript_len: float = float("inf"),
         num_buckets: int = 1,
         batch_size: Optional[int] = None,
         bucketing_buffer_size: int = 4,
         skip_audio: bool = False,
         sample_rate: int = 16000,
+        min_duration: int | float = 0.05,
     ) -> None:
         assert tar_files, "must specify tar_files "
 
@@ -149,6 +154,7 @@ class WebDatasetReader:
         self.bucketing_buffer_size = bucketing_buffer_size
         self.skip_audio = skip_audio
         self.sample_rate = int(sample_rate)
+        self.min_duration = min_duration
 
         if not file_root or file_root == "/":
             # self.tar_files is one or more absolute paths/globs
@@ -168,7 +174,7 @@ class WebDatasetReader:
         world_size = dist.get_world_size() if dist.is_initialized() else 1
         num_tar_files = len(list(file_lister))
         assert num_tar_files >= world_size, (
-            f"Number of tar files ({num_tar_files}) must be greater than or "
+            f"Number of tar/zip files ({num_tar_files}) must be greater than or "
             f"equal to the number of nodes ({world_size}) otherwise data "
             "cannot be sharded across nodes"
         )
@@ -181,9 +187,9 @@ class WebDatasetReader:
 
         self.opener = FileOpener(file_lister, mode="b")
 
-        self._webdataset_pipe = (
-            self.opener.load_from_tar().map(self._decode).webdataset()
-        )
+        loaded_format = self.file_opener_load_format()
+
+        self._webdataset_pipe = loaded_format.map(self._decode).webdataset()
 
         self._webdataset_pipe = self._webdataset_pipe.filter(self._filter_fn)
         self._webdataset_pipe = self._webdataset_pipe.map(self._norm_and_tokenize)
@@ -202,6 +208,16 @@ class WebDatasetReader:
             dist_rs = DistributedReadingService()
             rs = SequentialReadingService(dist_rs, mp_rs)
         self.dataloader = DataLoader2(self._webdataset_pipe, reading_service=rs)
+
+    def file_opener_load_format(self):
+        """
+        Load the tar/zip files in the correct format.
+        """
+        if self.tar_files[0].endswith(".zip"):
+            return self.opener.load_from_zip()
+        if self.tar_files[0].endswith(".tar"):
+            return self.opener.load_from_tar()
+        raise ValueError("Only zip and tar files are supported")
 
     @staticmethod
     def _manipulate_key(key):
@@ -235,7 +251,7 @@ class WebDatasetReader:
                 data = librosa.resample(data, orig_sr=sr, target_sr=self.sample_rate)
 
             length_secs = len(data) / self.sample_rate
-            if length_secs > self.max_duration:
+            if length_secs > self.max_duration or length_secs < self.min_duration:
                 data = None
             return key, data
         if key.endswith(".txt"):
@@ -271,13 +287,13 @@ class WebDatasetReader:
         """
         try:
             transcript_not_none = item[".txt"] is not None
-        except KeyError:
+        except KeyError as exc:
             raise ValueError(
                 f"There isn't a paired text and audio file for {item=}\n"
                 "At tarfile creation time, make sure that each audio file is stored "
                 "sequentially with its .txt transcript. You can check the file order "
                 "for a given tar file in a bash shell with `$ tar tf <tarfile path>.tar"
-            )
+            ) from exc
         return transcript_not_none and (
             self.skip_audio or self._get_audio(item) is not None
         )
@@ -346,4 +362,9 @@ class WebDatasetReader:
             )
 
         transcripts = sample_dict[".txt"]
-        return audio_item, transcripts, sample_dict["raw_transcript_array"]
+        return (
+            audio_item,
+            transcripts,
+            sample_dict["raw_transcript_array"],
+            str_to_numpy_unicode(key),
+        )

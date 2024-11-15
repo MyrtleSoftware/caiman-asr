@@ -4,6 +4,7 @@ from beartype import beartype
 from beartype.typing import Dict, Optional, Tuple
 
 from caiman_asr_train.evaluate.distributed_utils import multigpu_wer, sum_across_gpus
+from caiman_asr_train.evaluate.error_rates import ErrorRate
 from caiman_asr_train.evaluate.wer_breakdown import print_wer_breakdown
 
 
@@ -13,6 +14,7 @@ def process_evaluation_epoch(
     standardize_wer: bool,
     breakdown_wer: bool,
     breakdown_chars: str,
+    error_rate: ErrorRate,
 ) -> Tuple[float, Optional[float]]:
     """
     Processes results from each worker at the end of evaluation and combine to final result
@@ -35,9 +37,9 @@ def process_evaluation_epoch(
     hypotheses = aggregates["preds"]
     references = aggregates["txts"]
 
-    wer = multigpu_wer(hypotheses, references, standardize_wer)
+    wer = multigpu_wer(hypotheses, references, error_rate, standardize_wer)
     if breakdown_wer:
-        print_wer_breakdown(hypotheses, references, breakdown_chars)
+        print_wer_breakdown(hypotheses, references, breakdown_chars, error_rate)
 
     multi_gpu = dist.is_initialized()
     if multi_gpu:

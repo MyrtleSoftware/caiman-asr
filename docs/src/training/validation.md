@@ -10,7 +10,7 @@ To run validation, execute:
 ./scripts/val.sh
 ```
 
-By default, a checkpoint saved at `/results/RNN-T_best_checkpoint.pt`, with the `testing-1023sp_run.yaml` model config, is evaluated on the `/datasets/LibriSpeech/librispeech-dev-clean.json` manifest.
+By default, a checkpoint saved at `/results/RNN-T_best_checkpoint.pt`, with the `testing-1023sp_run.yaml` model config, is evaluated on the `/datasets/LibriSpeech/librispeech-dev-clean-flac.json` manifest.
 
 ### Arguments
 

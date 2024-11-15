@@ -17,11 +17,13 @@ from beartype.typing import List, Tuple
 from nvidia.dali.plugin.base_iterator import LastBatchPolicy
 from nvidia.dali.plugin.pytorch import DALIGenericIterator
 
+from caiman_asr_train.data.dali.filename import FileNameExtractor
 from caiman_asr_train.data.dali.pipeline import DaliPipeline
 from caiman_asr_train.data.dali.token_cache import TokenCache
 from caiman_asr_train.data.decide_on_loader import DataSource
 from caiman_asr_train.data.tokenizer import Tokenizer
 from caiman_asr_train.setup.text_normalization import NormalizeConfig
+from caiman_asr_train.train_utils.distributed import time_print_once
 
 
 class DaliRnntIterator:
@@ -44,11 +46,16 @@ class DaliRnntIterator:
         device_type: str,
         data_source: DataSource,
         normalize_config: NormalizeConfig,
+        output_files: dict[str, dict] | None,
     ):
+        time_print_once(f"Making token cache for {pipeline_type}")
         self.token_cache = TokenCache(
             normalize_config, tokenizer, device_type, data_source
         )
         self.token_cache.pretokenize(transcripts)
+        time_print_once(f"Done making token cache for {pipeline_type}")
+
+        self.file_name_extractor = FileNameExtractor(output_files, data_source)
 
         # in train pipeline shard_size is set to divisible by batch_size, so
         # PARTIAL policy is safe
@@ -58,6 +65,7 @@ class DaliRnntIterator:
             "label",
             "label_lens",
             "raw_transcript",
+            "fname",
         ]
         reader_name = "Reader" if data_source is DataSource.JSON else None
         if pipeline_type == "val":
@@ -82,10 +90,12 @@ class DaliRnntIterator:
 
     def __next__(
         self,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[str]]:
+    ) -> Tuple[
+        torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[str], list[str]
+    ]:
         """
         Return next sample as ('audio', 'audio_lens', 'transcript',
-                               'transcript_lens', 'raw_transcript')
+                               'transcript_lens', 'raw_transcript', 'fname')
         """
         data = self.dali_it.__next__()
         audio, audio_shape = data[0]["audio"], data[0]["audio_shape"][:, 1]
@@ -99,7 +109,15 @@ class DaliRnntIterator:
             transcripts_lengths,
             raw_transcripts,
         ) = self.token_cache.get_transcripts(data[0])
-        return audio, audio_shape, transcripts, transcripts_lengths, raw_transcripts
+        fnames = self.file_name_extractor.get_fnames(data[0])
+        return (
+            audio,
+            audio_shape,
+            transcripts,
+            transcripts_lengths,
+            raw_transcripts,
+            fnames,
+        )
 
     def next(
         self,
