@@ -29,6 +29,8 @@ from beartype import beartype
 from beartype.typing import Dict, Generator, List, Optional, Tuple, Union, ValuesView
 from sentencepiece import SentencePieceProcessor as SPP
 
+from caiman_asr_train.keywords.process import load_keywords
+from caiman_asr_train.keywords.trie import Keywords
 from caiman_asr_train.lm.kenlm_ngram import KenLmModel, NgramInfo
 from caiman_asr_train.rnnt.decoder import RNNTCommonDecoder
 from caiman_asr_train.rnnt.eos_strategy import EOSPredict, EOSStrategy
@@ -131,6 +133,7 @@ class RNNTBeamDecoder(RNNTCommonDecoder):
         eos_vad_threshold: float = float("inf"),
         final_emission_thresh: float = float("inf"),
         frame_width: Optional[float] = None,
+        keyword_boost_path: Optional[str] = None,
     ):
         super().__init__(
             model=model,
@@ -162,6 +165,11 @@ class RNNTBeamDecoder(RNNTCommonDecoder):
         self.spu_unicode = SPU_UNICODE
         self.user_tokens = [] if user_tokens is None else user_tokens
         self.eos_is_terminal = eos_is_terminal
+
+        if keyword_boost_path is None:
+            self.keywords = Keywords[str]([])
+        else:
+            self.keywords = load_keywords(keyword_boost_path)
 
         if ngram_info:
             ngram_path, self.ngram_alpha = ngram_info.path, ngram_info.scale_factor
@@ -487,6 +495,8 @@ class RNNTBeamDecoder(RNNTCommonDecoder):
             # n-gram model is not trained on.
             new_hyp = self._ngram_correction(max_hyp.ngram_lm_state, new_hyp)
 
+        new_hyp = self._keyword_correction(new_hyp)
+
         token_str, cleaned_str = self._get_token_str(new_hyp, kidx)
         new_hyp.s_seq.append(token_str)
 
@@ -600,6 +610,21 @@ class RNNTBeamDecoder(RNNTCommonDecoder):
             return f, y, (h, c)
 
         return f, None, None
+
+    def _keyword_correction(self, new_hyp: Hypothesis) -> Hypothesis:
+        """
+        Apply the keyword correction to the new hypothesis.
+        """
+        if self.keywords is None:
+            return new_hyp
+
+        assert new_hyp.y_last != 0, "Decoding error: '<unk>' token encountered"
+
+        new_token = self.detokenize(new_hyp.y_last)
+        delta, new_hyp.kws_state = self.keywords.steps(new_token, new_hyp.kws_state)
+        new_hyp.score += delta
+
+        return new_hyp
 
     def _ngram_correction(
         self, max_hyp_ngram_state: Optional[kenlm.State], new_hyp: Hypothesis

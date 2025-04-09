@@ -9,6 +9,8 @@ title = "CAIMAN-ASR"
 
 mathjax-support = true
 additional-css = ["./mdbook-admonish.css"]
+curly-quotes = true
+git-repository-url = "https://github.com/MyrtleSoftware/caiman-asr"
 
 [preprocessor]
 

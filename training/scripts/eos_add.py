@@ -4,7 +4,7 @@ from pathlib import Path
 
 import orjson
 
-from caiman_asr_train.data.segment_manifest import add_eos_to_manifest
+from caiman_asr_train.data.segment_manifest import add_eos_to_manifest_avoid_empty
 from caiman_asr_train.data.text.is_tag import is_tag
 from caiman_asr_train.utils.fast_json import fast_read_json
 
@@ -83,18 +83,9 @@ def main(args):
 
         print(f"Processing {ifile}")
 
-        # wtpsplit will crash on empty transcripts,
-        # so just pass those through the script
-        whitespace = [utt for utt in manifest if utt["transcript"].strip() == ""]
-
-        has_transcript = [utt for utt in manifest if utt["transcript"].strip() != ""]
-
-        has_transcript_eos = add_eos_to_manifest(
-            has_transcript, args.eos_token, not args.no_cuda
+        out = add_eos_to_manifest_avoid_empty(
+            manifest, args.eos_token, not args.no_cuda
         )
-
-        out = has_transcript_eos + whitespace
-
         print(f"Writing {ofile}")
 
         with open(ofile, "wb") as f:

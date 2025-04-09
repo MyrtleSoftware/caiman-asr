@@ -7,12 +7,10 @@ Example #1: required fields:
     "transcript": "Okay, here's your phone.",
     "files": [
       {
-        "sample_rate": 16000.0,
         "fname": "audio_split/S21_P46_56.70_58.36.wav"
       }
     ],
     "original_duration": 1.6599999999999966,
-    "original_num_samples": 26559
   },
 ...
 ]
@@ -42,12 +40,13 @@ Example #2: optional fields:
 
     ...
 """
+
 from beartype.typing import Optional
 from pydantic import BaseModel, conlist
 
 
 class File(BaseModel):
-    sample_rate: float
+    sample_rate: Optional[float] = None
     fname: str
     channels: Optional[int] = None
     bitdepth: Optional[int] = None
@@ -63,8 +62,10 @@ class JSONEntry(BaseModel):
     transcript: str
     files: conlist(File, min_length=1, max_length=1)
     original_duration: float
-    original_num_samples: int
+    original_num_samples: Optional[int] = None
     whisper: dict = {}
+    parakeet: dict = {}
+    original: dict = {}
 
 
 class JSONDataset(BaseModel):

@@ -103,6 +103,8 @@ def test_unk_token(tokenizer, tokens):
         model_config="/workspace/training/configs/testing-1023sp.yaml",
         eos_vad_threshold=float("inf"),
         eos_is_terminal=False,
+        latency_head_offset=0.0,
+        latency_tail_offset=0.0,
     )
 
     evaluate(

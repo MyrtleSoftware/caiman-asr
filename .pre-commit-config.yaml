@@ -1,46 +1,58 @@
 # See https://pre-commit.com for more information
 # See https://pre-commit.com/hooks.html for more hooks
 repos:
--   repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v3.2.0
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
     hooks:
-    -   id: check-added-large-files
-    -   id: check-merge-conflict
-    -   id: end-of-file-fixer
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
         exclude_types: ["svg"]
-    -   id: requirements-txt-fixer
-    -   id: trailing-whitespace
--   repo: https://github.com/pycqa/isort
-    rev: 5.12.0
+      - id: requirements-txt-fixer
+      - id: trailing-whitespace
+  - repo: https://github.com/pycqa/isort
+    rev: 6.0.0
     hooks:
-    - id: isort
-      args: [--profile=black, --project=caiman_asr_train, --project=myrtle_asr_train]
--   repo: https://github.com/psf/black
-    rev: 23.3.0
+      - id: isort
+        args: [--profile=black, --project=caiman_asr_train, --project=myrtle_asr_train]
+  - repo: https://github.com/psf/black
+    rev: 25.1.0
     hooks:
-    - id: black
-      language_version: python3
-      args: [--line-length=88]
-- repo: https://github.com/astral-sh/ruff-pre-commit
-  # Ruff version.
-  rev: v0.1.5
-  hooks:
-    # Fix unused imports
-    - id: ruff
-      args: [--select, F401, --fix]
-      # This also excludes the smoke tests in myrtle-training
-      exclude: training/tests/test_smoke_tests.py
-- repo: https://github.com/PyCQA/flake8
-  rev: 7.0.0
-  hooks:
-  - id: flake8
-    args: [--max-line-length=92, "--extend-ignore=E203,F401,F722"]
-- repo: https://github.com/executablebooks/mdformat
-  rev: 0.7.17
-  hooks:
-  - id: mdformat
-    args: ["--number"]
-- repo: https://github.com/scop/pre-commit-shfmt
-  rev: v3.9.0-1
-  hooks:
-    - id: shfmt         # prebuilt upstream executable
+      - id: black
+        language_version: python3
+        args: [--line-length=88]
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Ruff version.
+    rev: v0.9.4
+    hooks:
+      # Fix unused imports
+      - id: ruff
+        args: [--select, F401, --fix]
+        # This also excludes the smoke tests in myrtle-training
+        exclude: training/tests/test_smoke_tests.py
+  - repo: https://github.com/PyCQA/flake8
+    rev: 7.1.1
+    hooks:
+      - id: flake8
+        args: [--max-line-length=92, "--extend-ignore=E203,F401,F722"]
+  - repo: https://github.com/executablebooks/mdformat
+    rev: 0.7.22
+    hooks:
+      - id: mdformat
+        additional_dependencies:
+          - mdformat-myst
+        args: ["--number"]
+  - repo: https://github.com/scop/pre-commit-shfmt
+    rev: v3.10.0-2
+    hooks:
+      - id: shfmt # prebuilt upstream executable
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.1
+    hooks:
+      - id: codespell
+        exclude: training/caiman_asr_train/data/text/english.json
+        args: ["-L", "nd,patter,crate,caf,strng,AAS"]
+  - repo: https://github.com/google/yamlfmt
+    rev: v0.15.0
+    hooks:
+      - id: yamlfmt

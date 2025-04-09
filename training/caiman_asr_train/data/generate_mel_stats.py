@@ -29,6 +29,11 @@ def generate_stats(args: Namespace):
     """
     Record training data log mel stats and save them to disk.
     """
+
+    assert args.train_manifest_ratios is None
+    assert args.relative_train_manifest_ratios is None
+    assert args.canary_exponent is None
+
     cfg = config.load(args.model_config)
     (dataset_kw, features_kw, _, _) = config.input(cfg, "train")
     update_config_mel_stats(dataset_kw, features_kw)
@@ -92,9 +97,9 @@ def generate_stats(args: Namespace):
         os.makedirs(output_dir, exist_ok=True)
 
     # save as PyTorch tensors
-    torch.save(melmeans, f"{output_dir}/melmeans.pt")
-    torch.save(melvars, f"{output_dir}/melvars.pt")
-    torch.save(meln, f"{output_dir}/meln.pt")
+    torch.save(melmeans, f"{output_dir}/melmeans.pt", pickle_protocol=5)
+    torch.save(melvars, f"{output_dir}/melvars.pt", pickle_protocol=5)
+    torch.save(meln, f"{output_dir}/meln.pt", pickle_protocol=5)
 
 
 def update_config_mel_stats(dataset_kw, features_kw):

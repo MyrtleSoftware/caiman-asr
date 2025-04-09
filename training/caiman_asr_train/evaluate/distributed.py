@@ -19,7 +19,8 @@ def process_evaluation_epoch(
     """
     Processes results from each worker at the end of evaluation and combine to final result
 
-    Aggregates will be updated in-place to have timestamps from all processes.
+    Aggregates will be updated in-place to have timestamps, final_timestamps
+    and wordstamps from all processes.
 
     Args:
         aggregates: dictionary containing information of entire evaluation
@@ -54,10 +55,12 @@ def process_evaluation_epoch(
 
         # If rank 0 process, combine timestamp data from all processes
         if dist.get_rank() == 0:
-            lst_seq_time = [
-                timestamp
-                for results in gathered_results
-                for timestamp in results["timestamps"]
-            ]
-            aggregates["timestamps"] = lst_seq_time
+            for x in ["user_perceived_timestamps", "final_timestamps", "wordstamps"]:
+                if x in aggregates:
+                    lst_seq_time = [
+                        timestamp
+                        for results in gathered_results
+                        for timestamp in results[x]
+                    ]
+                    aggregates[x] = lst_seq_time
     return wer, eloss

@@ -2,7 +2,12 @@ import argparse
 import os
 import time
 from argparse import Namespace
+from pathlib import Path
 
+import yaml
+from beartype import beartype
+
+from caiman_asr_train.args.argparser import MyrtleArgumentParser
 from caiman_asr_train.args.delay_penalty import (
     add_delay_penalty_args,
     verify_delay_penalty_args,
@@ -11,11 +16,12 @@ from caiman_asr_train.args.eos import add_eos_train_args
 from caiman_asr_train.args.noise_augmentation import add_noise_augmentation_args
 from caiman_asr_train.args.shared import add_shared_args
 from caiman_asr_train.args.star import add_star_args
-from caiman_asr_train.data.make_datasets.librispeech import LIBRISPEECH_TRAIN960H
+from caiman_asr_train.data.schema import DatasetSchemaValidator
 
 
+@beartype
 def train_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="RNN-T Training Reference")
+    parser = MyrtleArgumentParser(description="RNN-T Training Reference")
 
     training = parser.add_argument_group("training setup")
     training.add_argument(
@@ -72,6 +78,11 @@ def train_arg_parser() -> argparse.ArgumentParser:
         "--hidden_hidden_bias_scaled",
         type=float,
         help="If set, overwrites value in config.",
+    )
+    training.add_argument(
+        "--die_if_wer_bad",
+        action="store_true",
+        help="If dev WER > 99% at step 10k or later, raise an error",
     )
     optim = parser.add_argument_group("optimization setup")
     optim.add_argument(
@@ -216,16 +227,55 @@ def train_arg_parser() -> argparse.ArgumentParser:
         help="The number of buckets for the Bucketing Sampler, "
         "according to which audio files are grouped by audio duration "
         "and shuffled within each bucket. Setting it to 0 will use "
-        "the Simple Sampler.",
+        "the RandomSampler.",
+    )
+    io.add_argument(
+        "--randomize_first_n_epochs",
+        type=int,
+        default=0,
+        help="Completely randomize the first n epochs regardless of bucketing",
     )
     io.add_argument(
         "--train_manifests",
         type=str,
         required=False,
-        default=LIBRISPEECH_TRAIN960H,
         nargs="+",
         help="Paths of the training dataset manifest file"
         "Ignored if --read_from_tar=True",
+    )
+    io.add_argument(
+        "--train_dataset_yaml",
+        type=str,
+        required=False,
+        help="Path to training dataset config (.yaml) file",
+    )
+    io.add_argument(
+        "--train_manifest_ratios",
+        "--train_manifests_ratios",
+        type=float,
+        required=False,
+        nargs="+",
+        help="Ratio to weight each training manifest file in each epoch by. "
+        " 1 2 means the model will see utterances from the second manifest "
+        "twice as often as utterances from the first, "
+        "regardless of the lengths of the manifests",
+    )
+    io.add_argument(
+        "--relative_train_manifest_ratios",
+        type=float,
+        required=False,
+        nargs="+",
+        help="Ratio to weight each training manifest file in each epoch by. "
+        " 1 2 means the second manifest will be upweighted by a factor of 2, "
+        " but the lengths of the manifests will be taken into account",
+    )
+    io.add_argument(
+        "--canary_exponent",
+        type=float,
+        help="The exponent for the canary manifest weights. Canary weighting is "
+        "on by default (with an exponent of 0.75) unless relative/absolute "
+        "manifest ratios are set. To explicitly disable canary weighting set "
+        "this flag to negative value.",
     )
     io.add_argument(
         "--val_manifests",
@@ -348,6 +398,12 @@ def train_arg_parser() -> argparse.ArgumentParser:
         help="""Only calculate WER, not loss, on validation set.
         Saves VRAM when validation set contains long utterances""",
     )
+    io.add_argument(
+        "--log_verbose_utterance_statistics",
+        action="store_true",
+        help="Perform expensive logging of utterance statistics",
+    )
+
     add_noise_augmentation_args(parser)
     add_shared_args(parser)
     add_delay_penalty_args(parser)
@@ -356,8 +412,38 @@ def train_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def verify_train_args(args: Namespace) -> None:
+def verify_train_args(args: Namespace) -> Namespace:
     # check data path args
+
+    if args.train_dataset_yaml:
+        assert (
+            not args.train_manifests
+        ), "Cannot provide both --train_dataset_yaml and --train_manifests."
+        assert (
+            not args.train_manifest_ratios
+        ), "Cannot provide both --train_dataset_yaml and --train_manifest_ratios."
+        assert (
+            not args.relative_train_manifest_ratios
+        ), "Cannot provide both --train_dataset_yaml and --relative_train_manifest_ratios."
+        assert (
+            not args.canary_exponent or args.canary_exponent < 0
+        ), "Cannot provide both --train_dataset_yaml and --canary_exponent."
+
+        # Load and validate the YAML file
+        with open(args.train_dataset_yaml, "r") as f:
+            dataset_config = yaml.safe_load(f)
+
+        validator = DatasetSchemaValidator()
+        validated_data = validator.validate(dataset_config)
+
+        datasets = validated_data["datasets"]
+        args.train_manifests = [datasets[name]["manifest"] for name in datasets]
+        args.relative_train_manifest_ratios = [
+            datasets[name]["weight"] for name in datasets
+        ]
+
+        assert len(args.train_manifests) > 0, "No valid datasets found in YAML."
+
     if not args.read_from_tar:
         assert (
             args.train_manifests is not None
@@ -367,6 +453,32 @@ def verify_train_args(args: Namespace) -> None:
             f"{args.train_tar_files=} and {args.val_tar_files=}.\nDid you mean to "
             "pass --read_from_tar?"
         )
+
+        assert (
+            args.train_manifest_ratios is None
+            or args.relative_train_manifest_ratios is None
+        ), "Cannot set both --train_manifest_ratios and --relative_train_manifest_ratios"
+        if args.train_manifest_ratios is not None:
+            assert len(args.train_manifests) == len(
+                args.train_manifest_ratios
+            ), "Number of train manifests must match number of train manifest ratios"
+        if args.relative_train_manifest_ratios is not None:
+            assert len(args.train_manifests) == len(
+                args.relative_train_manifest_ratios
+            ), "Number of train manifests must match number of train manifest ratios"
+
+        no_ratios = (
+            args.train_manifest_ratios is None
+            and args.relative_train_manifest_ratios is None
+        )
+
+        if args.canary_exponent is not None and args.canary_exponent < 0:
+            # Explicit disable
+            args.canary_exponent = None
+        elif args.canary_exponent is None and no_ratios:
+            # Default to canary weighting
+            args.canary_exponent = 0.75
+
     else:
         assert (
             args.val_tar_files is not None
@@ -374,5 +486,45 @@ def verify_train_args(args: Namespace) -> None:
         assert (
             args.train_tar_files is not None
         ), "Must provide train_tar_files if --read_from_tar=True"
+        assert (
+            args.train_manifest_ratios is None
+        ), "Manifest balancing only works with json manifests"
+        assert (
+            args.relative_train_manifest_ratios is None
+        ), "Manifest balancing only works with json manifests"
+        assert (
+            args.canary_exponent is None
+        ), "Canary weights not supported with tar files"
+
+    mutual_exclusive_args = [
+        args.canary_exponent is not None,
+        args.train_manifest_ratios is not None,
+        args.relative_train_manifest_ratios is not None,
+    ]
+
+    assert (
+        mutual_exclusive_args.count(True) <= 1
+    ), "Only one of the manifest ratio args should be set"
+
+    if args.canary_exponent is not None:
+        assert 0 < args.canary_exponent < 1, "Canary exponent must be between 0 and 1"
 
     verify_delay_penalty_args(args)
+
+    out_dir = Path(args.output_dir)
+    # fail if output dir already contains checkpoints
+    if not args.resume and out_dir.exists() and any(out_dir.glob("*checkpoint*.pt")):
+        error_msg = (
+            f"{out_dir=} already contains checkpoints which would be overwritten by this "
+            "command. Running training using the same output_dir as a previous command "
+            "is only permitted when args.resume=True."
+        )
+        if args.fine_tune:
+            error_msg += (
+                " In the args.fine_tune=True case it is recommended to pass args.ckpt "
+                "of the form /checkpoints/<ckpt_path> instead of /results/<ckpt_path> in "
+                "order to avoid this error."
+            )
+        raise ValueError(error_msg)
+
+    return args

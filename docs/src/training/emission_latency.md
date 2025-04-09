@@ -1,6 +1,6 @@
 # Emission Latency
 
-Emission latency (EL) is defined by the time difference between the end of a spoken word in an audio file and when the model outputs the final token for the corresponding word.
+Emission latency (EL) is defined by the time difference between the end of a spoken word in an audio file and when the model outputs the final token for the corresponding word, minus the mean frame latency.
 After the model receives the final audio frame of a word, it might not predict the word until it has heard a few more frames of audio.
 EL measures this delay.
 

@@ -34,7 +34,7 @@ Endpointing is enabled when an EOS token is specified in the config file. If end
 1. `ignore` - The model's output probabilities are adjusted such that the probability of predicting the EOS token is zero i.e. `p(EOS) <- 0`.
 2. `blank` - The probability of predicting the EOS token is moved to the blank token, i.e. `prob_blank = prob_EOS + prob_blank` and `prob_EOS = 0`
 3. `none` - This is for compatibility with checkpoints whose tokenizers do not have an EOS token.
-4. `predict` -  EOS prediction is on. The model predicts the EOS token as it would for any other token. Predict mode allows for controlling the posterior of the EOS token to account for the disproportionate impact that an early EOS token could have on WER if decoding in [terminal EOS mode](#early-termination-at-eos-and-ep-latency). Hence, the probability of predicting the EOS token is modified according to:
+4. `predict` - EOS prediction is on. The model predicts the EOS token as it would for any other token. Predict mode allows for controlling the posterior of the EOS token to account for the disproportionate impact that an early EOS token could have on WER if decoding in [terminal EOS mode](#early-termination-at-eos-and-ep-latency). Hence, the probability of predicting the EOS token is modified according to:
 
 ```python
 def modify(logit_eos: float, eos_alpha: float, eos_beta: float) -> float:

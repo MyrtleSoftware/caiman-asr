@@ -19,9 +19,62 @@ from beartype import beartype
 from beartype.typing import List, Tuple
 from levenshtein_rs import levenshtein_list as levenshtein
 
-from caiman_asr_train.data.text.normalizers import lowercase_normalize
+from caiman_asr_train.data.text.normalizers import (
+    lowercase_normalize,
+    punctuation_normalize,
+)
 from caiman_asr_train.data.text.whisper_text_normalizer import EnglishTextNormalizer
 from caiman_asr_train.evaluate.error_rates import ErrorRate, decide_and_split
+from caiman_asr_train.evaluate.punctuation_error_rate import (
+    punctuation_error_rate_function,
+)
+
+
+@beartype
+def punctuation_error_rate(
+    hypotheses: List[str],
+    references: List[str],
+    punctuation_normalization: bool = True,
+    punctuation_marks: list[str] = [",", ".", "?"],
+) -> Tuple[float, int]:
+    """Compute Punctuation Error Rate (PER) between two text lists.
+
+    This function calculates the PER between two lists. It is calculated as the sum of
+    addition, deletions, and substitutions of punctuation marks in the hypotheses list
+    entries compared to the respective entries in the references list, divided by the
+    total number of punctuation marks in the references list.
+
+    Parameters
+    ----------
+    hypotheses
+        list of strings predicted by the system
+    references
+        list of transcripts
+    punctuation_normalization
+        whether to normalize punctuation marks before the PER calculation
+    punctuation_marks
+        list of punctuation marks to consider in the PER calculation
+
+    Returns
+    -------
+    per_score
+        the per metric
+    pun_symbols
+        the number of punctuation marks in the references list
+    """
+    per_score, pun_symbols = 0, 0
+    for hyp, ref in zip(hypotheses, references):
+        if punctuation_normalization:
+            hyp, ref = punctuation_normalize(hyp), punctuation_normalize(ref)
+        _per, _pun_symbols = punctuation_error_rate_function(
+            [ref], [hyp], punctuation_marks
+        )
+        per_score += round(_per * _pun_symbols)
+        pun_symbols += _pun_symbols
+    if pun_symbols != 0:
+        return per_score / pun_symbols, pun_symbols
+    else:
+        return 0.0, pun_symbols
 
 
 @beartype
@@ -72,6 +125,7 @@ def word_error_rate(
         )
 
     for hyp, ref in zip(hypotheses, references):
+
         if standardize:
             hyp, ref = standardize_wer(hyp), standardize_wer(ref)
         hyp_list = decide_and_split(hyp, error_rate)
@@ -89,18 +143,14 @@ def word_error_rate(
 def standardize_wer(text: str) -> str:
     """
     Standardize text in preparation for WER calculation.
-
     This function applies the Whisper normalization rules
     and the train-time normalizer on the text of both
     hypotheses and references in order to minimize
     penalization of non-semantic text differences.
-
-
     Parameters
     ----------
     text
         string containing un-standardized text
-
     Returns
     -------
     norm_text_list

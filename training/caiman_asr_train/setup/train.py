@@ -264,19 +264,34 @@ class TrainSetup(Setup):
         world_size: int,
         batch_sizes: Dict[PipelineType, int],
         resume_step: Dict[PipelineType, int],
-    ) -> Dict[PipelineType, Optional[dali_sampler.SimpleSampler]]:
+    ) -> Dict[PipelineType, Optional[dali_sampler.Sampler]]:
+        # Because of accumulation the sampler dose several steps per global step
+        sampler_steps_per_step = args.global_batch_size // (
+            batch_sizes[TRAIN] * world_size
+        )
+
+        num_batches = args.training_steps * args.global_batch_size // batch_sizes[TRAIN]
+
         if args.num_buckets > 0:
             train_sampler = dali_sampler.BucketingSampler(
                 num_buckets=args.num_buckets,
                 batch_size=batch_sizes[TRAIN],
-                num_workers=world_size,
-                training_steps=args.training_steps,
                 global_batch_size=args.global_batch_size,
+                world_size=world_size,
+                total_batches=num_batches,
                 rng=np_rng,
-                resume_step=resume_step[TRAIN],
+                resume_step=resume_step[TRAIN] * sampler_steps_per_step,
+                randomize_n_epochs=args.randomize_first_n_epochs,
             )
         else:
-            train_sampler = dali_sampler.SimpleSampler(world_size=world_size)
+            train_sampler = dali_sampler.RandomSampler(
+                total_batches=num_batches,
+                batch_size=batch_sizes[TRAIN],
+                global_batch_size=args.global_batch_size,
+                world_size=world_size,
+                resume_step=resume_step[TRAIN] * sampler_steps_per_step,
+                rng=np_rng,
+            )
         return {TRAIN: train_sampler, VAL: None}
 
     def pipeline_types(self) -> List[PipelineType]:

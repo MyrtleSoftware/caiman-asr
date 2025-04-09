@@ -70,7 +70,7 @@ RUN python -m pip install .
 WORKDIR /workspace/training
 
 COPY requirements.txt .
-RUN pip install --disable-pip-version-check -U -r requirements.txt
+RUN CMAKE_POLICY_VERSION_MINIMUM=3.5 pip install --disable-pip-version-check -U -r requirements.txt
 
 COPY caiman_asr_train caiman_asr_train
 COPY setup.py .

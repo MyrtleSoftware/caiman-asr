@@ -26,20 +26,18 @@ CAIMAN-ASR is provided pre-trained for English language transcription. For appli
 
 ## Model Configurations <a name="model-configs"></a>
 
-The solution supports two models: `base` and `large` of sizes 85M and 196M parameters respectively. These can be decoded with various configurations that trade off accuracy with latency and throughput. These trade-offs are described in more detail in the [performance page](./performance.md) but the 'fastest' and 'most accurate' configurations are summarized below:
+The solution supports two models: `base` and `large` of sizes 85M and 196M parameters respectively. These can be decoded with various configurations that trade off accuracy with latency and throughput. These trade-offs are described in more detail in the [performance page](./performance.md) but the 'highest-throughput' and 'most-accurate' configurations are summarized below:
 
 <!--
 
-These numbers are taken from performance.md:
-    - large+beam+lm+state-resets
-    - base+greedy+no-state-resets
+These numbers are taken from performance.md#WER-test-set-breakdown
 
 -->
 
-| Description   | Model   | Parameters | Decoding      | RTS    | CL99 at max RTS | CL99 at RTS=32 | median UPL | HF Leaderboard WER  |
-|---------------|---------|------------|---------------|--------|-----------------|----------------|----------|---------------------|
-| fastest       | `base`  | 85M        | greedy        | 2000   | 25 ms           | 15 ms          | 147 ms   |  12.31%             |
-| most-accurate | `large` | 196M       | beam, width=4 | 500    | 40 ms           | 20 ms          | 158 ms   |  10.61%             |
+| Description        | Model   | Parameters | Decoding      | RTS  | CL99 at max RTS | CL99 at RTS=32 | median UPL | HF Leaderboard WER |
+| ------------------ | ------- | ---------- | ------------- | ---- | --------------- | -------------- | ---------- | ------------------ |
+| highest-throughput | `base`  | 85M        | greedy        | 2000 | 25 ms           | 15 ms          | 147 ms     | 11.06%             |
+| most-accurate      | `large` | 196M       | beam, width=4 | 500  | 40 ms           | 20 ms          | 158 ms     | 7.98%              |
 
 where:
 
@@ -47,6 +45,6 @@ where:
 - **Compute latency 99th-percentile (CL99)** is the 99th-percentile compute latency, which measures how long it takes for a model to make a prediction for one audio frame.
 - **User-perceived latency (UPL)** is the time difference between when the user finishes saying a word and when it is returned as a transcript by the system.
 - **WER** is the Word Error Rate, a measure of the accuracy of the model. Lower is better.
-- **HF Leaderboard WER** is the WER of the model on the [Huggingface Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard). WER is averaged across the test datasets.
+- **HF Leaderboard WER** is the WER of the model on the [Huggingface Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard). WER is averaged across the 8 test datasets: see the [performance page](./performance.md) for a WER breakdown across datasets.
 
 The **solution scales linearly up to 8 accelerators, and a single server has been measured to support 16000 RTS** with the `base` model.

@@ -98,6 +98,7 @@ def make_argparser() -> ArgumentParser:
         help="Usually the code can detect the input audio format. "
         "If you think that will fail, you can specify a backup extension here.",
     )
+    parser.add_argument("--use_relative_path", action="store_true")
 
     return parser
 
@@ -141,7 +142,14 @@ def convert_utterance(
         input_path = hugging_face_elt["audio"]["path"]
         convert_to_standard_format(input_path, audio_path)
 
-    return {"audio_file": audio_path, "transcript": transcript}
+    return {
+        "audio_file": (
+            str(Path(audio_path).relative_to(args.data_dir))
+            if args.use_relative_path
+            else audio_path
+        ),
+        "transcript": transcript,
+    }
 
 
 @beartype
@@ -157,6 +165,7 @@ def make_json(
         path_transcript_list,
         args.num_jobs_manifest_preparation,
         data_dir=args.data_dir,
+        use_relative_path=args.use_relative_path,
     )
     timeprint("Writing json...")
     manifest_path = (

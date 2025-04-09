@@ -1,17 +1,23 @@
 import glob
+import math
 import os
 import re
+from argparse import Namespace
 from collections import OrderedDict
+from pathlib import Path
 
 import torch
 import torch.distributed as dist
 from beartype import beartype
+from beartype.typing import Optional
 
+from caiman_asr_train.export.hardware_ckpt import main as make_hw_ckpt
+from caiman_asr_train.export.model_schema import get_schema, return_schemas
 from caiman_asr_train.train_utils.distributed import print_once, unwrap_ddp
 
 
+@beartype
 class Checkpointer(object):
-    @beartype
     def __init__(self, save_dir, model_name, allow_partial_load: bool = False):
         self.save_dir = save_dir
         self.model_name = model_name
@@ -33,9 +39,12 @@ class Checkpointer(object):
         step,
         best_wer,
         tokenizer_kw,
-        logmel_norm_weight,
-        is_best=False,
-    ):
+        logmel_norm_weight: float,
+        config_path: str,
+        is_best: bool = False,
+        is_last: bool = False,
+        filepath: Optional[str] = None,
+    ) -> None:
         """Saves model checkpoint for inference/resuming training.
 
         Args:
@@ -52,6 +61,8 @@ class Checkpointer(object):
             logmel_norm_weight (float): current weight for logmel normalization.
             is_best (bool, optional): set name of checkpoint to 'best'
                 and overwrite the previous one
+            is_last (bool, optional): set name of checkpoint to 'last'
+                                      to save the final step checkpoint.
         """
         rank = 0
         if dist.is_initialized():
@@ -61,8 +72,12 @@ class Checkpointer(object):
         if rank != 0:
             return
 
-        if is_best:
+        if filepath:
+            fpath = filepath
+        elif is_best:
             fpath = os.path.join(self.save_dir, f"{self.model_name}_best_checkpoint.pt")
+        elif is_last:
+            fpath = os.path.join(self.save_dir, f"{self.model_name}_last_checkpoint.pt")
         else:
             fpath = os.path.join(
                 self.save_dir,
@@ -70,27 +85,62 @@ class Checkpointer(object):
             )
 
         # Checkpoint already saved
-        if not is_best and step in self.tracked:
+        if not (is_best or is_last) and step in self.tracked:
             print_once(f"WARNING: Overwriting previous checkpoint {fpath}")
 
+        model_state_dict = unwrap_ddp(model).state_dict()
         state = {
             "epoch": epoch,
             "step": step,
             "best_wer": best_wer,
-            "state_dict": unwrap_ddp(model).state_dict(),
+            "state_dict": model_state_dict,
             "ema_state_dict": (
                 unwrap_ddp(ema_model).state_dict() if ema_model is not None else None
             ),
-            "optimizer": optimizer.state_dict(),
+            "optimizer": optimizer.state_dict() if optimizer is not None else None,
             "tokenizer_kw": tokenizer_kw,
             "logmel_norm_weight": logmel_norm_weight,
         }
 
         print_once(f"Saving {fpath}...")
-        torch.save(state, fpath)
+        torch.save(state, fpath, pickle_protocol=5)
 
-        if not is_best:
+        if is_best or is_last:
+            self.save_hardware_checkpoint(
+                fpath, logmel_norm_weight, config_path, model_state_dict
+            )
+
+        if not is_best and not is_last:
             self.tracked[step] = fpath
+
+    def save_hardware_checkpoint(
+        self,
+        fpath: str,
+        logmel_norm_weight: float,
+        config: str,
+        model_state_dict: dict,
+    ) -> None:
+        if get_schema(model_state_dict) not in return_schemas():
+            print_once(
+                "Not saving hardware checkpoint as model is not supported on FPGA"
+            )
+            return
+        if not math.isclose(logmel_norm_weight, 1.0):
+            print_once(
+                f"Not saving hardware checkpoint as {logmel_norm_weight=} is not yet 1.0"
+            )
+            return
+
+        output_ckpt = Path(fpath).with_suffix(".hw.pt")
+        hw_ckpt_args = Namespace(
+            ckpt=fpath,
+            config=config,
+            output_ckpt=output_ckpt,
+            override_ngram_path=None,
+            skip_ngram=False,
+        )
+        make_hw_ckpt(hw_ckpt_args)
+        print_once(f"Saved hardware checkpoint to {output_ckpt}")
 
     def last_checkpoint(self):
         tracked = list(self.tracked.values())
@@ -117,7 +167,7 @@ class Checkpointer(object):
             state_dict, strict=not self.allow_partial_load
         )
 
-        maybe_print_once = lambda _: None if quiet else print_once  # noqa: E731
+        maybe_print_once = (lambda _: None) if quiet else print_once  # noqa: E731
 
         if not unexpected and not missing:
             maybe_print_once("Loaded all parameters from checkpoint.")

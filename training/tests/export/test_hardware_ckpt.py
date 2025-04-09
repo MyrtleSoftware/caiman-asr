@@ -60,6 +60,7 @@ def test_create_hardware_ckpt(
         best_wer,
         tokenizer_kw,
         logmel_norm_weight=1.0,
+        config_path="won't_be_used.txt",
     )
 
     # Generate hardware checkpoint from newly saved model checkpoint
@@ -157,6 +158,7 @@ def test_export_raises_ramp(
         0.05,
         tokenizer_kw,
         logmel_norm_weight=0.5,
+        config_path="won't_be_used.txt",
     )
 
     mock_args.config = model_cfg_fp

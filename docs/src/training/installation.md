@@ -57,11 +57,11 @@ Setting up the training environment requires mounting the three directories:
 The following table shows the mappings between directories on a host machine and inside the container.
 
 | **Host machine** | **Inside container** |
-| ------------------- | -----------------|
-| training | /workspace/training |
-| `<DATASETS>` | /datasets |
-| `<CHECKPOINTS>` | /checkpoints |
-| `<RESULTS>` | /results |
+| ---------------- | -------------------- |
+| training         | /workspace/training  |
+| `<DATASETS>`     | /datasets            |
+| `<CHECKPOINTS>`  | /checkpoints         |
+| `<RESULTS>`      | /results             |
 
 ```admonish
 The host directories passed to `./scripts/docker/launch.sh` must have absolute paths.

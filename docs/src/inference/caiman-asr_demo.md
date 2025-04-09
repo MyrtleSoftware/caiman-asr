@@ -7,7 +7,7 @@ It includes the asr server and a web interface which shows the live transcriptio
 This is not the right software to use for production installations; the docker container doesn't expose the server port so external clients cannot connect to it.
 For production installations, use the `caiman-asr-server-<version>.run` release. See instructions in the [CAIMAN-ASR server](./caiman-asr_server.md) section.
 
-## Running the CAIMAN-ASR Demo Server
+## Running the CAIMAN-ASR demo server
 
 If you are setting up the server from scratch you will need to flash the Achronix Speedster7t FPGA
 with the provided bitstream.

@@ -1,0 +1,10 @@
+datasets:
+  librispeech-train-clean-100:
+    manifest: "librispeech-train-clean-100-flac.eos.json"
+    weight: 1.0
+  librispeech-train-clean-360:
+    manifest: "librispeech-train-clean-360-flac.eos.json"
+    weight: 1.0
+  librispeech-train-other-500:
+    manifest: "librispeech-train-other-500-flac.eos.json"
+    weight: 1.0

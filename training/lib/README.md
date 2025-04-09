@@ -50,4 +50,4 @@ All the standard CUDA performance guidelines apply (fuse kernel invocations, max
 ## Notes on the LSTM implementation
 
 This folder contains a CUDA extension implementing a custom LSTM. Most of the LSTM blogs/references online are very difficult to follow, use unusual notation and are filled with errors.
-[This paper](https://doi.org/10.1109/TNNLS.2016.2582924) is the only correct and complete reference Myrtle has found (there is an older preprint on arXiv).
+[This paper](https://arxiv.org/abs/1503.04069) is the only correct and complete reference Myrtle has found.

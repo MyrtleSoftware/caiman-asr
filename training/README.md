@@ -1,6 +1,6 @@
 # Myrtle.ai PyTorch Training Code
 
-To get started follow the install and setup instructions: [\[docs\]](https://caiman-asr.myrtle.ai/training/installation.html) [\[markdown\]](./../docs/src/training/installation.md)
+To get started follow the install and setup instructions: [[docs]](https://caiman-asr.myrtle.ai/training/installation.html) [[markdown]](./../docs/src/training/installation.md)
 
 ## Contributing
 

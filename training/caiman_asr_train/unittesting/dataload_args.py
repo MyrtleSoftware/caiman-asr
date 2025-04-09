@@ -49,10 +49,15 @@ def gen_dataload_args(test_data_dir) -> Namespace:
         norm_ramp_end_step=None,
         norm_starting_ratio=0.25,
         norm_over_utterance=False,
+        norm_use_global_stats=False,
         warmup_steps=1000,
         hold_steps=1000,
         half_life_steps=1000,
         val_final_padding_secs=0.0,
+        train_manifest_ratios=None,
+        relative_train_manifest_ratios=None,
+        global_batch_size=1024,
+        canary_exponent=None,
     )
 
 

@@ -26,7 +26,8 @@ python caiman_asr_train/data/generate_mel_stats.py \
 	--dataset_dir "$DATA_DIR" \
 	--train_manifests $TRAIN_MANIFESTS \
 	--dali_train_device cpu \
-	--n_utterances_only 500000
+	--n_utterances_only 500000 \
+	--canary_exponent -1
 
 python caiman_asr_train/lm/prep_kenlm_data.py \
 	--data_dir "$DATA_DIR" \

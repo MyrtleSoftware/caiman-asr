@@ -56,6 +56,7 @@ class PipelineParams:
         speed_perturbation=None,
         user_symbols=None,
         error_rate="word",
+        standardize_text=False,
     ):
         pass
 
@@ -214,6 +215,10 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
                 batch_processing=True,
             )
 
+        self.reader_name = (
+            f"{pipeline_type}-reader" if data_source is DataSource.JSON else None
+        )
+
         if data_source is not DataSource.JSON:
             assert sampler is None, "Sampler not required for WebDataset/Hugging Face"
             self.read = ops.ExternalSource(
@@ -221,18 +226,19 @@ class DaliPipeline(nvidia.dali.pipeline.Pipeline):
                 num_outputs=4,
                 batch=False,
                 parallel=False,
+                name=self.reader_name,
                 cycle="raise",
             )
         else:
             self.read = ops.readers.File(
-                name="Reader",
-                pad_last_batch=(not train_pipeline),
+                name=self.reader_name,
+                pad_last_batch=True,  # Doesn't matter if we never hit the end of shard
                 device="cpu",
                 file_root=file_root,
-                file_list=sampler.get_file_list_path(),
+                file_list=sampler.file_list_path,
                 shard_id=shard_id,
                 num_shards=n_shards,
-                shuffle_after_epoch=train_pipeline and not sampler.is_sampler_random(),
+                shuffle_after_epoch=False,  # Shuffle is done in the sampler
             )
 
         if resample_range is not None:

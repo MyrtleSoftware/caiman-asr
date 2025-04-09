@@ -18,14 +18,11 @@
 # incompatible with Myrtle's existing hardware accelerated inference server.
 
 user_tokens:
-    eos: "<EOS>"
-
+  eos: "<EOS>"
 tokenizer:
-    sentpiece_model: /datasets/sentencepieces/SENTENCEPIECE.model
-    labels: [" ", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
-             "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "'"]
-    sampling: 0.05
-
+  sentpiece_model: /datasets/sentencepieces/SENTENCEPIECE.model
+  labels: [" ", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "'"]
+  sampling: 0.05
 # For validation we don't trim silence: its effect on WER is very small, it pushes WER on clean and noisy speech
 # in different directions, it would be difficult to implement in a streaming system, and a VAD would be better.
 input_val:
@@ -37,7 +34,6 @@ input_val:
     replacements:
     remove_tags: true
     error_rate: word
-
   filterbank_features: &val_features
     normalize: per_feature
     sample_rate: *sample_rate
@@ -51,23 +47,21 @@ input_val:
   frame_splicing: &val_splicing
     frame_stacking: 3
     frame_subsampling: 3
-
 # For training we trim silence, keep samples <= max_duration < max_transcript_len and apply augmentation
 input_train:
   audio_dataset:
-    <<: *val_dataset
+    !!merge <<: *val_dataset
     trim_silence: true
     max_duration: MAX_DURATION
     max_transcript_len: 450
     min_duration: 0.05
     speed_perturbation:
-        min_rate: 0.85
-        max_rate: 1.15
-        p: 1.0
-
+      min_rate: 0.85
+      max_rate: 1.15
+      p: 1.0
+    standardize_text: true
   filterbank_features: *val_features
   frame_splicing: *val_splicing
-
   spec_augment:
     freq_masks: 2
     min_freq: 0
@@ -75,10 +69,8 @@ input_train:
     time_masks: 10
     min_time: 0
     max_time: 0.03
-
 rnnt:
-  in_feats: 240  # n_filt x frame_stacking
-
+  in_feats: 240 # n_filt x frame_stacking
   enc_n_hid: 1536
   enc_pre_rnn_layers: 2
   enc_post_rnn_layers: 6
@@ -86,30 +78,24 @@ rnnt:
   enc_dropout: 0.1
   enc_batch_norm: false
   enc_freeze: false
-
   pred_n_hid: 768
   pred_rnn_layers: 2
   pred_dropout: 0.3
   pred_batch_norm: false
-
   joint_n_hid: 1024
   joint_dropout: 0.3
   joint_net_lr_factor: 0.243
   joint_apex_transducer: pack
   joint_apex_relu_dropout: true
-
   forget_gate_bias: 1.0
-
   custom_lstm: true
   quantize: false
   enc_rw_dropout: 0.0
   pred_rw_dropout: 0.0
-
 grad_noise_scheduler:
   noise_level: 0.0
   decay_const: 0.55
   start_step: 2000
-
 ngram:
   ngram_path: /datasets/ngrams/NGRAM_SUBDIR
   scale_factor: 0.05

@@ -9,17 +9,7 @@ from psutil import cpu_count
 
 from caiman_asr_train.rnnt.decoder import RNNTDecoder
 from caiman_asr_train.rnnt.response import FrameResponses
-
-
-@beartype
-def ceil_div(x: int, *, by: int) -> int:
-    """
-    Integer division that rounds away from zero.
-    """
-    if x >= 0:
-        return (x + by - 1) // by
-    else:
-        return (x - by + 1) // by
+from caiman_asr_train.utils.math import ceil_div
 
 
 @beartype

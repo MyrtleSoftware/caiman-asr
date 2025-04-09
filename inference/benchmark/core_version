@@ -1,0 +1,5 @@
+v1.13.0
+# This is the version of caiman-asr that
+# the benchmark scripts will pull and use
+# as a dependency.
+# Only the first line of this file is read

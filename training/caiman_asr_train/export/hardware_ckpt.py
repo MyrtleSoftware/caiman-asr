@@ -5,8 +5,10 @@ import math
 import os
 from argparse import Namespace
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import torch
+from beartype import beartype
 from beartype.typing import Optional, Tuple
 
 from caiman_asr_train.args.decoder import add_ngram_args
@@ -33,14 +35,6 @@ def parse_arguments() -> Namespace:
         help="config file",
     )
     parser.add_argument(
-        "--melalpha",
-        type=float,
-        default=0.0,
-        help="DEPRECATED: streaming normalization time constant. Streaming normalization "
-        "is no longer used in the asr-server so this value should always be 0.0 (meaning "
-        "the mel stats are always used as-is for normalization without a time-decay).",
-    )
-    parser.add_argument(
         "--output_ckpt",
         type=str,
         default="/results/hardware_ckpt.pt",
@@ -49,7 +43,6 @@ def parse_arguments() -> Namespace:
     add_ngram_args(parser)
     args = parser.parse_args()
 
-    assert args.melalpha == 0.0, "melalpha is deprecated and should be 0.0."
     return args
 
 
@@ -64,9 +57,10 @@ def load_stats_from_disk(fpath_means, fpath_vars):
     )
 
 
+@beartype
 def load_mel_stats(
-    args: Namespace, train_cfg: dict, ckpt: dict
-) -> Tuple[torch.Tensor, torch.Tensor, float]:
+    args: Namespace | MagicMock, train_cfg: dict, ckpt: dict
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Load mel stats.
     """
@@ -86,7 +80,7 @@ def load_mel_stats(
     melmeans, melvars = load_stats_from_disk(
         stats_dir / "melmeans.pt", stats_dir / "melvars.pt"
     )
-    return melmeans, melvars, args.melalpha
+    return melmeans, melvars
 
 
 def read_sentencepiece_model(fname):
@@ -141,7 +135,7 @@ def inference_only_config(config_fp: str) -> dict:
 def create_hardware_ckpt(args) -> dict:
     traincp = load_checkpoint(args.ckpt)
     train_cfg = config.load(args.config)
-    melmeans, melvars, melalpha = load_mel_stats(args, train_cfg, traincp)
+    melmeans, melvars = load_mel_stats(args, train_cfg, traincp)
 
     spm_fn = train_cfg["tokenizer"]["sentpiece_model"]
     assert spm_fn, "Sentencepiece model file not found in config."
@@ -160,13 +154,13 @@ def create_hardware_ckpt(args) -> dict:
         "best_wer": traincp["best_wer"],
         "melmeans": melmeans,
         "melvars": melvars,
-        "melalpha": melalpha,
+        "melalpha": 0.0,
         "sentpiece_model": spmb,  # store the bytes object in the hardware checkpoint
         "ngram": {
             "binary": ngram_lm,  # optional binary KenLM ngram
             "scale_factor": ngram_sf,
         },
-        "version": "1.13.0",  # add the semantic version number of the hardware checkpoint
+        "version": "1.14.0",  # add the semantic version number of the hardware checkpoint
         "rnnt_config": inference_config,  # copy in inference config
     }
 
@@ -174,11 +168,11 @@ def create_hardware_ckpt(args) -> dict:
 
 
 def save_hardware_ckpt(hardcp, output_ckpt):
-    torch.save(hardcp, output_ckpt)
+    torch.save(hardcp, output_ckpt, pickle_protocol=5)
 
 
-def main():
-    args = parse_arguments()
+@beartype
+def main(args: Namespace) -> None:
     hardcp = create_hardware_ckpt(args)
     schemas = return_schemas()
     check_model_schema(hardcp["state_dict"], schemas)
@@ -186,4 +180,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main(parse_arguments())

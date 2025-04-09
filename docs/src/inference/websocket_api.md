@@ -35,7 +35,7 @@ Parameters are query-encoded in the request URL.
 ### Content Type
 
 | Parameter      | Required | Default |
-|:---------------|:---------|:--------|
+| :------------- | :------- | :------ |
 | `content_type` | Yes      | -       |
 
 Requests can specify the audio format with the `content_type` parameter. If the content type is not
@@ -57,7 +57,7 @@ content_type=audio/x-raw;format=S16LE;channels=1;rate=16000
 ### Model Identifier
 
 | Parameter | Required | Default     |
-|:----------|:---------|:------------|
+| :-------- | :------- | :---------- |
 | `model`   | No       | `"general"` |
 
 Requests can specify a transcription model identifier.
@@ -65,7 +65,7 @@ Requests can specify a transcription model identifier.
 ### Model Version
 
 | Parameter | Required | Default    |
-|:----------|:---------|:-----------|
+| :-------- | :------- | :--------- |
 | `version` | No       | `"latest"` |
 
 Requests can specify the transcription model version. Can be `"latest"` or a specific version id.
@@ -73,7 +73,7 @@ Requests can specify the transcription model version. Can be `"latest"` or a spe
 ### Model Language
 
 | Parameter | Required | Default |
-|:----------|:---------|:--------|
+| :-------- | :------- | :------ |
 | `lang`    | No       | `"en"`  |
 
 The [BCP47](https://en.wikipedia.org/wiki/IETF_language_tag) language tag for the speech in the audio.
@@ -81,7 +81,7 @@ The [BCP47](https://en.wikipedia.org/wiki/IETF_language_tag) language tag for th
 ### Max Number of Alternatives
 
 | Parameter      | Required | Default |
-|:---------------|:---------|:--------|
+| :------------- | :------- | :------ |
 | `alternatives` | No       | `1`     |
 
 The maximum number of alternative transcriptions to provide.
@@ -89,7 +89,7 @@ The maximum number of alternative transcriptions to provide.
 ### Supported Models
 
 | Model id | Version | Supported Languages |
-|:---------|:--------|:--------------------|
+| :------- | :------ | :------------------ |
 | general  | v1      | en                  |
 
 ## Request Frames
@@ -167,6 +167,6 @@ An end-of-stream (EOS) message can be sent by sending a zero-length binary frame
 If an error occurs, the server will send a WebSocket Close frame, with error details in the body.
 
 | Error Code | Details                                             |
-|:-----------|:----------------------------------------------------|
+| :--------- | :-------------------------------------------------- |
 | 400        | Invalid parameters passed.                          |
 | 503        | Maximum number of simultaneous connections reached. |

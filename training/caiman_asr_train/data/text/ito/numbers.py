@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" from https://github.com/keithito/tacotron
+"""from https://github.com/keithito/tacotron
 Modified to add support for time and slight tweaks to _expand_number
 """
 
@@ -141,7 +141,62 @@ def _expand_thousand_dollars(m):
     return m.group(0)[1:] + " dollars"
 
 
-def normalize_numbers(text):
+def _pre_norm_num_expressions(text):
+    """
+    Clean up common numerical expressions before applying the normalization rules.
+    """
+    # add space between number and AM/PM
+    text = re.sub(r"(?<=\d)(AM|PM)", r" \1", text, flags=re.IGNORECASE)
+
+    # first address case 1-5 -> one to five
+    text = re.sub(r"(?<=\d)-(?=\d)", " to ", text)
+
+    # keep remaining dashes as "minus" because scrub will remove it
+    text = re.sub(r"-(\d+)", r"minus \1", text)
+
+    # keep hours and minutes separate because scrub will remove it
+    text = re.sub(r"(?<=\d):(?=\d)", " ", text)
+    return text
+
+
+def _post_norm_num_expressions(text, charset: list[str]):
+    """
+    Post-normalization cleaning of numerical expressions.
+    This is required since the lowercase_normalize function
+    will replace the hyphens with empty strings if the hyphen
+    is not in the charset.
+    """
+    # replace compound numbers hyphen
+    if "-" not in charset:
+        pattern = (
+            r"\b(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)"
+            r"-\b(one|two|three|four|five|six|seven|eight|nine)\b"
+        )
+        text = re.sub(pattern, r"\1 \2", text)
+
+        # replace hyphen in cardinals
+        card_pattern = (
+            r"\b(one|two|three|four|five|six|seven|eight|nine|ten|"
+            r"eleven|twelve|thirteen|fourteen|fifteen|sixteen|"
+            r"seventeen|eighteen|nineteen|twenty|"
+            r"thirty|forty|fifty|sixty|seventy|eighty|ninety)"
+            r"(?:-(one|two|three|four|five|six|seven|eight|nine))?"
+            r"(?:-(half|third|fourth|quarter|fifth|sixth|seventh|"
+            r"eighth|ninth|tenth|eleventh|twelfth|thirds|fourths|"
+            r"quarters|fifths|sixths|sevenths|eighths|ninths|tenths|"
+            r"elevenths|twelfths))?\b"
+        )
+        text = re.sub(
+            card_pattern,
+            lambda m: f"{m.group(1)} {m.group(2) or ''} {m.group(3) or ''}".strip(),
+            text,
+        )
+
+    return text
+
+
+def normalize_numbers(text, charset: list[str]):
+    text = _pre_norm_num_expressions(text)
     text = re.sub(_million_dollars_re, _expand_million_dollars, text)
     text = re.sub(_billion_dollars_re, _expand_billion_dollars, text)
     text = re.sub(_trillion_dollars_re, _expand_trillion_dollars, text)
@@ -153,4 +208,5 @@ def normalize_numbers(text):
     text = re.sub(_ordinal_re, _expand_ordinal, text)
     text = re.sub(_number_re, _expand_number, text)
     text = re.sub(_time_re, _expand_time, text)
+    text = _post_norm_num_expressions(text, charset=charset)
     return text

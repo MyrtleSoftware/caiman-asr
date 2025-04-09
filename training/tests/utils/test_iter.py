@@ -1,4 +1,4 @@
-from caiman_asr_train.utils.iter import flat, repeat_like
+from caiman_asr_train.utils.iter import flat, lmap, lstarmap, lstarmap_zip, repeat_like
 
 
 def test_flat():
@@ -9,3 +9,16 @@ def test_flat():
 
 def test_repeat_like():
     assert repeat_like([1, 2], _as=[[1, 2], [3, 4]]) == [1, 1, 2, 2]
+
+
+def test_lmap():
+    assert lmap(lambda x: x + 1, [1, 2, 3]) == [2, 3, 4]
+
+
+def test_lstar_map():
+    a = [1, 2, 3]
+    b = [4, 5, 6]
+
+    assert lstarmap(lambda x, y: x + y, zip(a, b)) == [5, 7, 9]
+
+    assert lstarmap_zip(lambda x, y: x + y, a, b) == [5, 7, 9]

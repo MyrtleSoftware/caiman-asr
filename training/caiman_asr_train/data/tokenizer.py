@@ -18,6 +18,7 @@ from beartype.typing import List
 from numpy import random
 
 from caiman_asr_train.data.unk_handling import UnkHandling, check_tokenized_transcript
+from caiman_asr_train.utils.iter import flat
 
 
 @beartype
@@ -46,15 +47,8 @@ class Tokenizer:
 
         self.num_labels = len(self.sentpiece)
 
-    def tokenize(self, transcript: str) -> List[int]:
-        """
-        Encodes the input transcript into tokens.
-        There is the option of randomly sampling from the available tokens rather
-        than using the most likely ones (default sampling probability is 0.0).
-        The sampling option is only available when the tokenizer is a
-        sentencePiece model.
-        """
-        # do sampling according to probability from uniform distribution
+    def _tokenize_word(self, transcript: str) -> List[int]:
+        # Do sampling according to probability from uniform distribution
         do_sampling = False
         if self.sampling > 0.0:
             do_sampling = random.random_sample() < self.sampling
@@ -73,6 +67,16 @@ class Tokenizer:
             check_tokenized_transcript(inds, transcript, self.unk_handling)
 
         return inds
+
+    def tokenize(self, transcript: str) -> List[int]:
+        """
+        Encodes the input transcript into tokens.
+        There is the option of randomly sampling from the available tokens rather
+        than using the most likely ones (default sampling probability is 0.0).
+        The sampling option is only available when the tokenizer is a
+        sentencePiece model.
+        """
+        return flat(self._tokenize_word(word) for word in transcript.split())
 
     def detokenize(self, inds: int | List[int]) -> str:
         if inds == 0:

@@ -1,5 +1,6 @@
 from beartype import beartype
 from beartype.typing import Callable, Dict, List, Tuple
+from more_itertools import partition
 from tqdm import tqdm
 from wtpsplit import SaT
 
@@ -142,3 +143,16 @@ def build_transcript(
                 out.append(a)
 
     return eos_count, "".join(out).strip()
+
+
+@beartype
+def add_eos_to_manifest_avoid_empty(
+    manifest: list[dict], eos_token: str, use_cuda: bool
+) -> list[dict]:
+    # wtpsplit will crash on empty transcripts,
+    # so just pass those through the script
+    has_transcript, only_has_whitespace = partition(
+        lambda utt: utt["transcript"].strip() == "", manifest
+    )
+    has_transcript_eos = add_eos_to_manifest(list(has_transcript), eos_token, use_cuda)
+    return has_transcript_eos + list(only_has_whitespace)

@@ -32,6 +32,7 @@
     - [Changing the character set](training/changing_the_character_set.md)
     - [Delay penalty](training/delay_penalty.md)
     - [Endpointing](training/endpointing.md)
+    - [Checkpoint averaging](training/checkpoint_averaging.md)
   - [Validation](training/validation.md)
     - [WER calculation](training/wer_calculation.md)
     - [State resets](training/state_resets.md)
@@ -41,6 +42,8 @@
     - [Saving predictions](training/saving_predictions.md)
     - [User-perceived latency](inference/user_perceived_latency.md)
     - [Emission latency](training/emission_latency.md)
+    - [Timestamps](training/timestamps.md)
+    - [Keyword boosting](training/keyword_boosting.md)
   - [Export inference checkpoint](training/export_inference_checkpoint.md)
 
 - [Inference flow](./inference/inference_flow.md)
@@ -54,5 +57,8 @@
     - [Live audio demonstration](./inference/live_audio_demonstration.md)
     - [Hardware requirements](./inference/hardware_requirements.md)
   - [CAIMAN-ASR demo](./inference/caiman-asr_demo.md)
+  - [CAIMAN-ASR benchmark](./inference/caiman-asr_benchmark.md)
+    - [Benchmark Installation](./inference/benchmark_installation.md)
+    - [Benchmarking custom datasets](./inference/benchmarking_custom_datasets.md)
 
 - [Versions](./versions.md)

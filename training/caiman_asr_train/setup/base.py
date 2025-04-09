@@ -142,9 +142,7 @@ class Setup(ABC):
         batch_sizes = self.get_batch_sizes(args)
         return multi_gpu, world_size, np_rng, cfg, batch_sizes
 
-    def build_all_tokenizers(
-        self, args: Namespace, cfg: dict
-    ) -> Tuple[
+    def build_all_tokenizers(self, args: Namespace, cfg: dict) -> Tuple[
         Dict[PipelineType, Tokenizer],
         int,
         Optional[int],
@@ -306,6 +304,7 @@ class Setup(ABC):
                 "eos_is_terminal": args.eos_is_terminal,
                 "eos_vad_threshold": args.eos_vad_threshold,
                 "final_emission_thresh": args.beam_final_emission_thresh,
+                "keyword_boost_path": args.keyword_boost_path,
                 "frame_width": width,
             }
 
@@ -367,7 +366,7 @@ class Setup(ABC):
         cfg: dict,
         tokenizers: Dict[PipelineType, Tokenizer],
         batch_sizes: Dict[PipelineType, int],
-        samplers: Dict[PipelineType, Optional[dali_sampler.SimpleSampler]],
+        samplers: Dict[PipelineType, Optional[dali_sampler.Sampler]],
         world_size: int,
     ) -> DataObject:
         print_once("Setting up datasets...")
@@ -457,7 +456,7 @@ class Setup(ABC):
         world_size: int,
         batch_sizes: Dict[PipelineType, int],
         resume_step: Dict[PipelineType, int],
-    ) -> Dict[PipelineType, Optional[dali_sampler.SimpleSampler]]:
+    ) -> Dict[PipelineType, Optional[dali_sampler.Sampler]]:
         pass
 
     @abstractmethod

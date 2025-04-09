@@ -47,7 +47,7 @@ We additionally apply the following transformations:
 
 1. Remove diacritics ("café" becomes "cafe")
 2. Lowercase the text
-3. Expand digits and symbols into words ("$1.02" becomes "one dollar two cents", "cats & dogs" becomes "cats and dogs")
+3. Expand digits and symbols into words ("\$1.02" becomes "one dollar two cents", "cats & dogs" becomes "cats and dogs")
 4. Expand common abbreviations ("Dr. Smith" becomes "doctor smith")
 
 For example:

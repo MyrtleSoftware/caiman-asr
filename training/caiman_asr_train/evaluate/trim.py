@@ -5,6 +5,10 @@ import torch
 from beartype import beartype
 from beartype.typing import List, Optional, Tuple
 
+from caiman_asr_train.evaluate.state_resets.timestamp import (
+    Timestamp,
+    user_perceived_time,
+)
 from caiman_asr_train.latency.timestamp import EOS, Never, Silence, Termination
 
 
@@ -23,14 +27,19 @@ class EOSTrimConfig:
 @beartype
 def trim_predictions(
     pred: List[List[int]],
-    timestamps: List[List[int]],
+    timestamps: List[List[Timestamp]],
     probs: List[List[float]],
     pre_enc_width: float,
     post_enc_width: float,
     feat_lens: torch.Tensor,
     eos_vad_threshold: float,
     eos_info: Optional[EOSTrimConfig] = None,
-) -> Tuple[List[List[int]], List[List[int]], List[List[float]], List[Termination],]:
+) -> Tuple[
+    List[List[int]],
+    List[List[Timestamp]],
+    List[List[float]],
+    List[Termination],
+]:
     """
     Trim predictions to remove tokens after n-consecutive blanks.
 
@@ -77,7 +86,7 @@ def trim_predictions(
         # just as in the streaming case
 
         if eos_vad_threshold != float("inf"):
-            last_tok = (t[-1] + 1) * post_enc_width
+            last_tok = (user_perceived_time(t[-1]) + 1) * post_enc_width
             sil_frames = round(eos_vad_threshold / post_enc_width)
 
             # Look for n-consecutive blanks at end.
@@ -89,6 +98,9 @@ def trim_predictions(
             # as the speaker shouldn't be cut off before they say anything
 
             for idx, t_prev, t_idx in zip(count(1), t[:-1], t[1:]):
+                t_prev = user_perceived_time(t_prev)
+                t_idx = user_perceived_time(t_idx)
+
                 if t_idx - t_prev > sil_frames:
                     frames = t_prev + 1 + sil_frames
 
@@ -123,7 +135,7 @@ def trim_predictions(
 
             if idx is not None:
                 # Plus one because zero indexed.
-                term = EOS((t[idx] + 1) * post_enc_width)
+                term = EOS((user_perceived_time(t[idx]) + 1) * post_enc_width)
 
                 assert y[idx] == eos_info.eos_idx
 

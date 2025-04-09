@@ -20,6 +20,7 @@ from pathlib import Path
 
 import torch
 import torch.distributed as dist
+from beartype import beartype
 
 from caiman_asr_train.args.shared import check_shared_args
 from caiman_asr_train.args.train import train_arg_parser, verify_train_args
@@ -63,9 +64,28 @@ def apply_ema(model, ema_model, decay):
         v.copy_(decay * v + (1 - decay) * sd[k])
 
 
-def main(args, train_objects):
-    verify_train_args(args)
+@beartype
+def open_logs(args) -> tuple:
+    id = dist.get_rank() if dist.is_initialized() else 0
+
+    files = [
+        f"log_utt_lens_{id}_{args.timestamp}.txt",
+        f"log_utt_file_{id}_{args.timestamp}.txt",
+    ]
+
+    files = map(Path, files)
+
+    files = map(lambda p: args.output_dir / p, files)
+
+    return tuple(map(lambda p: p.open("w"), files))
+
+
+def main(args):
+    args = verify_train_args(args)
     check_shared_args(args)
+
+    train_objects = TrainSetup().run(args)
+    time_print_once("Done with training setup")
 
     world_size = train_objects.world_size
 
@@ -80,20 +100,6 @@ def main(args, train_objects):
     assert args.grad_accumulation_batches >= 1
 
     out_dir = Path(args.output_dir)
-    # fail if output dir already contains checkpoints
-    if not args.resume and out_dir.exists() and any(out_dir.glob("*checkpoint*.pt")):
-        error_msg = (
-            f"{out_dir=} already contains checkpoints which would be overwritten by this "
-            "command. Running training using the same output_dir as a previous command "
-            "is only permitted when args.resume=True."
-        )
-        if args.fine_tune:
-            error_msg += (
-                " In the args.fine_tune=True case it is recommended to pass args.ckpt "
-                "of the form /checkpoints/<ckpt_path> instead of /results/<ckpt_path> in "
-                "order to avoid this error."
-            )
-        raise ValueError(error_msg)
 
     if world_size == 1 or dist.get_rank() == 0:
         # save configuration to file
@@ -167,6 +173,10 @@ def main(args, train_objects):
 
     dp_scheduler = train_objects.training_only.dp_scheduler
     star_scheduler = train_objects.training_only.star_scheduler
+    wer_is_bad = False
+
+    if args.log_verbose_utterance_statistics:
+        log_lens, log_utts = open_logs(args)
 
     # training loop
     while step <= args.training_steps:
@@ -216,10 +226,13 @@ def main(args, train_objects):
                 dp_scheduler.step(step, hints={"wer": best_wer})
                 star_scheduler.step(step, hints={"wer": best_wer})
 
-            audio, audio_lens, txt, txt_lens, _, _ = batch
-
+            audio, audio_lens, txt, txt_lens, _, utt_files = batch
             # audio is (batch, meldim, max_len)
             # audio_lens is (batch,)
+
+            if args.log_verbose_utterance_statistics:
+                log_lens.write(f"{audio_lens.cpu().tolist()}\n")
+                log_utts.write(f"{utt_files}\n")
 
             # if these tensors were computed on cpu then move them to gpu
             if args.dali_train_device == "cpu":
@@ -261,7 +274,7 @@ def main(args, train_objects):
             if not loss_nan:
                 losses.append(loss_item)
                 step_utts += batch[0].size(0) * world_size
-                step_frames += (feats.size(0) * feats.size(1)) * world_size
+                step_frames += feat_lens.sum()
                 epoch_utts += batch[0].size(0) * world_size
                 accumulated_batches += 1
             else:
@@ -338,6 +351,9 @@ def main(args, train_objects):
                     no_pad_mean = no_pad_tensor.mean()
                     no_pad_std = no_pad_tensor.std()
 
+                    if dist.is_initialized():
+                        dist.all_reduce(step_frames)
+
                     step_time = time.time() - step_start_time
                     step_start_time = time.time()
                     # dllogger.log expects a tuple of:
@@ -361,7 +377,7 @@ def main(args, train_objects):
                             **wer,  # optional entry
                             "noise/gradient": noise_level,
                             "throughput-audio-samples-per-sec": step_utts / step_time,
-                            "throughput-audio-secs-per-sec": step_frames
+                            "throughput-audio-secs-per-sec": step_frames.item()
                             * frame_width
                             / step_time,
                             "took": step_time,
@@ -409,6 +425,9 @@ def main(args, train_objects):
                         error_rate=train_objects.error_rate,
                     )[abbrev]
 
+                    if args.die_if_wer_bad and wer > 0.99 and step >= 10000:
+                        wer_is_bad = True
+
                     if wer < best_wer:
                         best_wer = wer
                         checkpointer.save(
@@ -421,6 +440,7 @@ def main(args, train_objects):
                             tokenizer_kw,
                             mel_feat_norm.dataset_to_utt_ratio,
                             is_best=True,
+                            config_path=args.model_config,
                         )
 
                 # saving checkpoint
@@ -429,6 +449,9 @@ def main(args, train_objects):
                 )
                 save_this_step = save_this_step or (
                     step == args.training_steps and not args.dont_save_at_the_end
+                )
+                save_this_step = save_this_step or (
+                    wer_is_bad and not args.dont_save_at_the_end
                 )
                 if save_this_step:
                     checkpointer.save(
@@ -440,12 +463,27 @@ def main(args, train_objects):
                         best_wer,
                         tokenizer_kw,
                         mel_feat_norm.dataset_to_utt_ratio,
+                        config_path=args.model_config,
                     )
 
                 # end of step
                 step += 1
                 if step > args.training_steps:
+                    checkpointer.save(
+                        model,
+                        ema_model,
+                        optimizer,
+                        epoch,
+                        step - 1,
+                        best_wer,
+                        tokenizer_kw,
+                        mel_feat_norm.dataset_to_utt_ratio,
+                        is_last=True,
+                        config_path=args.model_config,
+                    )
                     break
+                if wer_is_bad:
+                    raise ValueError("WER is mysteriously bad")
                 accumulated_batches = 0
 
             before_dataloading = time.time()
@@ -470,6 +508,10 @@ def main(args, train_objects):
             args.timestamp,
         )
 
+    if args.log_verbose_utterance_statistics:
+        log_lens.close()
+        log_utts.close()
+
     flush_log()
 
 
@@ -482,7 +524,5 @@ if __name__ == "__main__":
         "/workspace/training/caiman_asr_train/train.py",
     )
     profilers = set_up_profiling(args.profiler, args.output_dir, args.timestamp)
-    train_objects = TrainSetup().run(args)
-    time_print_once("Done with training setup")
-    main(args, train_objects)
+    main(args)
     finish_profiling(args.profiler, args.output_dir, profilers, args.timestamp)

@@ -114,6 +114,18 @@ def add_shared_args(parser: ArgumentParser) -> None:
         help="Export timestamps per word to .ctm file and calculate emission latencies",
     )
     parser.add_argument(
+        "--latency_head_offset",
+        default=0.0,
+        type=float,
+        help="Estimate of the start-of-word timestamp latency",
+    )
+    parser.add_argument(
+        "--latency_tail_offset",
+        default=0.0,
+        type=float,
+        help="Estimate of the end-of-word timestamp latency",
+    )
+    parser.add_argument(
         "--allow_partial_checkpoint",
         action="store_true",
         default=False,
@@ -211,6 +223,9 @@ def check_shared_args(args: Namespace) -> None:
         raise ValueError(
             "Cannot calculate emission latency for beam search if --beam_no_partials is set"
         )
+
+    if args.keyword_boost_path is not None:
+        assert args.decoder == "beam", "Only the beam decoder supports keyword boosting"
 
     check_mel_feat_norm_args(args)
 

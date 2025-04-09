@@ -104,6 +104,18 @@ def add_decoder_args(parser: ArgumentParser) -> None:
     )
 
     add_ngram_args(parser)
+    add_keyword_args(parser)
+
+
+@beartype
+def add_keyword_args(parser: ArgumentParser) -> None:
+    kw = parser.add_argument_group("keyword boosting setup")
+    kw.add_argument(
+        "--keyword_boost_path",
+        default=None,
+        type=str,
+        help="Path to keywords for boosting (.json)",
+    )
 
 
 @beartype

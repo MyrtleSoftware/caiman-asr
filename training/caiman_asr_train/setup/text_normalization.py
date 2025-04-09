@@ -43,6 +43,7 @@ class NormalizeConfig:
     replacements: list[Replacement]
     remove_tags: bool
     user_symbols: list[str]
+    standardize_text: bool
 
 
 IDENTITY_NORMALIZE_CONFIG = NormalizeConfig(
@@ -50,6 +51,7 @@ IDENTITY_NORMALIZE_CONFIG = NormalizeConfig(
     replacements=[],
     remove_tags=False,
     user_symbols=[],
+    standardize_text=False,
 )
 
 
@@ -69,6 +71,7 @@ def normalize_config_from_config_data(
         config_data.get("replacements"),
         config_data.get("remove_tags", True),
         user_symbols,
+        config_data.get("standardize_text"),
     )
 
 
@@ -78,6 +81,7 @@ def get_normalize_config(
     replacements_config: list[dict[str, str]] | None,
     remove_tags: bool,
     user_symbols: list[str],
+    standardize_text: bool,
 ) -> NormalizeConfig:
     replacements = (
         []
@@ -90,4 +94,5 @@ def get_normalize_config(
         replacements=replacements,
         remove_tags=remove_tags,
         user_symbols=user_symbols,
+        standardize_text=standardize_text,
     )

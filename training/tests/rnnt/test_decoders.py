@@ -64,6 +64,7 @@ def args():
         eos_vad_threshold=float("inf"),
         beam_final_emission_thresh=float("inf"),
         eos_decoding="none",
+        keyword_boost_path=None,
     )
 
 

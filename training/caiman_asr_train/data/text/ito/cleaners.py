@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-""" from https://github.com/keithito/tacotron
+"""from https://github.com/keithito/tacotron
 Modified to add punctuation removal
 
 Cleaners are transformations that run over the input text at both training and eval time.
@@ -70,10 +70,6 @@ def expand_abbreviations(text):
     return text
 
 
-def expand_numbers(text):
-    return normalize_numbers(text)
-
-
 def lowercase(text):
     return text.lower()
 
@@ -91,14 +87,15 @@ def expand_punctuation(text):
     text = re.sub(r"\+", " plus ", text)
     text = re.sub(r"%", " percent ", text)
     text = re.sub(r"@", " at ", text)
+    text = re.sub(r":", " ", text)
     return text
 
 
-def english_cleaners(text, table=None):
+def english_cleaners(text, charset, table=None):
     """Pipeline for English text, including number and abbreviation expansion."""
     text = convert_to_ascii(text)
     text = lowercase(text)
-    text = expand_numbers(text)
+    text = normalize_numbers(text, charset)
     text = expand_abbreviations(text)
     if table is not None:
         text = text.translate(table)

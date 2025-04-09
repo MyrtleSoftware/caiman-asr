@@ -1,8 +1,7 @@
-import math
-
 import numpy as np
 import pytest
 
+from caiman_asr_train.data.dali.manifest_ratios import AbsoluteManifestRatios
 from caiman_asr_train.data.dali.sampler import BucketingSampler, SimpleSampler
 from caiman_asr_train.data.dali.utils import _parse_json
 
@@ -10,45 +9,50 @@ from caiman_asr_train.data.dali.utils import _parse_json
 def test_simple_sampler(test_data_dir):
     json_files = str(test_data_dir / "peoples-speech-short.json")
     output_files, _ = _parse_json(json_files)
-    sampler = SimpleSampler(1)
-    sampler.make_file_list(output_files, json_names=[json_files])
-    assert not sampler.is_sampler_random()
-    assert sampler.get_dataset_size() == 2
-
-
-@pytest.mark.parametrize("gbs", [(1), (2), (4)])
-def test_process_output_files(gbs):
-    num_buckets = 2
-    batch_size = 1
-    num_workers = 1
-    training_steps = 8
-    rng = np.random.default_rng(seed=0)
-    resume_step = 0
-    sampler = BucketingSampler(
-        num_buckets, batch_size, num_workers, training_steps, gbs, rng, resume_step
+    output_files = [output_files]
+    sampler = SimpleSampler(
+        total_batches=None, batch_size=1, global_batch_size=1, world_size=1
     )
-    output_files = {
-        "f1": {"duration": 1, "label": "l1"},
-        "f2": {"duration": 100, "label": "l2"},
-        "f3": {"duration": 2, "label": "l3"},
-        "f4": {"duration": 10, "label": "l4"},
-        "f5": {"duration": 3, "label": "l5"},
-    }
-    shuffled_list = sampler.process_output_files(output_files)
-    num_epochs = math.ceil(gbs * training_steps / len(output_files))
-    assert len(shuffled_list) == len(output_files) * num_epochs
-    # split per epoch
-    l1 = shuffled_list[: len(output_files)]
-    l2 = shuffled_list[len(output_files) : 2 * len(output_files)]
+    sampler.make_file_list(output_files, json_names=[json_files], manifest_ratios=None)
+    assert not sampler.is_sampler_random()
+    assert sampler.dataset_size == 2
 
-    # assert lists have same elements in each epoch
-    assert set(l1) == set(l2)
+
+@pytest.mark.parametrize("batch_size", [(1), (2), (4)])
+def test_process_output_files(batch_size):
+    training_steps = 8
+
+    sampler = BucketingSampler(
+        total_batches=training_steps * batch_size,
+        batch_size=batch_size,
+        global_batch_size=batch_size,
+        world_size=1,
+        resume_step=0,
+        rng=np.random.default_rng(seed=0),
+        num_buckets=2,
+    )
+
+    output_files = {
+        "f1": {"duration": 1.0, "label": 1},
+        "f2": {"duration": 100.0, "label": 2},
+        "f3": {"duration": 2.0, "label": 3},
+        "f4": {"duration": 10.0, "label": 4},
+        "f5": {"duration": 3.0, "label": 5},
+    }
+
+    s_epochs = sampler._build_epochs(
+        [output_files], ["test"], AbsoluteManifestRatios([1.0])
+    )
+
+    o_epochs = [sampler._order_epoch(epoch) for epoch in s_epochs]
+
+    for a, b in zip(s_epochs, o_epochs):
+        assert set(map(lambda x: x.label, a)) == set(map(lambda x: x.label, b))
 
 
 @pytest.mark.parametrize("training_steps, gbs", [(8, 1), (8, 2), (8, 4)])
 def test_bucketing_sampler(test_data_dir, training_steps, gbs):
     num_buckets = 2
-    batch_size = 1
     num_workers = 1
     resume_step = 0
     #
@@ -57,16 +61,32 @@ def test_bucketing_sampler(test_data_dir, training_steps, gbs):
     #
     rng = np.random.default_rng(seed=0)
     sampler = BucketingSampler(
-        num_buckets, batch_size, num_workers, training_steps, gbs, rng, resume_step
+        total_batches=training_steps,
+        batch_size=gbs,
+        global_batch_size=gbs * num_workers,
+        world_size=num_workers,
+        resume_step=resume_step,
+        rng=rng,
+        num_buckets=num_buckets,
     )
-    returned_list = sampler.process_output_files(output_files)
+    returned_list, _ = sampler.process_output_files(
+        [output_files], ["test"], AbsoluteManifestRatios([1.0])
+    )
     assert sampler.is_sampler_random()
     assert len(returned_list) == training_steps * gbs
     #
     sampler = BucketingSampler(
-        num_buckets, batch_size, num_workers, training_steps, gbs, rng, resume_step
+        total_batches=training_steps,
+        batch_size=gbs,
+        global_batch_size=gbs * num_workers,
+        world_size=num_workers,
+        resume_step=resume_step,
+        rng=rng,
+        num_buckets=num_buckets,
     )
-    new_returned_list = sampler.process_output_files(output_files)
+    new_returned_list, _ = sampler.process_output_files(
+        [output_files], ["test"], AbsoluteManifestRatios([1.0])
+    )
     assert new_returned_list != returned_list
 
 
@@ -86,17 +106,27 @@ def test_bucketing_sampler_resume(
     test_data_dir, resume_step, exp_length, training_steps, gbs
 ):
     num_buckets = 2
-    batch_size = 1
     num_workers = 1
     #
     json_files = str(test_data_dir / "test_long_file.json")
     output_files, _ = _parse_json(json_files)
     #
     rng = np.random.default_rng(seed=0)
+
     sampler = BucketingSampler(
-        num_buckets, batch_size, num_workers, training_steps, gbs, rng, resume_step
+        total_batches=training_steps,
+        batch_size=gbs,
+        global_batch_size=gbs * num_workers,
+        world_size=num_workers,
+        resume_step=resume_step,
+        rng=rng,
+        num_buckets=num_buckets,
     )
-    returned_list = sampler.process_output_files(output_files)
+
+    returned_list, _ = sampler.process_output_files(
+        [output_files], ["test"], AbsoluteManifestRatios([1.0])
+    )
+
     assert len(returned_list) == exp_length
 
 
@@ -116,21 +146,42 @@ def test_resume_files_list(
     resume_step2,
 ):
     num_buckets = 2
-    batch_size = 1
+
     num_workers = 1
     json_files = str(test_data_dir / "test_long_file.json")
     output_files, _ = _parse_json(json_files)
+
     #
     rng = np.random.default_rng(seed=0)
     sampler1 = BucketingSampler(
-        num_buckets, batch_size, num_workers, training_steps, gbs, rng, resume_step1
+        total_batches=training_steps,
+        batch_size=gbs,
+        global_batch_size=gbs * num_workers,
+        world_size=num_workers,
+        resume_step=resume_step1,
+        rng=rng,
+        num_buckets=num_buckets,
     )
-    returned_list1 = sampler1.process_output_files(output_files)
+    returned_list1, _ = sampler1.process_output_files(
+        [output_files], ["test"], AbsoluteManifestRatios([1.0])
+    )
     #
+
     rng = np.random.default_rng(seed=0)
+
     sampler2 = BucketingSampler(
-        num_buckets, batch_size, num_workers, training_steps, gbs, rng, resume_step2
+        total_batches=training_steps,
+        batch_size=gbs,
+        global_batch_size=gbs * num_workers,
+        world_size=num_workers,
+        resume_step=resume_step2,
+        rng=rng,
+        num_buckets=num_buckets,
     )
-    returned_list2 = sampler2.process_output_files(output_files)
+
+    returned_list2, _ = sampler2.process_output_files(
+        [output_files], ["test"], AbsoluteManifestRatios([1.0])
+    )
+
     assert len(returned_list1[resume_step2 * gbs :]) == len(returned_list2)
     assert returned_list1[resume_step2 * gbs :] == returned_list2

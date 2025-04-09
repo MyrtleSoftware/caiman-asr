@@ -10,6 +10,10 @@ from caiman_asr_train.args.hugging_face import HuggingFaceArgs, build_hugging_fa
 from caiman_asr_train.args.noise_augmentation import NoiseAugmentationArgs
 from caiman_asr_train.data.dali import sampler as dali_sampler
 from caiman_asr_train.data.dali.data_loader import DaliDataLoader
+from caiman_asr_train.data.dali.manifest_ratios import (
+    ManifestRatios,
+    build_manifest_ratios,
+)
 from caiman_asr_train.data.dali.mel_normalization import MelFeatNormalizer
 from caiman_asr_train.data.decide_on_loader import DataSource, decide_on_loader
 from caiman_asr_train.data.tokenizer import Tokenizer
@@ -27,7 +31,8 @@ class DataLoaderArgs:
     """
 
     grad_accumulation_batches: int
-    json_names: List[str]
+    json_names: Optional[List[str]]
+    manifest_ratios: ManifestRatios
     num_buckets: Optional[int]
     prob_narrowband: float
     noise_augmentation_args: NoiseAugmentationArgs
@@ -46,6 +51,13 @@ class DataLoaderArgs:
         if pipeline_type == "train":
             grad_accumulation_batches = args.grad_accumulation_batches
             json_names = args.train_manifests
+
+            manifest_ratios = build_manifest_ratios(
+                train_manifest_ratios=args.train_manifest_ratios,
+                relative_train_manifest_ratios=args.relative_train_manifest_ratios,
+                canary_manifest_exponent=args.canary_exponent,
+            )
+
             tar_files = args.train_tar_files
             num_buckets = args.num_buckets
             prob_narrowband = args.prob_train_narrowband
@@ -63,6 +75,7 @@ class DataLoaderArgs:
         else:
             grad_accumulation_batches = 1
             json_names = args.val_manifests
+            manifest_ratios = None
             tar_files = args.val_tar_files
             num_buckets = 1
             prob_narrowband = args.prob_val_narrowband
@@ -87,6 +100,7 @@ class DataLoaderArgs:
             noise_augmentation_args=noise_augmentation_args,
             grad_accumulation_batches=grad_accumulation_batches,
             json_names=json_names,
+            manifest_ratios=manifest_ratios,
             num_buckets=num_buckets,
             tar_files=tar_files,
             prob_narrowband=prob_narrowband,
@@ -103,7 +117,7 @@ def build_dali_loader(
     dali_yaml_config: DaliYAMLConfig,
     tokenizer: Tokenizer,
     world_size: int,
-    train_sampler: Optional[dali_sampler.SimpleSampler] = None,
+    train_sampler: Optional[dali_sampler.Sampler] = None,
     cpu: bool = False,
     no_logging: bool = False,
     mel_feat_normalizer: Optional[MelFeatNormalizer] = None,
@@ -133,10 +147,22 @@ def build_dali_loader(
 
     if data_source is not DataSource.JSON:
         sampler = None
-    elif pipeline_type == "val" or train_sampler is None:
+    elif pipeline_type == "val":
+        # setup/train.py and setup/val.py set the validation sampler to None,
+        # and it's created here
+        sampler = dali_sampler.SortedSampler(
+            world_size=world_size,
+            total_batches=None,
+            batch_size=batch_size,
+            global_batch_size=None,
+        )
+    elif train_sampler is None:
+        # Note: This branch is probably dead code only used by the tests
         sampler = dali_sampler.SimpleSampler(
             world_size=world_size,
-            sort_by_duration=True,
+            total_batches=None,
+            batch_size=batch_size,
+            global_batch_size=args.global_batch_size,
         )
     else:
         sampler = train_sampler
@@ -148,6 +174,7 @@ def build_dali_loader(
         dataset_path=args.dataset_dir,
         dali_yaml_config=dali_yaml_config,
         json_names=dataload_args.json_names,
+        manifest_ratios=dataload_args.manifest_ratios,
         batch_size=batch_size,
         sampler=sampler,
         grad_accumulation_batches=dataload_args.grad_accumulation_batches,

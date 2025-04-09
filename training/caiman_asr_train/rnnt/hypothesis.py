@@ -18,13 +18,15 @@
 
 # Being an amalgamation of MLCommons MLPerf and NVIDIA Nemo code,
 
-from dataclasses import dataclass
+import copy
+from dataclasses import dataclass, field
 
 import kenlm
 import torch
 from beartype import beartype
 from beartype.typing import Tuple
 
+from caiman_asr_train.keywords.trie import Keywords
 from caiman_asr_train.lm.kenlm_ngram import KenLmModel
 
 SPU_UNICODE = 0x2581  # sentencepiece underscore (space repr) unicode code point
@@ -70,6 +72,7 @@ class Hypothesis:
     pred_state: Tuple[torch.Tensor, torch.Tensor] | None
     ngram_lm_state: kenlm.State | None = None
     is_terminal: bool = False
+    kws_state: Keywords.State = field(default_factory=Keywords.init)
 
     _prev_length: int = 0
 
@@ -153,6 +156,7 @@ class Hypothesis:
             pred_state=self.pred_state,
             ngram_lm_state=self.ngram_lm_state,
             is_terminal=self.is_terminal,
+            kws_state=copy.deepcopy(self.kws_state),
             _prev_length=self._prev_length,
         )
 

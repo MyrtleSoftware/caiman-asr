@@ -102,7 +102,7 @@ class BaseValSetup(Setup):
         world_size: int,
         batch_sizes: Dict[PipelineType, int],
         resume_step: Dict[PipelineType, int],
-    ) -> Dict[PipelineType, Optional[dali_sampler.SimpleSampler]]:
+    ) -> Dict[PipelineType, Optional[dali_sampler.Sampler]]:
         return {VAL: None}
 
     def pipeline_types(self) -> List[PipelineType]:

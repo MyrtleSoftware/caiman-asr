@@ -24,7 +24,7 @@ The time synchronous beam decoder utilises an optimised version of beam search -
 2. Tokens with a logprob score less than `beam_prune_topk_thresh` (default 1.5) below the most likely token are ignored.
 3. Hypotheses are depth-pruned when their most recent common ancestor is further than `beam_final_emission_thresh` seconds older than the best hypothesis. This has the effect of forcing finals at at-least this interval, which reduces tail emission latencies.
 
-Reducing `beam_prune_score_thresh`, `beam_prune_topk_thresh`, and `beam_final_emission_thresh` increases pruning aggressiveness; setting them \< 0 disables pruning.
+Reducing `beam_prune_score_thresh`, `beam_prune_topk_thresh`, and `beam_final_emission_thresh` increases pruning aggressiveness; setting them < 0 disables pruning.
 
 Adaptive beam search dynamically adjusts computation based on model confidence, using more compute when uncertain and behaving almost greedily when confident.
 
@@ -60,3 +60,7 @@ so it is disabled by default.
 ## N-gram language models
 
 N-gram language models are used with beam decoding to improve WER. This is on by default and described in more detail in the [N-gram language model documentation](ngram_lm.md).
+
+## Keyword boosting
+
+Keyword boosting is available with the beam decoder and described in more detail in the [keyword boosting documentation](keyword_boosting.md).

@@ -8,7 +8,39 @@ from text_unidecode import unidecode
 from caiman_asr_train.data.text.is_tag import actually_remove_tags
 from caiman_asr_train.data.text.ito import _clean_text, punctuation_map
 from caiman_asr_train.data.text.ito.numbers import normalize_numbers
+from caiman_asr_train.data.text.whisper_text_normalizer import EnglishTextNormalizer
 from caiman_asr_train.setup.text_normalization import NormalizeConfig, NormalizeLevel
+
+
+@beartype
+def punctuation_normalize(text: str) -> str:
+    """Normalize punctuation.
+
+    This function keeps all the punctuation marks
+    intact apart from the following:
+
+    `;` -> `,` semi-colon to comma
+    `:` -> `.` colon to period
+    `!` -> `.` exclamation mark to period
+    `-` -> ` ` hyphen to space
+
+    Parameters
+    ----------
+    text
+        string containing text to normalize
+
+    Returns
+    -------
+    text
+        string containing normalized text
+    """
+    text = text.replace('"', "")
+    text = text.replace(";", ",")
+    text = text.replace(":", ".")
+    text = text.replace("!", ".")
+    text = text.replace("-", " ")
+
+    return text
 
 
 @beartype
@@ -28,7 +60,7 @@ def lowercase_normalize(
     punct_map = punctuation_map(charset) if scrub else None
 
     try:
-        text = _clean_text(s, ["english_cleaners"], punct_map).strip()
+        text = _clean_text(s, ["english_cleaners"], charset, punct_map).strip()
     except (ValueError, inflect.NumOutOfRangeError, IndexError) as err:
         if not quiet:
             print(f"Expected {err=}, {type(err)=}")
@@ -73,12 +105,16 @@ def select_and_normalize(
             transcript_ = unidecode(transcript)
             return final_fixes(transcript_)
         case NormalizeLevel.DIGIT_TO_WORD:
-            transcript_ = normalize_numbers(unidecode(transcript))
+            transcript_ = normalize_numbers(unidecode(transcript), charset)
             return final_fixes(transcript_)
         case NormalizeLevel.LOWERCASE:
             transcript_ = lowercase_normalize(
                 transcript, quiet=False, charset=charset, scrub=False
             )
+
+            if normalize_config.standardize_text:
+                transcript_ = standardize_text(transcript_)
+
             if not transcript_:
                 warnings.warn(f"Transcript normalization for {transcript=} returned ''")
                 warnings.warn(
@@ -90,3 +126,25 @@ def select_and_normalize(
                 f"{NormalizeConfig.normalize_level=} is an unrecognized value "
                 "of NormalizeLevel"
             )
+
+
+@beartype
+def standardize_text(text: str) -> str:
+    """
+    Standardize text. This function applies the Whisper normalization rules
+    and the train-time normalizer on the text in order to minimize non-semantic
+    text differences.
+
+
+    Parameters
+    ----------
+    text
+        string containing un-standardized text
+
+    Returns
+    -------
+    standard_text
+        string containing standardized text
+    """
+    standardizer = EnglishTextNormalizer()
+    return standardizer(text)

@@ -55,7 +55,7 @@ for how to adjust these numbers for your system.
 
 ## Validation
 
-The following command will run the validation script and calculate the WER \[%\].
+The following command will run the validation script and calculate the WER [%].
 See [here](validation.md#validation) for more details.
 
 ```bash

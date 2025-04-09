@@ -33,20 +33,19 @@ def default_args(klass) -> Dict:
     return {k: v.default for k, v in sig.parameters.items() if k != "self"}
 
 
-def load(fpath, max_duration=None) -> Dict:
+@beartype
+def load(fpath) -> Dict:
     if fpath.endswith(".toml"):
         raise ValueError(".toml config format has been changed to .yaml")
+
+    if Path(fpath).stat().st_size == 0:
+        raise ValueError(f"Config file {fpath} is empty")
 
     cfg = yaml.safe_load(open(fpath, "r"))
 
     # Reload to deep copy shallow copies, which were made with yaml anchors
     yaml.Dumper.ignore_aliases = lambda *args: True
     cfg = yaml.safe_load(yaml.dump(cfg))
-
-    # Modify the config with supported cmdline flags
-    if max_duration is not None:
-        cfg["input_train"]["audio_dataset"]["max_duration"] = max_duration
-        cfg["input_train"]["filterbank_features"]["max_duration"] = max_duration
 
     return cfg
 
@@ -95,11 +94,23 @@ def input(conf_yaml, split="train"):
     for k in conf:
         raise ValueError(f"Unknown key {k}")
 
+    if split == "val":
+        assert not ("standardize_text" in conf_dataset), (
+            "YAML config has 'standardize_text' key for `input_val`. "
+            "This key is supported only for `input_train`. Use 'standardize_wer' "
+            "to control text normalization during validation."
+        )
     # Validate outer classes
     conf_dataset = validate_and_fill(
         PipelineParams,
         conf_dataset,
-        optional=["standardize_wer", "replacements", "remove_tags", "user_symbols"],
+        optional=[
+            "standardize_wer",
+            "replacements",
+            "remove_tags",
+            "user_symbols",
+            "standardize_text",
+        ],
     )
 
     conf_splicing = validate_and_fill(features.FrameSplicing, conf_splicing)

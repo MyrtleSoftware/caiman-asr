@@ -61,6 +61,7 @@ def test_save_load_model(
         best_wer,
         tokenizer_kw,
         logmel_norm_weight=logmel_norm_weight,
+        config_path="won't_be_used.txt",
     )
 
     # Load weights
@@ -98,6 +99,7 @@ def test_checkpointer_structure(
         best_wer,
         tokenizer_kw,
         logmel_norm_weight=logmel_norm_weight,
+        config_path="won't_be_used.txt",
     )
 
     # Load checkpoint
@@ -147,7 +149,7 @@ def test_tracked(
     #
     model, _ = mini_model_factory(seed=1)
     optimizer = optimizer_factory(model)
-    cp.save(model, None, optimizer, 5, 5000, 10, {}, 1, False)
+    cp.save(model, None, optimizer, 5, 5000, 10, {}, 1.0, "won't_be_used.txt")
     assert len(cp.tracked) == 3
     os.remove(tmp_3000)
     os.remove(tmp_4000)

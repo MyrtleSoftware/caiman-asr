@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import numpy as np
 import torch
 from beartype.typing import Tuple
 
@@ -9,13 +8,17 @@ from caiman_asr_train.data.tokenizer import Tokenizer
 from caiman_asr_train.setup.text_normalization import NormalizeConfig
 
 
-class TokenCache:
-    """When using json manifests, this class tokenizes the
-    transcripts at the start of training for speed. DALI outputs indices,
-    and this class looks them up in the cache to get transcripts.
+class NormalizeCache:
+    """
+    When using json manifests, this class normalizes the
+    transcripts at the start of training for speed.
 
     When using Webdataset files/Hugging Face, DALI outputs transcripts.
-    This class decodes them."""
+    This class decodes them.
+
+    Args:
+        transcripts: in form of `{0: 'trans_1', ...}`
+    """
 
     def __init__(
         self,
@@ -23,30 +26,23 @@ class TokenCache:
         tokenizer: Tokenizer,
         device_type: str,
         data_source: DataSource,
+        transcripts: dict,
     ):
-        self.normalize_config = normalize_config
         self.tokenizer = tokenizer
         self.device_type = device_type
         self.data_source = data_source
 
-    def pretokenize(self, transcripts: dict) -> None:
-        """
-        Tokenize transcripts, which are in form of `{0: 'trans_1', ...}` into
-        array of `torch.Tensor` where each item in a tensor is `int` encoding
-        a token_id. Transcripts and their lengths are stored as attributes of this
-        class.
-        """
         if self.data_source is not DataSource.JSON:
             return
-        # tokenize all transcripts once at start of training
+
+        # Normalize all transcripts once at start of training
         self.raw_transcripts_cache = transcripts
-        transcripts = [transcripts[i] for i in range(len(transcripts))]
-        transcripts = norm_and_tokenize_parallel(
-            transcripts, self.normalize_config, self.tokenizer
+
+        self.tr = norm_and_tokenize_parallel(
+            [transcripts[i] for i in range(len(transcripts))],
+            normalize_config,
+            charset=self.tokenizer.charset,
         )
-        transcripts = [torch.tensor(t) for t in transcripts]
-        self.tr = np.array(transcripts, dtype=object)
-        self.t_sizes = torch.tensor([t.size(0) for t in transcripts], dtype=torch.int32)
 
     def get_transcripts(
         self, data: dict
@@ -64,9 +60,14 @@ class TokenCache:
         else:
             # labels refers to an id that can be used to retrieve the transcript
             ids = labels.flatten().numpy()
-            transcripts = self.tr[ids]
+
+            transcripts = [self.tr[i] for i in ids]
+            transcripts = [self.tokenizer.tokenize(x) for x in transcripts]
+            transcripts = [torch.tensor(x, dtype=torch.int64) for x in transcripts]
+
             # data['label_lens'] is populated with meaningless values and is not used
-            sizes = self.t_sizes[ids]
+            sizes = torch.tensor([t.size(0) for t in transcripts], dtype=torch.int32)
+
             raw_transcripts = [self.raw_transcripts_cache[i] for i in ids]
 
         # Tensors are padded with 0. In `sentencepiece` it is set to <unk>,

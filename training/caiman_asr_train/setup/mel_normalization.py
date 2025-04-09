@@ -26,6 +26,10 @@ def build_mel_feat_normalizer(
         # then override the norm_type
         norm_type = NormType.UTTERANCE_STATS
 
+    if args.norm_use_global_stats:
+        # then override the norm_type
+        norm_type = NormType.DATASET_STATS
+
     mel_stats = (
         MelStats.from_dir(dali_yaml_config.stats_path)
         if norm_type != NormType.UTTERANCE_STATS

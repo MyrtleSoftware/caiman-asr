@@ -5,7 +5,10 @@ import pytest
 from hypothesis import given
 from hypothesis.strategies import text
 
-from caiman_asr_train.data.text.normalizers import select_and_normalize
+from caiman_asr_train.data.text.normalizers import (
+    punctuation_normalize,
+    select_and_normalize,
+)
 from caiman_asr_train.data.text.preprocess import norm_and_tokenize
 from caiman_asr_train.setup.text_normalization import (
     NormalizeConfig,
@@ -17,12 +20,20 @@ from caiman_asr_train.setup.text_normalization import (
 def test_digit_normalize():
     """Compare to test_normalize_file.py"""
     allowed_chars = list(string.ascii_letters + " '.,!?-")
+    allowed_chars_default = list(string.ascii_letters + " '")
 
     def norm(x):
         return select_and_normalize(
             x,
             allowed_chars,
-            NormalizeConfig(NormalizeLevel.DIGIT_TO_WORD, [], False, []),
+            NormalizeConfig(NormalizeLevel.DIGIT_TO_WORD, [], False, [], False),
+        )
+
+    def norm_default(x):
+        return select_and_normalize(
+            x,
+            allowed_chars_default,
+            NormalizeConfig(NormalizeLevel.LOWERCASE, [], False, [], False),
         )
 
     assert norm("Testing, 1, 2, 3.") == "Testing, one, two, three."
@@ -41,6 +52,68 @@ def test_digit_normalize():
     assert (
         norm("chiefly between 1845 and 1849")
         == "chiefly between eighteen forty-five and eighteen forty-nine"
+    )
+    assert (
+        norm_default("chiefly between 1845 and 1849")
+        == "chiefly between eighteen forty five and eighteen forty nine"
+    )
+    assert norm(("set the alarm for 3:16AM")) == "set the alarm for three sixteen AM"
+    assert norm(("set the alarm for 3:16 AM")) == "set the alarm for three sixteen AM"
+    assert (
+        norm(("calculate -37.0 plus 38.35"))
+        == "calculate minus thirty-seven point zero plus thirty-eight point thirty-five"
+    )
+    assert (
+        norm_default(("set the alarm for 3:16AM"))
+        == "set the alarm for three sixteen am"
+    )
+    assert norm(("two-fifths and three-quarters")) == "two-fifths and three-quarters"
+    assert (
+        norm_default(("two-fifths and three-quarters"))
+        == "two fifths and three quarters"
+    )
+    assert norm(("about 1-5")) == "about one to five"
+    assert norm_default(("about 1-5")) == "about one to five"
+    assert norm_default(("about one-five")) == "about one five"
+    assert norm_default(("  word-word     ")) == "wordword"
+    assert norm_default(("foo:bar")) == "foo bar"
+    assert norm(("foo:bar")) == "foobar"
+
+
+def test_lowercase_normalize():
+    """Compare to test_normalize_file.py with the default normalization"""
+    allowed_chars = list(string.ascii_letters + " '")
+
+    def norm(x):
+        return select_and_normalize(
+            x,
+            allowed_chars,
+            NormalizeConfig(NormalizeLevel.LOWERCASE, [], False, [], False),
+        )
+
+    def norm_and_standard(x):
+        return select_and_normalize(
+            x,
+            allowed_chars,
+            NormalizeConfig(NormalizeLevel.LOWERCASE, [], False, [], True),
+        )
+
+    assert (
+        norm(("set the alarm for 3:16AM aeon"))
+        == "set the alarm for three sixteen am aeon"
+    )
+    assert (
+        norm(("calculate -37.0 plus 38.35"))
+        == "calculate minus thirty seven point zero plus thirty eight point thirty five"
+    )
+    assert (
+        norm_and_standard(("centralised aeon defence marvellously"))
+        == "centralized eon defense marvelously"
+    )
+    assert norm_and_standard("Testing, 1, 2, 3.") == "testing one two three"
+    assert (
+        norm_and_standard("<words> <inside> <tags> <like_these> are removed")
+        == "are removed"
     )
 
 
@@ -87,7 +160,7 @@ def test_digit_normalize():
 def test_variants(normalizer, remove_tags, expected):
     charset = list(string.ascii_letters + " -")
     text = "<silence> Mr. Smith visited the café @ 123rd Street."
-    normalize_config = NormalizeConfig(normalizer, [], remove_tags, [])
+    normalize_config = NormalizeConfig(normalizer, [], remove_tags, [], False)
     result = norm_and_tokenize(
         text, tokenizer=None, normalize_config=normalize_config, charset=charset
     )
@@ -98,7 +171,7 @@ def test_variants(normalizer, remove_tags, expected):
 def test_implemented(normalizer):
     """Make sure norm_and_tokenize can handle all NormalizeLevels,
     including ones added later"""
-    normalize_config = NormalizeConfig(normalizer, [], False, [])
+    normalize_config = NormalizeConfig(normalizer, [], False, [], False)
     norm_and_tokenize(
         "foo",
         tokenizer=None,
@@ -119,7 +192,7 @@ def test_implemented(normalizer):
     ],
 )
 def test_no_forbidden_chars(input_text, default_charset, normalizer, remove_tags):
-    normalize_config = NormalizeConfig(normalizer, [], remove_tags, [])
+    normalize_config = NormalizeConfig(normalizer, [], remove_tags, [], False)
     result = norm_and_tokenize(
         input_text,
         tokenizer=None,
@@ -149,7 +222,7 @@ def test_replacements(normalizer, expected):
         {"old": "colour", "new": "color"},
     ]
     text = "Blue is a colour; red is a colour; yellow is---also a colour"
-    normalize_config = get_normalize_config(normalizer, replacements, False, [])
+    normalize_config = get_normalize_config(normalizer, replacements, False, [], False)
     result = norm_and_tokenize(
         text, tokenizer=None, normalize_config=normalize_config, charset=charset
     )
@@ -159,7 +232,9 @@ def test_replacements(normalizer, expected):
 def test_tag_removal(default_charset):
     def norm(x):
         return select_and_normalize(
-            x, default_charset, NormalizeConfig(NormalizeLevel.LOWERCASE, [], True, [])
+            x,
+            default_charset,
+            NormalizeConfig(NormalizeLevel.LOWERCASE, [], True, [], False),
         )
 
     assert norm("<tags> <like_these> are removed") == "  are removed"
@@ -167,3 +242,15 @@ def test_tag_removal(default_charset):
     assert norm("to-") == "to"
     assert norm("<affirmative> <silence>") == " "
     assert norm("<affirmative> <sw> <inaudible>") == "  "
+
+
+@pytest.mark.parametrize(
+    "text, norm_text",
+    [
+        ('Hey! \'She said: "How are you; ok?"', "Hey. 'She said. How are you, ok?"),
+        ("-hello! <EOS>", " hello. <EOS>"),
+    ],
+)
+def test_punctuation_normalize(text, norm_text):
+    ret_text = punctuation_normalize(text)
+    assert ret_text == norm_text

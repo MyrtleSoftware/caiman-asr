@@ -19,7 +19,7 @@ from nvidia.dali.plugin.pytorch import DALIGenericIterator
 
 from caiman_asr_train.data.dali.filename import FileNameExtractor
 from caiman_asr_train.data.dali.pipeline import DaliPipeline
-from caiman_asr_train.data.dali.token_cache import TokenCache
+from caiman_asr_train.data.dali.token_cache import NormalizeCache
 from caiman_asr_train.data.decide_on_loader import DataSource
 from caiman_asr_train.data.tokenizer import Tokenizer
 from caiman_asr_train.setup.text_normalization import NormalizeConfig
@@ -41,18 +41,16 @@ class DaliRnntIterator:
         dali_pipelines: List[DaliPipeline],
         transcripts: dict,
         tokenizer: Tokenizer,
-        shard_size: int,
         pipeline_type: str,
         device_type: str,
         data_source: DataSource,
         normalize_config: NormalizeConfig,
         output_files: dict[str, dict] | None,
     ):
-        time_print_once(f"Making token cache for {pipeline_type}")
-        self.token_cache = TokenCache(
-            normalize_config, tokenizer, device_type, data_source
+        time_print_once(f"Making normalized text cache for {pipeline_type}")
+        self.normalize_cache = NormalizeCache(
+            normalize_config, tokenizer, device_type, data_source, transcripts
         )
-        self.token_cache.pretokenize(transcripts)
         time_print_once(f"Done making token cache for {pipeline_type}")
 
         self.file_name_extractor = FileNameExtractor(output_files, data_source)
@@ -67,26 +65,16 @@ class DaliRnntIterator:
             "raw_transcript",
             "fname",
         ]
-        reader_name = "Reader" if data_source is DataSource.JSON else None
-        if pipeline_type == "val":
-            self.dali_it = DALIGenericIterator(
-                dali_pipelines,
-                out_arg_names,
-                reader_name=reader_name,
-                dynamic_shape=True,
-                auto_reset=True,
-                last_batch_policy=LastBatchPolicy.PARTIAL,
-            )
-        else:
-            self.dali_it = DALIGenericIterator(
-                dali_pipelines,
-                out_arg_names,
-                size=shard_size,
-                dynamic_shape=True,
-                auto_reset=True,
-                last_batch_padded=True,
-                last_batch_policy=LastBatchPolicy.PARTIAL,
-            )
+
+        assert len(dali_pipelines) == 1, "Only one pipeline is expected"
+
+        self.dali_it = DALIGenericIterator(
+            pipelines=dali_pipelines,
+            output_map=out_arg_names,
+            reader_name=dali_pipelines[0].reader_name,
+            auto_reset=True,
+            last_batch_policy=LastBatchPolicy.PARTIAL,
+        )
 
     def __next__(
         self,
@@ -108,7 +96,7 @@ class DaliRnntIterator:
             transcripts,
             transcripts_lengths,
             raw_transcripts,
-        ) = self.token_cache.get_transcripts(data[0])
+        ) = self.normalize_cache.get_transcripts(data[0])
         fnames = self.file_name_extractor.get_fnames(data[0])
         return (
             audio,

@@ -15,7 +15,7 @@ def webdataset_reader(test_data_dir, tokenizer) -> WebDatasetReader:
         batch_size=2,
         shuffle=True,
         tokenizer=tokenizer,
-        normalize_config=NormalizeConfig(NormalizeLevel.LOWERCASE, [], True, []),
+        normalize_config=NormalizeConfig(NormalizeLevel.LOWERCASE, [], True, [], False),
         num_buckets=2,
     )
 
@@ -28,7 +28,7 @@ def webdataset_reader_periods(test_data_dir, tokenizer) -> WebDatasetReader:
         batch_size=2,
         shuffle=True,
         tokenizer=tokenizer,
-        normalize_config=NormalizeConfig(NormalizeLevel.LOWERCASE, [], True, []),
+        normalize_config=NormalizeConfig(NormalizeLevel.LOWERCASE, [], True, [], False),
         num_buckets=2,
     )
 
@@ -41,7 +41,7 @@ def webdataset_reader_periods_zip(test_data_dir, tokenizer) -> WebDatasetReader:
         batch_size=2,
         shuffle=True,
         tokenizer=tokenizer,
-        normalize_config=NormalizeConfig(NormalizeLevel.LOWERCASE, [], True, []),
+        normalize_config=NormalizeConfig(NormalizeLevel.LOWERCASE, [], True, [], False),
         num_buckets=2,
     )
 

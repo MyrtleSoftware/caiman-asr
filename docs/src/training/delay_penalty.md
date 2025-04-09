@@ -12,7 +12,7 @@ The original paper describes fixing the delay penalty at a constant value `lambd
 ./scripts/train.sh --delay_penalty=lambda
 ```
 
-The paper shows that the optimal values of `lambda` are in range of \[0.001, 0.01\].
+The paper shows that the optimal values of `lambda` are in range of [0.001, 0.01].
 
 ## Stepwise
 

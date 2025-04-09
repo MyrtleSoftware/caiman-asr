@@ -10,7 +10,7 @@ def get_topk_logits(logits: torch.Tensor, vecs_in_pkt: int = 8, vec_size: int = 
     Reduce the logits to match the behaviour of caiman-asr solution.
 
     The caiman-asr accelerated solution does not support a full argmax
-    operation, instead it preforms a fuzzy version of this operation.
+    operation, instead it performs a fuzzy version of this operation.
 
     The logits are divided into 8 vectors, each of size 32, forming a packet.
     From each packet, the top 32 values are selected from the 8 vectors:

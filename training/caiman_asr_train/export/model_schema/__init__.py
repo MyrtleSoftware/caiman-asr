@@ -1,6 +1,8 @@
 import json
 from enum import Enum
 
+from beartype import beartype
+
 
 class CheckpointNotSupportedError(Exception):
     pass
@@ -23,13 +25,18 @@ def return_schemas():
     return schemas
 
 
+@beartype
+def get_schema(state_dict: dict) -> dict:
+    return {k: list(v.shape) for (k, v) in state_dict.items()}
+
+
 def check_model_schema(model_sd, schemas):
     """
     Raise CheckpointNotSupportedError if state dict isn't supported.
 
     This is necessary to avoid incompatibility with downstream inference server.
     """
-    model_schema = {k: list(v.shape) for (k, v) in model_sd.items()}
+    model_schema = get_schema(model_sd)
     matching_schema = [schema for schema in schemas if schema == model_schema]
     if len(matching_schema) != 1:
         raise CheckpointNotSupportedError(

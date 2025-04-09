@@ -45,18 +45,22 @@ ADDITIONAL_DIACRITICS = {
 
 def remove_symbols_and_diacritics(s: str, keep=""):
     """
-    Replace any other markers, symbols, and punctuations with a space,
+    Replace any other markers, symbols, and punctuation with a space,
     and drop any diacritics (category 'Mn' and some manual mappings)
     """
     return "".join(
-        c
-        if c in keep
-        else ADDITIONAL_DIACRITICS[c]
-        if c in ADDITIONAL_DIACRITICS
-        else ""
-        if unicodedata.category(c) == "Mn"
-        else " "
-        if unicodedata.category(c)[0] in "MSP"
-        else c
+        (
+            c
+            if c in keep
+            else (
+                ADDITIONAL_DIACRITICS[c]
+                if c in ADDITIONAL_DIACRITICS
+                else (
+                    ""
+                    if unicodedata.category(c) == "Mn"
+                    else " " if unicodedata.category(c)[0] in "MSP" else c
+                )
+            )
+        )
         for c in unicodedata.normalize("NFKD", s)
     )

@@ -56,7 +56,7 @@ The noise data is combined with speech data on-the-fly during training, using a
 signal to noise ratio (SNR) randomly chosen between internal variables `low` and `high`.
 
 The initial values for `low` and `high` can be specified (in dB) using the `--noise_initial_low` and
-`--noise_initial_high` arguments when calling `train.sh`.  This range is then maintained for the number of
+`--noise_initial_high` arguments when calling `train.sh`. This range is then maintained for the number of
 steps specified by the `--noise_delay_steps` argument after which the noise level is ramped up over
 `--noise_ramp_steps` to its final range.
 The final range for background noise is 0–30dB (taken from the Google paper "Streaming
@@ -142,7 +142,7 @@ that have lower score.
 
 Utilising the random tokens sampling is a form of data augmentation and it is applied on a percentage of the
 training data, and not on the validation data.
-This can be done with setting the sampling parameter into a real value in the range \[0.0, 1.0\]
+This can be done with setting the sampling parameter into a real value in the range [0.0, 1.0]
 in the configuration file, e.g.:
 
 ```yaml
@@ -165,7 +165,7 @@ $$
 $$
 
 \\(noise\\) is the initial noise level, \\(decay=0.55\\) is the decay constant, \\(t\\) is the step,
-and \\(t\_{start}\\) is the step when the gradient noise is switched on.
+and \\(t\_\{start}\\) is the step when the gradient noise is switched on.
 
 Training with gradient noise is switched off by default. It can be switched on by setting the noise level
 to be a positive value in the config file.

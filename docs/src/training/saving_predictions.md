@@ -7,9 +7,9 @@ to `/results/preds[rank]_[timestamp]_[step].json`, as in this command:
 ./scripts/val.sh --val_manifests /results/your-inference-list.json
 ```
 
-`val.sh` works whether or not there are correct ground-truth transcripts in `your-inference-list.json`.  If there are,
+`val.sh` works whether or not there are correct ground-truth transcripts in `your-inference-list.json`. If there are,
 then the word error rate reported by val will be accurate; if not, then it will be nonsense and should
-be ignored.  The minimal json file for inference (with 2 wav files) looks like this:
+be ignored. The minimal json file for inference (with 2 wav files) looks like this:
 
 ```
 [

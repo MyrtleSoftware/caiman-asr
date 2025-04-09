@@ -1,5 +1,5 @@
 # CAIMAN-ASR inference
 
-This directory contains public code related to inference using CAIMAN-ASR.
+This directory contains public code for CAIMAN-ASR inference.
 
-To get started, follow the installation and setup instructions [here](https://caiman-asr.myrtle.ai/).
+To get started, follow the installation and setup instructions [here](https://caiman-asr.myrtle.ai/inference/inference_flow.html).

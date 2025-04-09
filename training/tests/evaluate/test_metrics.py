@@ -7,7 +7,7 @@ from hypothesis.strategies import text
 from levenshtein_rs import levenshtein_list as levenshtein
 
 from caiman_asr_train.evaluate.error_rates import ErrorRate
-from caiman_asr_train.evaluate.metrics import word_error_rate
+from caiman_asr_train.evaluate.metrics import punctuation_error_rate, word_error_rate
 
 
 @given(text(), text())
@@ -90,3 +90,33 @@ def test_mer():
         standardize=False,
         error_rate=ErrorRate.MIXTURE,
     ) == (1 / 3, 2, 6)
+
+
+@pytest.mark.parametrize(
+    "hypotheses, references, expected_per",
+    [
+        (
+            ["Brief. I pray! For you.", ""],
+            ["Brief. <EOS> I pray now for you;", ""],
+            (2 / 3, 3),
+        ),
+        (
+            ["Hey. 'She said; 'How are you, ok?'"],
+            ["Hey! She said, 'How are you; ok?'"],
+            (0.0, 4),
+        ),
+        (
+            ["say hello, there you!", "That's the same!"],
+            ["say hello there you.", "That's not the same!"],
+            (1 / 3, 3),
+        ),
+        (
+            ["say hello there you", "That's the same"],
+            ["say hello there you", "That's not the same"],
+            (0.0, 0),
+        ),
+    ],
+)
+def test_punctuation_error_rate(hypotheses, references, expected_per):
+    per, pun_symbols = punctuation_error_rate(hypotheses, references)
+    assert (per, pun_symbols) == expected_per, "PER calculation is incorrect"

@@ -93,6 +93,12 @@ def validate_multiple(args: Namespace):
         )
     results_fp.parent.mkdir(exist_ok=True)
 
+    for manifest, dataset_dir in zip(
+        args.all_val_manifests, args.all_dataset_dirs, strict=True
+    ):
+        json_path = Path(dataset_dir) / manifest
+        assert json_path.exists(), f"{json_path} does not exist"
+
     setup_class = ValCPUSetup if args.cpu else ValSetup
     all_results = {}
     skip_init = False
@@ -148,6 +154,7 @@ def validate_multiple(args: Namespace):
         "sil_frac",
         "rem_frac",
         "latency_metrics",
+        "timestamp_metrics",
     ]
 
     out_json = {
@@ -187,19 +194,22 @@ def write_csv(abbrev, results_csv_fp, all_results):
             },
         }
 
-    def from_latency(key: str):
+    def from_nest(head: str, key: str):
         #
         def _anonymous(res):
-            if "latency_metrics" in res:
-                if key in res["latency_metrics"]:
-                    return res["latency_metrics"][key]
+            if head in res:
+                if key in res[head]:
+                    return res[head][key]
 
             return float("nan")
 
         return _anonymous
 
     def to_row_from_latency(key: str):
-        return to_row(key, from_latency(key))
+        return to_row(key, from_nest("latency_metrics", key))
+
+    def to_row_from_timestamp(key: str):
+        return to_row(key, from_nest("timestamp_metrics", key))
 
     with open(results_csv_fp, "w", newline="") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=["Metric", *all_results.keys()])
@@ -217,6 +227,11 @@ def write_csv(abbrev, results_csv_fp, all_results):
 
         writer.writerow(to_row("SIL-fraction", lambda x: x.get("sil_frac", 0)))
         writer.writerow(to_row_from_latency("median-SIL-latency"))
+
+        writer.writerow(to_row_from_timestamp("fixed_AAS"))
+        writer.writerow(to_row_from_timestamp("corrected_AAS"))
+        writer.writerow(to_row_from_timestamp("optimal_head_offset"))
+        writer.writerow(to_row_from_timestamp("optimal_tail_offset"))
 
 
 if __name__ == "__main__":

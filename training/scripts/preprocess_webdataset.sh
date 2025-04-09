@@ -28,7 +28,8 @@ python caiman_asr_train/data/generate_mel_stats.py \
 	--dataset_dir $DATA_DIR \
 	--train_tar_files $TRAIN_TAR_FILES \
 	--val_tar_files "<not used but must be set>" \
-	--read_from_tar
+	--read_from_tar \
+	--canary_exponent -1
 
 python caiman_asr_train/lm/prep_kenlm_data.py \
 	--data_dir $DATA_DIR \

@@ -37,7 +37,7 @@ from caiman_asr_train.utils.fast_json import fast_read_json
 class EnglishTextNormalizer:
     def __init__(self):
         # filler words to ignore
-        self.ignore_patterns = r"\b(hmm|mm|mhm|mmm|uh|um)\b"
+        self.ignore_patterns = r"\b(hmm|mm|mhm|mmm|uh|um|mmhmm|uhhuh|huh)\b"
         self.replacers = {
             # common contractions
             r"\bwon't\b": "will not",
@@ -103,6 +103,7 @@ class EnglishTextNormalizer:
             r"'t\b": " not",
             r"'ve\b": " have",
             r"'m\b": " am",
+            r"\bcuz\b": "'cause",
         }
         # british to american english conversion
         self.standardize_spellings = EnglishSpellingNormalizer()

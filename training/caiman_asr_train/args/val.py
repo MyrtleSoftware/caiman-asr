@@ -4,12 +4,14 @@ from argparse import ArgumentParser, Namespace
 
 from beartype import beartype
 
+from caiman_asr_train.args.argparser import MyrtleArgumentParser
 from caiman_asr_train.args.shared import add_shared_args
 from caiman_asr_train.train_utils.distributed import print_once
 
 
+@beartype
 def val_arg_parser() -> ArgumentParser:
-    parser = ArgumentParser(description="RNN-T Training Reference")
+    parser = MyrtleArgumentParser(description="RNN-T Training Reference")
 
     training = parser.add_argument_group("training/validation setup")
     training.add_argument(

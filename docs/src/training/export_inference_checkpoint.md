@@ -1,9 +1,18 @@
 # Export inference checkpoint
 
-To run your model on Myrtle.ai's hardware-accelerated inference server you will need to create a hardware checkpoint to enable transfer of this and other data.
+To run your model on Myrtle.ai's hardware-accelerated inference server you will need a hardware checkpoint.
+This is a training checkpoint with additional data such as mel-bin mean and variances as described [here](./log_mel_feature_normalization.md).
 
-This requires mel-bin mean and variances as described [here](./log_mel_feature_normalization.md).
+By default, `train.sh` will automatically create hardware checkpoints for your
+best and last checkpoints.
+If your best checkpoint is `/results/RNN-T_best_checkpoint.pt`,
+you can find the hardware checkpoint at `/results/RNN-T_best_checkpoint.hw.pt`.
 
+## Creating a hardware checkpoint manually
+
+If you want more customization,
+you can also create a hardware checkpoint from
+a training checkpoint using the `hardware_ckpt.py` script.
 To create a hardware checkpoint run:
 
 ```
@@ -41,5 +50,5 @@ python ./caiman_asr_train/export/hardware_ckpt.py \
 ```
 
 ```admonish
-The inference checkpoint will load into val.py with "EMA" warnings that can be ignored.
+The hardware checkpoint will load into val.py with "EMA" warnings that can be ignored.
 ```

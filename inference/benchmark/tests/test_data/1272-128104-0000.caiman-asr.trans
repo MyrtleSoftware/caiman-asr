@@ -1,0 +1,89 @@
+session_start;2024-10-23 10:43:12.621267
+partial_received;2024-10-23 10:43:13.692911;[{'text': ' mr', 'start': 0.96, 'end': 1.02, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:13.749218;[{'text': ' mr', 'start': 0.96, 'end': 1.08, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:13.807914;[{'text': ' mr', 'start': 0.96, 'end': 1.14, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:13.868863;[{'text': ' mr', 'start': 0.96, 'end': 1.2, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:13.926018;[{'text': ' mr', 'start': 0.96, 'end': 1.26, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:14.004107;[{'text': ' mr qui', 'start': 0.96, 'end': 1.32, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:14.056224;[{'text': ' mr qui', 'start': 0.96, 'end': 1.38, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:14.108942;[{'text': ' mr qui', 'start': 0.96, 'end': 1.44, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:14.175730;[{'text': ' mr quil', 'start': 0.96, 'end': 1.5, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:14.239083;[{'text': ' mr quilt', 'start': 0.96, 'end': 1.56, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:14.299101;[{'text': ' mr quilter', 'start': 0.96, 'end': 1.62, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:14.355953;[{'text': ' mr quilter', 'start': 0.96, 'end': 1.68, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:14.410614;[{'text': ' mr quilter', 'start': 0.96, 'end': 1.74, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:14.476602;[{'text': ' mr quilter is', 'start': 0.96, 'end': 1.8, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:14.541897;[{'text': ' mr quilter is', 'start': 0.96, 'end': 1.86, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:14.601042;[{'text': ' mr quilter is', 'start': 0.96, 'end': 1.92, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:14.656890;[{'text': ' mr quilter is the', 'start': 0.96, 'end': 1.98, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:14.724132;[{'text': ' mr quilter is the', 'start': 0.96, 'end': 2.04, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:14.773957;[{'text': ' mr quilter is the', 'start': 0.96, 'end': 2.1, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:14.840025;[{'text': ' mr quilter is the a', 'start': 0.96, 'end': 2.16, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:14.891200;[{'text': ' mr quilter is the apo', 'start': 0.96, 'end': 2.22, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:14.956510;[{'text': ' mr quilter is the apo', 'start': 0.96, 'end': 2.28, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:15.016258;[{'text': ' mr quilter is the apos', 'start': 0.96, 'end': 2.34, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:15.096490;[{'text': ' mr quilter is the apos', 'start': 0.96, 'end': 2.4, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:15.160168;[{'text': ' mr quilter is the apostle', 'start': 0.96, 'end': 2.46, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:15.228690;[{'text': ' mr quilter is the apostle', 'start': 0.96, 'end': 2.52, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:15.282132;[{'text': ' mr quilter is the apostle of', 'start': 0.96, 'end': 2.58, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:15.347961;[{'text': ' mr quilter is the apostle of', 'start': 0.96, 'end': 2.64, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:15.407694;[{'text': ' mr quilter is the apostle of the', 'start': 0.96, 'end': 2.7, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:15.473534;[{'text': ' mr quilter is the apostle of the', 'start': 0.96, 'end': 2.76, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:15.525483;[{'text': ' mr quilter is the apostle of the', 'start': 0.96, 'end': 2.82, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:15.580257;[{'text': ' mr quilter is the apostle of the mi', 'start': 0.96, 'end': 2.88, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:15.651442;[{'text': ' mr quilter is the apostle of the mid', 'start': 0.96, 'end': 2.94, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:15.749017;[{'text': ' mr quilter is the apostle of the middle', 'start': 0.96, 'end': 3.0, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:15.818344;[{'text': ' mr quilter is the apostle of the middle', 'start': 0.96, 'end': 3.06, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:15.867109;[{'text': ' mr quilter is the apostle of the middle', 'start': 0.96, 'end': 3.12, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:15.914862;[{'text': ' mr quilter is the apostle of the middle', 'start': 0.96, 'end': 3.18, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:15.966516;[{'text': ' mr quilter is the apostle of the middle class', 'start': 0.96, 'end': 3.24, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:16.030901;[{'text': ' mr quilter is the apostle of the middle class', 'start': 0.96, 'end': 3.3, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:16.092192;[{'text': ' mr quilter is the apostle of the middle class', 'start': 0.96, 'end': 3.36, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:16.137496;[{'text': ' mr quilter is the apostle of the middle class', 'start': 0.96, 'end': 3.42, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:16.181536;[{'text': ' mr quilter is the apostle of the middle class', 'start': 0.96, 'end': 3.48, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:16.238375;[{'text': ' mr quilter is the apostle of the middle class', 'start': 0.96, 'end': 3.54, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:16.295440;[{'text': ' mr quilter is the apostle of the middle classes', 'start': 0.96, 'end': 3.6, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:16.360116;[{'text': ' mr quilter is the apostle of the middle classes', 'start': 0.96, 'end': 3.66, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:16.407806;[{'text': ' mr quilter is the apostle of the middle classes', 'start': 0.96, 'end': 3.72, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:16.464269;[{'text': ' mr quilter is the apostle of the middle classes and', 'start': 0.96, 'end': 3.78, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:16.521606;[{'text': ' mr quilter is the apostle of the middle classes and', 'start': 0.96, 'end': 3.84, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:16.582278;[{'text': ' mr quilter is the apostle of the middle classes and', 'start': 0.96, 'end': 3.9, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:16.638128;[{'text': ' mr quilter is the apostle of the middle classes and', 'start': 0.96, 'end': 3.96, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:16.697234;[{'text': ' mr quilter is the apostle of the middle classes and we', 'start': 0.96, 'end': 4.02, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:16.762016;[{'text': ' mr quilter is the apostle of the middle classes and we', 'start': 0.96, 'end': 4.08, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:16.822372;[{'text': ' mr quilter is the apostle of the middle classes and we are', 'start': 0.96, 'end': 4.14, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:16.888602;[{'text': ' mr quilter is the apostle of the middle classes and we are', 'start': 0.96, 'end': 4.2, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:16.949310;[{'text': ' mr quilter is the apostle of the middle classes and we are', 'start': 0.96, 'end': 4.26, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:17.017834;[{'text': ' mr quilter is the apostle of the middle classes and we are gla', 'start': 0.96, 'end': 4.32, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:17.083413;[{'text': ' mr quilter is the apostle of the middle classes and we are gla', 'start': 0.96, 'end': 4.38, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:17.146617;[{'text': ' mr quilter is the apostle of the middle classes and we are glad', 'start': 0.96, 'end': 4.44, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:17.200149;[{'text': ' mr quilter is the apostle of the middle classes and we are glad', 'start': 0.96, 'end': 4.5, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:17.262212;[{'text': ' mr quilter is the apostle of the middle classes and we are glad to', 'start': 0.96, 'end': 4.56, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:17.321769;[{'text': ' mr quilter is the apostle of the middle classes and we are glad to', 'start': 0.96, 'end': 4.62, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:17.384142;[{'text': ' mr quilter is the apostle of the middle classes and we are glad to', 'start': 0.96, 'end': 4.68, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:17.445901;[{'text': ' mr quilter is the apostle of the middle classes and we are glad to we', 'start': 0.96, 'end': 4.74, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:17.522769;[{'text': ' mr quilter is the apostle of the middle classes and we are glad to wel', 'start': 0.96, 'end': 4.8, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:17.579323;[{'text': ' mr quilter is the apostle of the middle classes and we are glad to wel', 'start': 0.96, 'end': 4.86, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:17.640225;[{'text': ' mr quilter is the apostle of the middle classes and we are glad to welcom', 'start': 0.96, 'end': 4.92, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:17.704215;[{'text': ' mr quilter is the apostle of the middle classes and we are glad to welcome', 'start': 0.96, 'end': 4.98, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:17.764334;[{'text': ' mr quilter is the apostle of the middle classes and we are glad to welcome', 'start': 0.96, 'end': 5.04, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:17.824439;[{'text': ' mr quilter is the apostle of the middle classes and we are glad to welcome', 'start': 0.96, 'end': 5.1, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:17.878502;[{'text': ' mr quilter is the apostle of the middle classes and we are glad to welcome', 'start': 0.96, 'end': 5.16, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:17.941159;[{'text': ' mr quilter is the apostle of the middle classes and we are glad to welcome his', 'start': 0.96, 'end': 5.22, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:17.999054;[{'text': ' mr quilter is the apostle of the middle classes and we are glad to welcome his', 'start': 0.96, 'end': 5.28, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:18.053961;[{'text': ' mr quilter is the apostle of the middle classes and we are glad to welcome his', 'start': 0.96, 'end': 5.34, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:18.108358;[{'text': ' mr quilter is the apostle of the middle classes and we are glad to welcome his', 'start': 0.96, 'end': 5.4, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:18.172385;[{'text': ' mr quilter is the apostle of the middle classes and we are glad to welcome his go', 'start': 0.96, 'end': 5.46, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:18.228266;[{'text': ' mr quilter is the apostle of the middle classes and we are glad to welcome his go', 'start': 0.96, 'end': 5.52, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:18.288710;[{'text': ' mr quilter is the apostle of the middle classes and we are glad to welcome his gos', 'start': 0.96, 'end': 5.58, 'confidence': 1.0}];N/A
+final_received;2024-10-23 10:43:18.360803;[{'text': ' mr quilter is the apostle of the middle classes and we', 'start': 0.96, 'end': 5.64, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:18.361137;[{'text': ' are glad to welcome his gospel', 'start': 5.64, 'end': 5.64, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:18.425939;[{'text': ' are glad to welcome his gospel', 'start': 5.64, 'end': 5.7, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:18.492176;[{'text': ' are glad to welcome his gospel', 'start': 5.64, 'end': 5.76, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:18.556024;[{'text': ' are glad to welcome his gospel', 'start': 5.64, 'end': 5.82, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:18.603991;[{'text': ' are glad to welcome his gospel', 'start': 5.64, 'end': 5.88, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:18.729439;[{'text': ' are glad to welcome his gospel', 'start': 5.64, 'end': 5.88, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:18.739221;[{'text': ' are glad to welcome his gospel', 'start': 5.64, 'end': 5.88, 'confidence': 1.0}];N/A
+partial_received;2024-10-23 10:43:18.746812;[{'text': ' are glad to welcome his gospel', 'start': 5.64, 'end': 5.88, 'confidence': 1.0}];N/A
+final_received;2024-10-23 10:43:18.793518;[{'text': ' are glad to welcome his gospel', 'start': 5.64, 'end': 5.88, 'confidence': 1.0}];N/A
+session_end;2024-10-23 10:43:18.793626

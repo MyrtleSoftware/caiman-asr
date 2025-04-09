@@ -5,7 +5,7 @@ from apex.contrib.transducer import TransducerLoss as ApexLoss
 from rnnt_ext.transducer.loss import TransducerLoss, TransducerLossFunc
 
 if not torch.cuda.is_available():
-    # Before jit import to avoid jit compilation on when we wont use it.
+    # Before jit import to avoid jit compilation on when we won't use it.
     pytest.skip("Cuda not available so can't run these test", allow_module_level=True)
 
 

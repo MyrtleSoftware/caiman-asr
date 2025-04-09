@@ -18,7 +18,7 @@ def stats_generation_parse_args() -> Namespace:
     args = parser.parse_args()
     args = update_args_stats_generation(args, args.dump_mel_stats_batch_size)
 
-    verify_train_args(args)
+    args = verify_train_args(args)
     check_shared_args(args)
 
     return args

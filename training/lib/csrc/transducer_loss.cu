@@ -355,7 +355,7 @@ __global__ void transducer_loss_fused_backward_kernal(
       // 2.          h == blank, get grad from the right
       // 3.          h == blank and terminal, get temrminal grad
 
-      // Additionaly if my_Up1_label is star_idx then all h get grad
+      // Additionally if my_Up1_label is star_idx then all h get grad
       // contribution from above. Finally if my_U_label is star_idx
       // then all.
 

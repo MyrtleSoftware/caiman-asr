@@ -2,10 +2,18 @@ from argparse import ArgumentParser, Namespace
 
 from beartype import beartype
 
+from caiman_asr_train.train_utils.distributed import warn_once
+
 
 @beartype
 def add_mel_feat_norm_args(parser: ArgumentParser) -> None:
     mel_stat_args = parser.add_argument_group("MelFeatNormalizer setup")
+
+    mel_stat_args.add_argument(
+        "--norm_use_global_stats",
+        action="store_true",
+        help="Use global stats for normalization. Overrides other flags",
+    )
 
     mel_stat_args.add_argument(
         "--norm_starting_ratio",
@@ -44,6 +52,28 @@ def add_mel_feat_norm_args(parser: ArgumentParser) -> None:
 
 
 def check_mel_feat_norm_args(args: Namespace) -> None:
+
+    assert not (
+        args.norm_over_utterance and args.norm_use_global_stats
+    ), "--norm_over_utterance is --exclusive with norm_use_global_stats"
+
+    if (
+        "fine_tune" in args
+        and args.fine_tune
+        and not (args.norm_over_utterance or args.norm_use_global_stats)
+    ):
+        warn_once(
+            "WARNING: Fine-tuning a model without using global stats or "
+            "utterance stats for normalization may result in poor performance "
+            "if there is a step change between the training and fine-tuning data."
+        )
+
+    if args.norm_use_global_stats:
+        # Check that the user has not set any other normalization options.
+        assert args.norm_starting_ratio == 0.0
+        assert args.norm_ramp_start_step is None
+        assert args.norm_ramp_end_step is None
+
     if args.norm_starting_ratio < 0 or args.norm_starting_ratio > 1:
         raise ValueError(
             f"norm_starting_ratio must be in [0, 1], but got {args.norm_starting_ratio}"

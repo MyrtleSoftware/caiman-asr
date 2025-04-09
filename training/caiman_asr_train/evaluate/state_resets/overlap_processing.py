@@ -228,7 +228,7 @@ def manage_boundary_common_tokens(
 
 @beartype
 def combine_predictions(
-    pred_list: List[List[Union[float, int]]]
+    pred_list: List[List[Union[float, int]]],
 ) -> List[List[Union[float, int]]]:
     """Flatten a list of lists.
 

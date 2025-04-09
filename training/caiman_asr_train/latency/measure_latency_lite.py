@@ -11,8 +11,16 @@ def compute_latency_metrics(
     latencies: List[float],
     sil_latency: List[float],
     eos_latency: List[float],
+    frame_width: float,
     percentiles: List[float | int] = [90, 99],
 ) -> Dict[str, float]:
+    """
+    Compute metrics from the latency measurements.
+
+    The emission latency statistics have the expected
+    frame latency subtracted from them.
+    """
+
     latency_metrics = {}
     latency_num = len(latencies)
 
@@ -29,11 +37,14 @@ def compute_latency_metrics(
     if not latency_num:
         return latency_metrics
 
-    latencies = sorted(latencies)
+    if frame_width is not None:
+        latencies = [x - 0.5 * frame_width for x in latencies]
+
     latency_metrics["mean-emission-latency"] = mean(latencies)
     latency_metrics["stdev-emission-latency"] = pstdev(latencies)
     latency_metrics["median-emission-latency"] = median(latencies)
 
+    latencies = sorted(latencies)
     for perc in percentiles:
         latency_metrics[f"p{perc}-emission-latency"] = latencies[
             int(latency_num * perc / 100)

@@ -8,7 +8,8 @@ python caiman_asr_train/data/generate_mel_stats.py \
 	--dataset_dir tests/test_data \
 	--train_manifests peoples-speech-short.json \
 	--dali_train_device cpu \
-	--dump_mel_stats_batch_size 2
+	--dump_mel_stats_batch_size 2 \
+	--canary_exponent -1
 
 TEST_EXIT_CODE=$?
 

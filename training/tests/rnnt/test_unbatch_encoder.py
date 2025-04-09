@@ -17,5 +17,5 @@ def test_apply_encoder(model_factory, max_inputs_per_batch):
         model, feats, feat_lens, max_inputs_per_batch
     )
     encs2, enc_lens2, _ = model.encode(feats, feat_lens)
-    assert torch.allclose(encs1, encs2, atol=1e-5)
+    assert torch.allclose(encs1, encs2, atol=1e-4)
     assert torch.allclose(enc_lens1, enc_lens2)

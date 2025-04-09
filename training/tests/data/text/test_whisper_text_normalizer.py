@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
+import string
+
 import pytest
 
+from caiman_asr_train.data.text.normalizers import lowercase_normalize, standardize_text
 from caiman_asr_train.data.text.whisper_text_normalizer import EnglishTextNormalizer
-from caiman_asr_train.evaluate.metrics import standardize_wer
 
 
 @pytest.mark.parametrize(
@@ -18,6 +20,7 @@ from caiman_asr_train.evaluate.metrics import standardize_wer
             ("hmm that's what we'll normalise in today's example"),
             ("that is what we will normalize in today's example"),
         ),
+        (("mmhmm uh-huh cuz"), ("'cause")),
     ],
 )
 def test_whisper(test_input, expected):
@@ -51,6 +54,8 @@ def test_whisper(test_input, expected):
         ("<tags> <will_disappear>", ""),
     ],
 )
-def test_standardize(test_input, expected):
-    returned = standardize_wer(test_input)
+def test_noprmalize_standardize(test_input, expected):
+    charset = list(" '<>" + string.ascii_lowercase)
+    test_input = lowercase_normalize(test_input, charset=charset)
+    returned = standardize_text((test_input))
     assert expected == returned

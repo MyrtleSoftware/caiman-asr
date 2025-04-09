@@ -1,4 +1,3 @@
-import json
 import os
 import tarfile
 from argparse import Namespace
@@ -10,7 +9,11 @@ from beartype.typing import Dict, List, Optional, Tuple
 
 from caiman_asr_train.latency.measure_latency import align_ctm_files
 from caiman_asr_train.latency.measure_latency_lite import compute_latency_metrics
-from caiman_asr_train.latency.timestamp import SequenceTimestamp, Termination
+from caiman_asr_train.latency.timestamp import (
+    SequenceTimestamp,
+    Termination,
+    frame_to_time,
+)
 from caiman_asr_train.train_utils.distributed import print_once
 from caiman_asr_train.utils.frame_width import encoder_output_frame_width
 
@@ -39,9 +42,10 @@ def to_ctm(
     """
     with open(output_fp, "a") as file:
         # Iterate over each word in sentence
-        for word_align in seq_time.seqs:
-            start_time = word_align.start_frame * frame_width  # convert to seconds
-            duration = (word_align.end_frame - word_align.start_frame) * frame_width
+        for word_align in map(lambda x: frame_to_time(x, frame_width), seq_time.seqs):
+            start_time = word_align.start_time
+            duration = word_align.end_time - word_align.start_time
+
             # For single channel audio, channel_id is always 1
             file.write(
                 f"{audio_fp} 1 {start_time:.3f} {duration:.3f} {word_align.word} \n"
@@ -50,30 +54,15 @@ def to_ctm(
 
 @beartype
 def dump_ctm(
-    data: List[str],
+    flist: List[str],
     lst_seq_time: List[SequenceTimestamp],
     ctm_fpath: str,
-    flist: Optional[List[str]],
     frame_width: float,
 ) -> Dict[str, Termination]:
-    # During json validation, data (a list of filenames) has been sorted by audio duration
-    # and hence can't be trusted, so instead use flist.
-    # During tarfile validation, flist is None because there's no sampler to read it from,
-    # but also there's no sorting, so trust data
-    for i, sample in enumerate(data):
-        to_ctm(
-            lst_seq_time[i],
-            ctm_fpath,
-            sample if flist is None else flist[i],
-            frame_width,
-        )
+    for time, sample in zip(lst_seq_time, flist, strict=True):
+        to_ctm(time, ctm_fpath, sample, frame_width)
 
-    return {
-        fname: seq.eos
-        for fname, seq in zip(
-            flist if flist is not None else data, lst_seq_time, strict=True
-        )
-    }
+    return {fname: seq.eos for fname, seq in zip(flist, lst_seq_time, strict=True)}
 
 
 @beartype
@@ -81,8 +70,10 @@ def manage_ctm_export(
     args: Namespace,
     lst_seq_time: List[SequenceTimestamp],
     gt_ctm_fpaths: List[str],
-    flist: Optional[List[str]],
-) -> Tuple[Dict[str, Optional[float]], List[float], List[float], List[float]]:
+    flist: List[str],
+) -> Tuple[
+    Dict[str, Optional[float]], dict[str, float], List[float], List[float], List[float]
+]:
     """
     Manages the export of word-level timestamps to a CTM file, accommodating different
     data sources and computing environments.
@@ -101,6 +92,7 @@ def manage_ctm_export(
         eos_latency: A list of end-of-sentence latencies.
     """
     latency_metrics = {}
+    timestamp_metrics = {}
     latencies = []
     sil_latency = []
     eos_latency = []
@@ -109,18 +101,19 @@ def manage_ctm_export(
         frame_width = encoder_output_frame_width(args.model_config)
 
         if args.read_from_tar:
-            data = get_audio_filenames_from_tar(args.dataset_dir, args.val_tar_files)
             file_list = args.val_tar_files
         else:
-            data = combine_manifest_data(args.dataset_dir, args.val_manifests)
             file_list = args.val_manifests
 
-        data = [j for i in data for j in i]
         base_name = "-".join([Path(x).stem for x in file_list])
 
         ctm_fpath = str(Path(args.output_dir) / f"{base_name}_{args.timestamp}.ctm")
 
-        last_emit_time = dump_ctm(data, lst_seq_time, ctm_fpath, flist, frame_width)
+        # Make function repeatable by clearing the file
+        with open(ctm_fpath, "w") as _:
+            pass
+
+        last_emit_time = dump_ctm(flist, lst_seq_time, ctm_fpath, frame_width)
 
         (
             latencies,
@@ -129,7 +122,14 @@ def manage_ctm_export(
             eos_latency,
             token_usage_rate,
             terminal_token_usage_rate,
-        ) = align_ctm_files(gt_ctm_fpaths, ctm_fpath, last_emit_time)
+            timestamp_metrics,
+        ) = align_ctm_files(
+            gt_ctm_fpaths,
+            ctm_fpath,
+            last_emit_time,
+            head_offset=args.latency_head_offset,
+            tail_offset=args.latency_tail_offset,
+        )
 
         if token_usage_rate <= 0.50:
             print(f"WARNING: {token_usage_rate=} is very low (below 50%).")
@@ -137,12 +137,14 @@ def manage_ctm_export(
         if terminal_token_usage_rate <= 0.50:
             print(f"WARNING: {terminal_token_usage_rate=} is very low (below 50%).")
 
-        latency_metrics = compute_latency_metrics(latencies, sil_latency, eos_latency)
+        latency_metrics = compute_latency_metrics(
+            latencies, sil_latency, eos_latency, frame_width=frame_width
+        )
 
         latency_metrics["token_usage_rate"] = token_usage_rate
         latency_metrics["terminal_token_usage_rate"] = terminal_token_usage_rate
 
-    return latency_metrics, latencies, sil_latency, eos_latency
+    return latency_metrics, timestamp_metrics, latencies, sil_latency, eos_latency
 
 
 @beartype
@@ -189,30 +191,6 @@ def get_abs_manifest_paths(data_dir: str, val_manifests: List[str]) -> List[str]
     for manifest in val_manifests:
         abs_paths.append(get_abs_path(data_dir, manifest))
     return abs_paths
-
-
-@beartype
-def combine_manifest_data(data_dir: str, val_manifests: List[str]) -> List[List[str]]:
-    """Combine JSON data from multiple manifest files.
-
-    Parameters:
-    data_dir (str): The directory path where data is stored.
-    val_manifests (List[str]): A list of file paths for validation manifests.
-
-    Returns:
-    List[List[str]]:  A list of lists of audio filenames for each manifest file.
-    """
-    abs_manifest_paths = get_abs_manifest_paths(data_dir, val_manifests)
-    audio_filenames_per_file = []
-
-    for manifest_path in abs_manifest_paths:
-        audio_filenames = []
-        with open(manifest_path, "r") as file:
-            data = json.load(file)
-            for sample in data:
-                audio_filenames.append(sample["files"][0]["fname"])
-        audio_filenames_per_file.append(audio_filenames)
-    return audio_filenames_per_file
 
 
 @beartype

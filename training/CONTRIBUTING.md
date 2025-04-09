@@ -1,6 +1,6 @@
 # CONTRIBUTING
 
-This document contains information that is required to make contributions to code in the [./training](./) directory. Before following the instructions below, please first follow the standard installation instructions: [\[docs\]](https://caiman-asr.myrtle.ai/training/installation.html) [\[markdown\]](./../docs/src/training/installation.md)
+This document contains information that is required to make contributions to code in the [./training](./) directory. Before following the instructions below, please first follow the standard installation instructions: [[docs]](https://caiman-asr.myrtle.ai/training/installation.html) [[markdown]](./../docs/src/training/installation.md)
 
 ## Developer install steps <a name="dev_install"></a>
 

@@ -13,6 +13,6 @@ The CAIMAN-ASR server requires a host machine with the following specifications:
 
 ## Bandwidth
 
-The server requies 500 Mbits/s of bandwidth per 1000 streams. For example, 2000 streams would require 1 Gbit/s of bandwidth.
+The server requires 500 Mbits/s of bandwidth per 1000 streams. For example, 2000 streams would require 1 Gbit/s of bandwidth.
 The bandwidth is dependent on the number of streams and not the number of cards (one card can handle 2000 streams with the `base` model or 800 streams with the `large` model).
 This figure has some headroom built in; the measured value on a reliable connection is 700 Mbits/s for 2000 streams.

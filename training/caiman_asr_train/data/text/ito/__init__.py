@@ -1,6 +1,6 @@
 # Copyright (c) 2017 Keith Ito
 # Copyright (c) 2023, Myrtle Software Limited, www.myrtle.ai. All rights reserved.
-""" from https://github.com/keithito/tacotron """
+"""from https://github.com/keithito/tacotron"""
 import string
 
 import caiman_asr_train.data.text.ito.cleaners as cleaners
@@ -23,6 +23,7 @@ def punctuation_map(labels):
     punctuation = punctuation.replace("&", "")
     punctuation = punctuation.replace("@", "")
     punctuation = punctuation.replace("%", "")
+    punctuation = punctuation.replace(":", "")
     # If a punctuation symbol is inside the vocab, do not remove from text
     for label in labels:
         punctuation = punctuation.replace(label, "")

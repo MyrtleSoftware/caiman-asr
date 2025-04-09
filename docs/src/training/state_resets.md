@@ -26,10 +26,6 @@ long-utterances, and do not deteriorate the short utterance performance.
 
 To turn off state resets, set `--sr_segment=0`.
 
-```admonish
-In order to use state resets it is required that the `--val_batch_size` is kept to the default value of 1.
-```
-
 ## At inference time
 
 The user can configure whether to use state resets on the CAIMAN-ASR server.

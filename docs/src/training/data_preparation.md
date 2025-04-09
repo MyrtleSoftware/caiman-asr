@@ -20,6 +20,19 @@ During validation, the predictions and reference transcripts
 will be [standardized](wer_calculation.md#wer-standardization).
 ```
 
+### Text standardization <a name="text_standard"></a>
+
+```admonish
+Training on multiple datasets can negatively affect WER because the same word
+is transcribed with different conventions across the datasets. It is possible to
+make the training transcripts consistent
+by setting `standardize_text: true` in the YAML config (this is the default).
+This will apply the same standardization rules as used in validation
+as described in the WER Standardization section of the [WER calculation docs](./wer_calculation.md)
+- but in this case, to the training transcripts.
+
+```
+
 ### See also
 
 - [Prepare LibriSpeech in `JSON` format](json_format.md#librispeech_json)

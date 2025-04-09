@@ -30,14 +30,20 @@ from caiman_asr_train.evaluate.state_resets import (
 )
 from caiman_asr_train.evaluate.state_resets.timestamp import (
     FullStamp,
+    model_time,
     user_perceived_time,
 )
 from caiman_asr_train.evaluate.trim import EOSTrimConfig, trim_predictions
-from caiman_asr_train.latency.ctm import get_reference_ctms, manage_ctm_export
+from caiman_asr_train.latency.ctm import (
+    get_audio_filenames_from_tar,
+    get_reference_ctms,
+    manage_ctm_export,
+)
 from caiman_asr_train.latency.timestamp import (
     EOS,
     SequenceTimestamp,
     Silence,
+    frame_to_time,
     group_timestamps,
 )
 from caiman_asr_train.log.tb_dllogger import log
@@ -48,6 +54,7 @@ from caiman_asr_train.utils.frame_width import (
     encoder_output_frame_width,
     input_feat_frame_width,
 )
+from caiman_asr_train.utils.iter import flat, lmap, lstarmap_zip
 from caiman_asr_train.utils.responses import fuse_partials, split_batched_finals
 
 
@@ -158,7 +165,9 @@ def evaluate(
         "preds": [],
         "txts": [],
         "idx": [],
-        "timestamps": [],
+        "user_perceived_timestamps": [],
+        "final_timestamps": [],
+        "wordstamps": [],
         "token_probs": [],
         "fnames": [],
     }
@@ -212,12 +221,12 @@ def evaluate(
 
         pred, model_t, probs = split_batched_finals(responses)
 
-        responses = list(map(fuse_partials, responses))
+        responses = lmap(fuse_partials, responses)
 
         _, emit_t, _ = split_batched_finals(responses)
 
-        timestamps = list(
-            list(map(lambda y: FullStamp(*y), zip(*x))) for x in zip(model_t, emit_t)
+        timestamps = lstarmap_zip(
+            lambda *x: lstarmap_zip(FullStamp, *x), model_t, emit_t
         )
 
         # if state resets is used, merge predictions and timestamps of segments into one
@@ -230,9 +239,6 @@ def evaluate(
                 meta,
                 decoder.eos_index if args.eos_is_terminal else None,
             )
-
-        # Strip model timestamp
-        timestamps = [[user_perceived_time(t) for t in ts] for ts in timestamps]
 
         i_width = input_feat_frame_width(config.load(args.model_config))
         o_width = encoder_output_frame_width(args.model_config)
@@ -276,11 +282,33 @@ def evaluate(
         results["txts"] += raw_transcripts
 
         if timestamps:
-            # convert token timestamps to word timestamps
-            word_timestamps = group_timestamps(
-                subwords, timestamps, preds, last_emit_time
-            )
-            results["timestamps"] += word_timestamps
+            # Convert token timestamps to word timestamps
+
+            kinds = {
+                "user_perceived_timestamps": user_perceived_time,
+                "final_timestamps": model_time,
+            }
+
+            for k, f in kinds.items():
+                results[k] += group_timestamps(
+                    subwords,
+                    [lmap(f, ts) for ts in timestamps],
+                    preds,
+                    last_emit_time,
+                )
+
+            results["wordstamps"] += [
+                [
+                    frame_to_time(
+                        x,
+                        o_width,
+                        head_offset=args.latency_head_offset,
+                        tail_offset=args.latency_tail_offset,
+                    )
+                    for x in xs.seqs
+                ]
+                for xs in results["final_timestamps"]
+            ]
 
     end_time = time.time()
 
@@ -298,10 +326,10 @@ def evaluate(
 
     data = {"loss": loss, abbrev: 100.0 * wer, "took": end_time - start_time}
 
-    if "timestamps" in results:
-        eos_count = sum(count_eos(seq) for seq in results["timestamps"])
-        sil_count = sum(count_sil(seq) for seq in results["timestamps"])
-        tot_count = len(results["timestamps"])
+    if "user_perceived_timestamps" in results:
+        eos_count = sum(count_eos(seq) for seq in results["user_perceived_timestamps"])
+        sil_count = sum(count_sil(seq) for seq in results["user_perceived_timestamps"])
+        tot_count = len(results["user_perceived_timestamps"])
 
         results["eos_frac"] = eos_count / tot_count
         results["sil_frac"] = sil_count / tot_count
@@ -313,19 +341,36 @@ def evaluate(
 
     if args.calculate_emission_latency:
         if args.read_from_tar:
-            flist = None
+            # There's no sampler to read filenames from,
+            # and no sorting
+            flist = flat(
+                get_audio_filenames_from_tar(args.dataset_dir, args.val_tar_files)
+            )
         else:
-            with open(val_loader.sampler.get_file_list_path(), "r") as fh:
+            # In the JSON case, files are sorted by duration,
+            # so read from the sampler to get the matching order
+            with open(val_loader.sampler.file_list_path, "r") as fh:
                 flist = [line.strip().split(" ")[0] for line in fh.readlines()]
 
-        latency_metrics, latencies, sil_latency, eos_latency = manage_ctm_export(
+        # Measure emission and EOS latency with user perceived time
+        latency_metrics, _, latencies, sil_latency, eos_latency = manage_ctm_export(
             args,
-            results["timestamps"],
+            results["user_perceived_timestamps"],
             reference_ctms,
             flist,
         )
         results["latency_metrics"] = latency_metrics
         data.update(latency_metrics)
+
+        # Measure word timestamps with model/final timestamps
+        _, timestamp_metrics, *_ = manage_ctm_export(
+            args,
+            results["final_timestamps"],
+            reference_ctms,
+            flist,
+        )
+        results["timestamp_metrics"] = timestamp_metrics
+        data.update(timestamp_metrics)
 
         json_results = {
             "sil_frac": results["sil_frac"],
@@ -333,6 +378,7 @@ def evaluate(
             "sil_latency": sil_latency,
             "eos_latency": eos_latency,
             "latencies": latencies,
+            "latency_metrics": latency_metrics,
         }
 
         with open(

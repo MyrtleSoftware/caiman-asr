@@ -5,10 +5,11 @@ import difflib
 import os
 from argparse import Namespace
 from dataclasses import dataclass
+from statistics import mean, median
 
 import matplotlib.pyplot as plt
 from beartype import beartype
-from beartype.typing import Dict, List, Optional, Tuple
+from beartype.typing import Callable, Dict, List, Optional, Tuple
 
 from caiman_asr_train.data.text.is_tag import is_tag
 from caiman_asr_train.data.text.normalizers import lowercase_normalize as norm
@@ -22,6 +23,7 @@ BASIC_CHAR_SET = list(" abcdefghijklmnopqrstuvwxyz'")
 @dataclass
 class CTMTimestamp:
     word: str
+    beg_time: float
     end_time: float
     filename: str
 
@@ -48,6 +50,15 @@ def parse_args() -> Namespace:
         default=None,
         type=str,
         help="Absolute output path for latency vs sequence length graph",
+    )
+    parser.add_argument(
+        "--frame_width",
+        default=0.0,
+        type=float,
+        help=(
+            "The expected frame latency is computed from this and "
+            "sutracted from the emission latency statistics"
+        ),
     )
     return parser.parse_args()
 
@@ -79,7 +90,12 @@ def load_ctm(ctm_file_path: str) -> List[CTMTimestamp]:
                     )
                 filename, _, start_time, duration, word = parts[:5]
                 ctm_data.append(
-                    CTMTimestamp(word, float(start_time) + float(duration), filename)
+                    CTMTimestamp(
+                        word,
+                        float(start_time),
+                        float(start_time) + float(duration),
+                        filename,
+                    )
                 )
     except IOError as e:
         print(f"Error reading CTM file: {ctm_file_path}\n{e}")
@@ -87,13 +103,73 @@ def load_ctm(ctm_file_path: str) -> List[CTMTimestamp]:
     return ctm_data
 
 
+class _Delta:
+    def __init__(self, gt_beg, gt_end, pr_beg, pr_end):
+        # gt = ground truth
+        # pr = predicted
+        self.gt_end = gt_end
+
+        self.head_lat = pr_beg - gt_beg
+        self.tail_lat = pr_end - gt_end
+
+        self.time_gt = gt_end - gt_beg
+        self.time_pr = pr_end - pr_beg
+
+
+@beartype
+def timestamp_stats(
+    deltas: list[_Delta],
+    head_offset: float,
+    tail_offset: float,
+) -> Dict[str, float]:
+    if not deltas:
+        return {}
+
+    @beartype
+    def correct(off: float) -> Callable[[float], float]:
+        return lambda x: abs(x - off)
+
+    mean_word_gt = mean(x.time_gt for x in deltas)
+    mean_word_pr = mean(x.time_pr for x in deltas)
+
+    mean_raw_head = mean(map(correct(0.0), (x.head_lat for x in deltas)))
+    mean_raw_tail = mean(map(correct(0.0), (x.tail_lat for x in deltas)))
+    raw_AAS = (mean_raw_head + mean_raw_tail) / 2
+
+    mean_head = mean(map(correct(head_offset), (x.head_lat for x in deltas)))
+    mean_tail = mean(map(correct(tail_offset), (x.tail_lat for x in deltas)))
+    fix_AAS = (mean_head + mean_tail) / 2
+
+    optimal_head_offset = median(x.head_lat for x in deltas)
+    optimal_tail_offset = median(x.tail_lat for x in deltas)
+    c_mean_beg = mean(map(correct(optimal_head_offset), (x.head_lat for x in deltas)))
+    c_mean_end = mean(map(correct(optimal_tail_offset), (x.tail_lat for x in deltas)))
+    corrected_AAS = (c_mean_beg + c_mean_end) / 2
+
+    timestamp_stats = {
+        "mean_word_time_gt": mean_word_gt,
+        "mean_word_time_pr": mean_word_pr,
+        "optimal_head_offset": optimal_head_offset,
+        "optimal_tail_offset": optimal_tail_offset,
+        "raw_AAS": raw_AAS,
+        "fixed_AAS": fix_AAS,
+        "corrected_AAS": corrected_AAS,
+    }
+
+    return timestamp_stats
+
+
 @beartype
 def align_transcripts(
     ground_truth: List[CTMTimestamp],
     predicted: List[CTMTimestamp],
     last_emit_time: Optional[Dict[str, Termination]],
+    head_offset: float,
+    tail_offset: float,
     include_subs: bool = False,
-) -> Tuple[List[float], List[float], List[float], List[float], float, float]:
+) -> Tuple[
+    List[float], List[float], List[float], List[float], float, float, dict[str, float]
+]:
     """
     Aligns the words from ground truth and predicted transcripts and calculates the
     emission latencies.
@@ -114,10 +190,10 @@ def align_transcripts(
     for ctm_timestamp in predicted:
         predicted_dict.setdefault(ctm_timestamp.filename, []).append(ctm_timestamp)
 
-    latencies = []
-    end_times = []
     accepted = 0
     all_gt_words = 0
+
+    deltas = []
 
     eos_latency = []
     sil_latency = []
@@ -161,13 +237,15 @@ def align_transcripts(
 
             # Process according to the tag and include_subs flag
             if ok(tag, i2 - i1, j2 - j1):
-                latencies.extend(
-                    [
-                        predicted[j].end_time - ground_truth[i].end_time
-                        for i, j in zip(range(i1, i2), range(j1, j2), strict=True)
-                    ]
+                deltas.extend(
+                    _Delta(
+                        ground_truth[i].beg_time,
+                        ground_truth[i].end_time,
+                        predicted[j].beg_time,
+                        predicted[j].end_time,
+                    )
+                    for i, j in zip(range(i1, i2), range(j1, j2), strict=True)
                 )
-                end_times.extend(ground_truth[i].end_time for i in range(i1, i2))
                 accepted += j2 - j1
 
         if last_emit_time is not None:
@@ -193,6 +271,8 @@ def align_transcripts(
         end_tot += 1
         all_gt_words += len(ground_truth_words)
 
+    t_stats = timestamp_stats(deltas, head_offset=head_offset, tail_offset=tail_offset)
+
     if all_gt_words > 0:
         token_usage_rate = accepted / all_gt_words
         terminal_token_usage_rate = end_acc / end_tot
@@ -202,12 +282,13 @@ def align_transcripts(
         print_once("WARNING: No ground truth words found. Please check the CTM files.")
 
     return (
-        latencies,
-        end_times,
+        [x.tail_lat for x in deltas],
+        [x.gt_end for x in deltas],
         sil_latency,
         eos_latency,
         token_usage_rate,
         terminal_token_usage_rate,
+        t_stats,
     )
 
 
@@ -217,7 +298,11 @@ def align_ctm_files(
     model_ctm_path: str,
     last_emit_time: Optional[Dict[str, Termination]],
     include_subs: bool = False,
-) -> Tuple[List[float], List[float], List[float], List[float], float, float]:
+    head_offset: float = 0.0,
+    tail_offset: float = 0.0,
+) -> Tuple[
+    List[float], List[float], List[float], List[float], float, float, dict[str, float]
+]:
     gt_ctm = []
     for ctm in gt_ctm_paths:
         gt_ctm += load_ctm(ctm)
@@ -227,7 +312,9 @@ def align_ctm_files(
         gt_ctm,
         model_ctm,
         last_emit_time,
-        include_subs,
+        include_subs=include_subs,
+        head_offset=head_offset,
+        tail_offset=tail_offset,
     )
 
 
@@ -252,11 +339,15 @@ def plot_latency_vs_seq_len(latencies, end_times, save_path):
 
 
 def main(args: Namespace):
-    latencies, end_times, sil_latency, eos_latency, _, _ = align_ctm_files(
+    latencies, end_times, sil_latency, eos_latency, *_ = align_ctm_files(
         [args.gt_ctm], args.model_ctm, None, args.include_subs
     )
 
-    print(compute_latency_metrics(latencies, sil_latency, eos_latency))
+    print(
+        compute_latency_metrics(
+            latencies, sil_latency, eos_latency, frame_width=args.frame_width
+        )
+    )
 
     if args.output_img_path:
         assert (

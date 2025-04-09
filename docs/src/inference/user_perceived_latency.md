@@ -4,14 +4,14 @@ User-perceived latency (UPL) is defined as the time difference between the insta
 
 <!-- Numbers from the hydra weekendly -->
 
-| Model / decoding | p50 UPL | p90 UPL  | p99 UPL |
-|------------------|---------|----------|---------|
-| base / greedy    |  147 ms |  306 ms  | 460 ms  |
-| large / beam     |  158 ms |  428 ms  | 968 ms  |
+| Model / decoding | p50 UPL | p90 UPL | p99 UPL |
+| ---------------- | ------- | ------- | ------- |
+| base / greedy    | 147 ms  | 306 ms  | 460 ms  |
+| large / beam     | 158 ms  | 428 ms  | 968 ms  |
 
 UPL is the sum of the following latencies:
 
-- audio frame latency (recording device)
+- audio frame latency (recording-device/model)
 - compute latency (model)
 - network latency (network)
 - emission latency (model)
@@ -25,7 +25,7 @@ Streaming ASR systems buffer audio for a fixed duration before sending it to the
 The compute latency measures how long it takes for a model to make a prediction for one audio frame. This latency depends on the model size, accelerator backend, server load, decoding strategy, and whether state resets is turned on. The contribution of the compute latency is strictly additive. The following tables summarize 99th-percentile compute latencies (CL99) at maximum number of real-time streams for an FPGA backend and various setups.
 
 | Model | Parameters | Decoding      | CL99  | CL99 + state resets |
-|-------|------------|---------------|-------|---------------------|
+| ----- | ---------- | ------------- | ----- | ------------------- |
 | base  | 85M        | greedy        | 25 ms | 45 ms               |
 | base  | 85M        | beam, width=4 | 80 ms | 50 ms               |
 | large | 196M       | greedy        | 25 ms | 55 ms               |
@@ -41,7 +41,7 @@ The emission latency (EL) is explained in detail in this [document](../training/
 
 <!-- Numbers from the WER spread-sheet base+greedy and large+beam -->
 
-| Model  | Median EL |
-|--------|-----------|
-| base   |   107 ms  |
-| large  |    58 ms  |
+| Model | Median EL |
+| ----- | --------- |
+| base  | 107 ms    |
+| large | 58 ms     |

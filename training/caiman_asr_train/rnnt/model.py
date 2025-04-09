@@ -477,10 +477,17 @@ class RNNT(nn.Module):
         Add joint_fc keys back to loaded state dict,
         by duplicating joint_net.2 parameters.
         """
-        state_dict["joint_fc.weight"] = (
-            state_dict["joint_net.2.weight"].detach().clone()
-        )
-        state_dict["joint_fc.bias"] = state_dict["joint_net.2.bias"].detach().clone()
+
+        if "joint_net.2.weight" in state_dict:
+            state_dict["joint_fc.weight"] = (
+                state_dict["joint_net.2.weight"].detach().clone()
+            )
+
+        if "joint_net.2.bias" in state_dict:
+            state_dict["joint_fc.bias"] = (
+                state_dict["joint_net.2.bias"].detach().clone()
+            )
+
         return super().load_state_dict(state_dict, strict=strict)
 
 
