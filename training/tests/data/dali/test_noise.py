@@ -60,7 +60,7 @@ def test_short_noise():
 
     target_snr = 10
     start_ratio = np.array([0.1], dtype=np.float32)
-    with pytest.raises(ValueError):
+    with pytest.raises(AssertionError):
         _ = blend(speech, noise, target_snr, start_ratio)
     _ = duplicate_then_blend(speech, noise, target_snr, start_ratio)
 

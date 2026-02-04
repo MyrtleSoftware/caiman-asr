@@ -10,6 +10,7 @@ from caiman_asr_train.data.tokenizer import Tokenizer
 from caiman_asr_train.data.webdataset import LengthUnknownError
 from caiman_asr_train.rnnt import config
 from caiman_asr_train.setup.dali import build_dali_yaml_config
+from caiman_asr_train.utils.select_transcripts import SelectTranscript
 from caiman_asr_train.utils.user_tokens_lite import get_all_user_tokens
 
 
@@ -35,12 +36,23 @@ def generate_stats(args: Namespace):
     assert args.canary_exponent is None
 
     cfg = config.load(args.model_config)
+
+    if cfg["tokenizer"]["label_smoothing_kwargs"] is not None:
+        # Not relevant for mel stats generation
+        cfg["tokenizer"]["label_smoothing_kwargs"] = None
+
     (dataset_kw, features_kw, _, _) = config.input(cfg, "train")
     update_config_mel_stats(dataset_kw, features_kw)
-    user_symbols = list(get_all_user_tokens(cfg).values())
+    user_symbols_dict, user_symbols = get_all_user_tokens(cfg)
+
     dali_yaml_config = build_dali_yaml_config(
-        config_data=dataset_kw, config_features=features_kw, user_symbols=user_symbols
+        config_data=dataset_kw,
+        config_features=features_kw,
+        user_symbols=user_symbols,
+        user_symbols_dict=user_symbols_dict,
+        select_transcripts=SelectTranscript(cfg),
     )
+
     train_loader = build_dali_loader(
         args,
         "train",
@@ -67,7 +79,7 @@ def generate_stats(args: Namespace):
             f"({train_loader.pipeline_type} evaluation: {i:>10}/{total_loader_len}",
             end="\r",
         )
-        logmel, logmel_lens, _, _, _, _ = batch
+        logmel, logmel_lens, _, _, _, _, _ = batch
         melsum = melsum.to(logmel.device)
         melss = melss.to(logmel.device)
         meln = meln.to(logmel.device)
@@ -112,6 +124,9 @@ def update_config_mel_stats(dataset_kw, features_kw):
     # don't require transcript normalization as this would require a built
     # tokenizer instead of the TokenizerResultsIgnored object
     dataset_kw["normalize_transcripts"] = False
+
+    # Disable EOI
+    dataset_kw["append_EOI"] = False
 
 
 if __name__ == "__main__":

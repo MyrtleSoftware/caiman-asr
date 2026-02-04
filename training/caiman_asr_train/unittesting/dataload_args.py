@@ -23,6 +23,8 @@ def gen_dataload_args(test_data_dir) -> Namespace:
         dali_val_device="cpu",
         prob_background_noise=0.0,
         prob_babble_noise=0.0,
+        prob_microphone_aug=0.0,
+        prob_room_aug=0.0,
         train_tar_files=None,
         val_tar_files=None,
         read_from_tar=False,
@@ -34,6 +36,8 @@ def gen_dataload_args(test_data_dir) -> Namespace:
         output_dir=Path("/results"),
         n_utterances_only=None,
         noise_dataset=None,
+        room_dataset=None,
+        microphone_dataset=None,
         use_noise_audio_folder=False,
         noise_config=None,
         val_from_dir=False,
@@ -58,6 +62,8 @@ def gen_dataload_args(test_data_dir) -> Namespace:
         relative_train_manifest_ratios=None,
         global_batch_size=1024,
         canary_exponent=None,
+        conditional=False,
+        pnc_prob=1.0,
     )
 
 

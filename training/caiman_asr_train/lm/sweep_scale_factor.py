@@ -18,18 +18,6 @@ def update_scale_factor(yaml_path: str, scale_factor: float):
         yaml.dump(config, file)
 
 
-def check_beam_args(args):
-    if args.decoder != "beam":
-        if args.local_rank == 0:
-            print(
-                (
-                    "WARNING: The intended use of this script is to sweep across n-gram "
-                    "scale factor, which requires beam decoding. Setting --decoder to beam."
-                )
-            )
-        args.decoder = "beam"
-
-
 def main(args):
     best_scale_factor = None
     best_wer = float("inf")
@@ -75,5 +63,4 @@ if __name__ == "__main__":
             args.called_by_torchrun,
             "/workspace/training/caiman_asr_train/lm/sweep_scale_factor.py",
         )
-    check_beam_args(args)
     main(args)

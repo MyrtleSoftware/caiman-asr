@@ -35,7 +35,7 @@ class CtmItem:
             start=float(parts[2]),
             duration=float(parts[3]),
             text=parts[4],
-            confidence=float(parts[5]),
+            confidence=float(parts[5]) if len(parts) > 5 else 0.0,
         )
 
 

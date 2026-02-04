@@ -17,6 +17,10 @@ cleanup() {
 
 trap cleanup EXIT
 
+cat configs/testing-1023sp.yaml | sed 's|TRANSCRIPTS|"transcript"|' >/tmp/testing-1023sp.yaml
+
+export CONFIG_DIR=/tmp
+
 EXTRA_ARGS="--dataset_parts dev-clean" \
 	CONFIG_NAME=testing-1023sp \
 	SPM_SIZE=1023 \

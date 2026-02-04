@@ -110,22 +110,48 @@ def test_create_hardware_ckpt(
     # the window size changes depending on the model size so exclude it from comparison
     hardcp["rnnt_config"]["input_val"]["filterbank_features"].pop("window_size")
     loaded_hardcp["rnnt_config"]["input_val"]["filterbank_features"].pop("window_size")
+
+    # The tokenisers character set can evolve overt time so we don't check it
+    hardcp["rnnt_config"]["tokenizer"]["labels"] = loaded_hardcp["rnnt_config"][
+        "tokenizer"
+    ]["labels"]
+
+    # append_EOI is an optional key, if missing it is assumed False
+    if "append_EOI" in hardcp["rnnt_config"]["input_val"]:
+        hardcp["rnnt_config"]["input_val"].pop("append_EOI")
+
     try:
         assert hardcp["rnnt_config"] == loaded_hardcp["rnnt_config"]
     except AssertionError as err:
-        msg = str(err)
-        msg += f"""\nIf this check is failing, the yaml config fields don't match the
-        ones in the hardware checkpoint in {mock_args.output_ckpt}.
-        If you have added or removed a field, please note that this is liable to break
-        the downstream inference server. Many additions to the yaml configs aren't needed
-        at inference time as they are training-specific. If this applies to your case
-        you can add the field to the allow_ignore set in the relevant Schema class and
-        this test will pass unchanged.
-        If your change doesn't fall under the above exception (and it was intentional),
-        please edit the test_data hardware checkpoint in order to make this test pass
-        and then ensure that the Myrtle inference server is updated to expect your
-        change.
+        msg = f"""\n
+        If this check is failing, the yaml config fields don't match the ones
+        in the hardware checkpoint in {mock_args.output_ckpt}. If you have
+        added or removed a field, please note that this is liable to break the
+        downstream inference server. Many additions to the yaml configs aren't
+        needed at inference time as they are training-specific. If this applies
+        to your case you can add the field to the allow_ignore set in the
+        relevant Schema class and this test will pass unchanged. If your change
+        doesn't fall under the above exception (and it was intentional), please
+        edit the test_data hardware checkpoint in order to make this test pass
+        and then ensure that the Myrtle inference server is updated to expect
+        your change.
         """
+
+        # Pretty print the differences
+        in_hardcp = set(hardcp["rnnt_config"].keys())
+        in_loaded = set(loaded_hardcp["rnnt_config"].keys())
+
+        diff = in_hardcp.symmetric_difference(in_loaded)
+
+        if diff:
+            msg += f"\n\nDifferences found in rnnt_config keys: {diff}"
+        else:
+            for key in hardcp["rnnt_config"]:
+                lhs = hardcp["rnnt_config"][key]
+                rhs = loaded_hardcp["rnnt_config"][key]
+                if lhs != rhs:
+                    msg += f"\n\nMismatch in key '{key}': {lhs} != {rhs}"
+
         raise AssertionError(msg) from err
 
 

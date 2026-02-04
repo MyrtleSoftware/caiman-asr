@@ -15,12 +15,19 @@ from caiman_asr_train.latency.timestamp import (
     frame_to_time,
 )
 from caiman_asr_train.train_utils.distributed import print_once
-from caiman_asr_train.utils.frame_width import encoder_output_frame_width
+from caiman_asr_train.utils.frame_width import (
+    encoder_output_frame_width,
+    initial_padding,
+)
 
 
 @beartype
 def to_ctm(
-    seq_time: SequenceTimestamp, output_fp: str, audio_fp: str, frame_width: float
+    seq_time: SequenceTimestamp,
+    output_fp: str,
+    audio_fp: str,
+    frame_width: float,
+    initial_pad: float,
 ) -> None:
     """Appends word-level timestamps from a SequenceTimestamp object to a CTM file.
 
@@ -39,10 +46,15 @@ def to_ctm(
         The file path of the audio file corresponding to the SequenceTimestamp data.
     frame_width
         Duration of frame width in seconds.
+    initial_padding
+        Time (in seconds) padded to the beginning of the audio at inference time.
     """
     with open(output_fp, "a") as file:
         # Iterate over each word in sentence
-        for word_align in map(lambda x: frame_to_time(x, frame_width), seq_time.seqs):
+        for word_align in map(
+            lambda x: frame_to_time(x, frame_width, initial_pad=initial_pad),
+            seq_time.seqs,
+        ):
             start_time = word_align.start_time
             duration = word_align.end_time - word_align.start_time
 
@@ -58,9 +70,10 @@ def dump_ctm(
     lst_seq_time: List[SequenceTimestamp],
     ctm_fpath: str,
     frame_width: float,
+    initial_pad: float,
 ) -> Dict[str, Termination]:
     for time, sample in zip(lst_seq_time, flist, strict=True):
-        to_ctm(time, ctm_fpath, sample, frame_width)
+        to_ctm(time, ctm_fpath, sample, frame_width, initial_pad)
 
     return {fname: seq.eos for fname, seq in zip(flist, lst_seq_time, strict=True)}
 
@@ -86,10 +99,11 @@ def manage_ctm_export(
     ground truth CTM files.
 
     Returns:
-        latency_metrics: A dictionary containing latency metrics.
-        latencies: A list of emission latencies.
-        sil_latency: A list of silence latencies.
-        eos_latency: A list of end-of-sentence latencies.
+        latency_metrics: A dict containing latency metrics (broadcast to all ranks).
+        timestamp_metrics: A dict containing timestamp metrics (broadcast to all ranks).
+        latencies: A list of emission latencies (rank zero only).
+        sil_latency: A list of silence latencies (rank zero only).
+        eos_latency: A list of end-of-sentence latencies (rank zero only).
     """
     latency_metrics = {}
     timestamp_metrics = {}
@@ -97,7 +111,7 @@ def manage_ctm_export(
     sil_latency = []
     eos_latency = []
 
-    if args.num_gpus == 1 or dist.get_rank() == 0:
+    if not dist.is_initialized() or dist.get_rank() == 0:
         frame_width = encoder_output_frame_width(args.model_config)
 
         if args.read_from_tar:
@@ -113,7 +127,9 @@ def manage_ctm_export(
         with open(ctm_fpath, "w") as _:
             pass
 
-        last_emit_time = dump_ctm(flist, lst_seq_time, ctm_fpath, frame_width)
+        last_emit_time = dump_ctm(
+            flist, lst_seq_time, ctm_fpath, frame_width, initial_padding(args)
+        )
 
         (
             latencies,
@@ -144,6 +160,9 @@ def manage_ctm_export(
         latency_metrics["token_usage_rate"] = token_usage_rate
         latency_metrics["terminal_token_usage_rate"] = terminal_token_usage_rate
 
+    if dist.is_initialized():
+        dist.broadcast_object_list([latency_metrics, timestamp_metrics])
+
     return latency_metrics, timestamp_metrics, latencies, sil_latency, eos_latency
 
 
@@ -168,7 +187,9 @@ def get_reference_ctms(args: Namespace, val_multiple: bool = False) -> List[str]
         if os.path.exists(ctm_file):
             ctms_files.append(ctm_file)
         else:
-            print_once(f"WARNING: CTM file for {manifest_file} not found")
+            print_once(
+                f"WARNING: CTM file {ctm_file} not found for manifest {manifest_file}."
+            )
 
     return ctms_files
 

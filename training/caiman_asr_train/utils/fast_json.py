@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os
 from pathlib import Path
 
 import orjson
@@ -22,5 +23,8 @@ def fast_read_json_py(json_path: str | Path) -> JSONDataset:
 
 @beartype
 def fast_write_json(python_structure, json_path: str | Path) -> None:
+    # Create the directory if it does not exist
+    os.makedirs(Path(json_path).parent, exist_ok=True)
+
     with open(json_path, "wb") as f:
         f.write(orjson.dumps(python_structure, option=orjson.OPT_INDENT_2))

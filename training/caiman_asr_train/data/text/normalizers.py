@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import re
 import warnings
 
 import inflect
@@ -7,6 +8,7 @@ from text_unidecode import unidecode
 
 from caiman_asr_train.data.text.is_tag import actually_remove_tags
 from caiman_asr_train.data.text.ito import _clean_text, punctuation_map
+from caiman_asr_train.data.text.ito.cleaners import expand_punctuation
 from caiman_asr_train.data.text.ito.numbers import normalize_numbers
 from caiman_asr_train.data.text.whisper_text_normalizer import EnglishTextNormalizer
 from caiman_asr_train.setup.text_normalization import NormalizeConfig, NormalizeLevel
@@ -100,36 +102,45 @@ def select_and_normalize(
         case NormalizeLevel.IDENTITY:
             return remove_tags(replace(transcript))
         case NormalizeLevel.SCRUB:
-            return final_fixes(transcript)
+            transcript_ = transcript
         case NormalizeLevel.ASCII:
             transcript_ = unidecode(transcript)
-            return final_fixes(transcript_)
         case NormalizeLevel.DIGIT_TO_WORD:
-            transcript_ = normalize_numbers(unidecode(transcript), charset)
-            return final_fixes(transcript_)
+            transcript_ = expand_punctuation(
+                normalize_numbers(unidecode(transcript), charset), charset
+            )
         case NormalizeLevel.LOWERCASE:
             transcript_ = lowercase_normalize(
                 transcript, quiet=False, charset=charset, scrub=False
             )
-
-            if normalize_config.standardize_text:
-                transcript_ = standardize_text(transcript_)
-
-            if not transcript_:
-                warnings.warn(f"Transcript normalization for {transcript=} returned ''")
-                warnings.warn(
-                    "Either normalization failed, or the original transcript was empty"
-                )
-            return final_fixes(transcript_)
         case _:
             raise ValueError(
                 f"{NormalizeConfig.normalize_level=} is an unrecognized value "
                 "of NormalizeLevel"
             )
 
+    if normalize_config.standardize_text:
+        transcript_ = standardize_text(
+            transcript_,
+            normalize_config.preserve_case,
+            normalize_config.preserve_punctuation,
+        )
+
+    if not transcript_:
+        warnings.warn(f"Transcript normalization for {transcript=} returned ''")
+        warnings.warn(
+            "Either normalization failed, or the original transcript was empty"
+        )
+    return final_fixes(transcript_)
+
 
 @beartype
-def standardize_text(text: str) -> str:
+def standardize_text(
+    text: str,
+    preserve_case: bool = False,
+    preserve_punctuation: bool = False,
+    expand_contractions: bool = True,
+) -> str:
     """
     Standardize text. This function applies the Whisper normalization rules
     and the train-time normalizer on the text in order to minimize non-semantic
@@ -140,11 +151,43 @@ def standardize_text(text: str) -> str:
     ----------
     text
         string containing un-standardized text
+    preserve_case
+        whether to preserve case (default: False)
+    preserve_punctuation
+        whether to preserve punctuation (default: False)
+    expand_contractions
+        whether to expand contractions (default: True)
 
     Returns
     -------
     standard_text
         string containing standardized text
     """
-    standardizer = EnglishTextNormalizer()
+    standardizer = EnglishTextNormalizer(
+        preserve_case=preserve_case,
+        preserve_punctuation=preserve_punctuation,
+        expand_contractions=expand_contractions,
+    )
     return standardizer(text)
+
+
+@beartype
+def remove_user_symbols(text: str, user_symbols: list[str]) -> str:
+    """
+    Replace user symbols.
+
+    Parameters
+    ----------
+    text
+        string containing user symbols
+    user_symbols
+        list of user symbols to conceal
+
+    Returns
+    -------
+    text
+        string with all user symbols removed
+    """
+    # regex containing all user symbols
+    user_symbols_regex = "|".join(user_symbols)
+    return re.sub(re.escape(user_symbols_regex), "", text)

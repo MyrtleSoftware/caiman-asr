@@ -39,6 +39,8 @@ class DataLoaderArgs:
     final_padding_secs: float
     hugging_face_args: Optional[HuggingFaceArgs]
     dali_device: str
+    conditional: bool
+    pnc_prob: float
     tar_files: Optional[List[str]] = None
 
     @classmethod
@@ -67,10 +69,16 @@ class DataLoaderArgs:
                 use_noise_audio_folder=args.use_noise_audio_folder,
                 prob_background_noise=args.prob_background_noise,
                 prob_babble_noise=args.prob_babble_noise,
+                prob_microphone_aug=args.prob_microphone_aug,
+                microphone_dataset=args.microphone_dataset,
+                prob_room_aug=args.prob_room_aug,
+                room_dataset=args.room_dataset,
             )
             hugging_face_args = None
             dali_device = args.dali_train_device
             final_padding_secs = 0.0
+            conditional = args.conditional
+            pnc_prob = args.pnc_prob
 
         else:
             grad_accumulation_batches = 1
@@ -85,6 +93,10 @@ class DataLoaderArgs:
                 use_noise_audio_folder=False,
                 prob_background_noise=0.0,
                 prob_babble_noise=0.0,
+                prob_microphone_aug=0.0,
+                microphone_dataset=None,
+                prob_room_aug=0.0,
+                room_dataset=None,
             )
             hugging_face_args = build_hugging_face_args(
                 use_hugging_face=args.use_hugging_face,
@@ -95,6 +107,8 @@ class DataLoaderArgs:
             )
             dali_device = args.dali_val_device
             final_padding_secs = args.val_final_padding_secs
+            conditional = False
+            pnc_prob = 1.0
 
         return cls(
             noise_augmentation_args=noise_augmentation_args,
@@ -107,6 +121,8 @@ class DataLoaderArgs:
             hugging_face_args=hugging_face_args,
             dali_device=dali_device,
             final_padding_secs=final_padding_secs,
+            conditional=conditional,
+            pnc_prob=pnc_prob,
         )
 
 
@@ -199,4 +215,6 @@ def build_dali_loader(
         noise_augmentation_args=dataload_args.noise_augmentation_args,
         data_source=data_source,
         hugging_face_args=dataload_args.hugging_face_args,
+        conditional=dataload_args.conditional,
+        pnc_prob=dataload_args.pnc_prob,
     )

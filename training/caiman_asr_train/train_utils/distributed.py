@@ -1,3 +1,6 @@
+import os
+import shutil
+from pathlib import Path
 from time import strftime
 
 import torch.distributed as dist
@@ -53,3 +56,58 @@ def scoped_time_once(what: str):
         return wrapper
 
     return decorator
+
+
+def barrier_if_init():
+    """
+    Calls torch.distributed.barrier() if torch.distributed is initialized.
+    """
+    if dist.is_initialized():
+        dist.barrier()
+
+
+@beartype
+def maybe_cached(
+    populate: Callable[[str | Path], None],
+    cache_dir: str | Path,
+):
+    """
+    A multi-GPU safe cache retrieval function.
+
+    Rank 0 will execute `populate(cache_dir)` if `cache_dir` did not exist.
+    `populate` is expected to create and populate `cache_dir`
+
+    Args:
+        cache_dir: Cache directory, if this exists it is assumed that the cache is valid.
+        populate: A function that populates the cache directory.
+    """
+
+    if os.path.exists(cache_dir):
+        print_once(f"Cache-hit@{cache_dir}")
+        return
+
+    print_once(f"Cache-miss@{cache_dir}")
+
+    # Wait for everyone to observe the cache miss.
+    barrier_if_init()
+
+    if not dist.is_initialized() or dist.get_rank() == 0:
+        try:
+            populate(cache_dir)
+
+            if not os.path.exists(cache_dir):
+                raise Exception(
+                    f"Cache directory `{cache_dir}` was not created by populate"
+                )
+
+        except Exception:
+            # Clean up if populate fails.
+            if os.path.exists(cache_dir):
+                shutil.rmtree(cache_dir)
+            raise
+        finally:
+            # Never miss the barrier.
+            barrier_if_init()
+    else:
+        # Wait for cache to be populated.
+        barrier_if_init()

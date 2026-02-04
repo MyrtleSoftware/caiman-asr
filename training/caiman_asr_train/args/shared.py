@@ -28,7 +28,7 @@ def add_shared_args(parser: ArgumentParser) -> None:
     parser.add_argument(
         "--val_final_padding_secs",
         type=float,
-        default=0.24,
+        default=0.0,
         help="Validation audio will be padded at the end with this much silence",
     )
     parser.add_argument(
@@ -135,8 +135,10 @@ def add_shared_args(parser: ArgumentParser) -> None:
     add_mel_feat_norm_args(parser)
     add_basic_hugging_face_args(parser)
     add_wer_analysis_args(parser)
+    add_per_args(parser)
     add_decoder_args(parser)
     add_eos_shared_args(parser)
+    add_prefix_args(parser)
 
 
 @beartype
@@ -158,6 +160,31 @@ def add_wer_analysis_args(parser: ArgumentParser) -> None:
 
 
 @beartype
+def add_per_args(parser: ArgumentParser) -> None:
+    per_args = parser.add_argument_group("PER analysis")
+    per_args.add_argument(
+        "--punctuation_marks",
+        type=list,
+        default=[",", ".", "?"],
+        help="List of punctuation marks to consider for PER analysis",
+    )
+    per_args.add_argument(
+        "--punctuation_normalization",
+        type=bool,
+        default=True,
+        help="""Whether to normalize punctuation marks.
+        When the punctuation error rate is calculated, the following
+        punctuation marks are considered equivalent:
+
+         `;` -> `,` semi-colon to comma
+         `:` -> `.` colon to period
+         `!` -> `.` exclamation mark to period
+         `-` -> ` ` hyphen to space
+        """,
+    )
+
+
+@beartype
 def add_state_reset_args(parser: ArgumentParser) -> None:
     sr_args = parser.add_argument_group("State Reset setup")
     sr_args.add_argument(
@@ -172,6 +199,19 @@ def add_state_reset_args(parser: ArgumentParser) -> None:
         default=3.0,
         help="State resets overlapping duration in seconds. Used only when segment "
         "duration is set.",
+    )
+
+
+@beartype
+def add_prefix_args(parser: ArgumentParser) -> None:
+    prefix_args = parser.add_argument_group("Prefix Configuration")
+    prefix_args.add_argument(
+        "--prefix",
+        type=str,
+        choices=["pnc", "nopnc"],
+        default=None,
+        help="Prefix for inference/decoding. Choices: 'pnc' (<pnc>), 'nopnc' (<nopnc>). "
+        "If not specified, no prefix is used.",
     )
 
 
@@ -224,8 +264,10 @@ def check_shared_args(args: Namespace) -> None:
             "Cannot calculate emission latency for beam search if --beam_no_partials is set"
         )
 
-    if args.keyword_boost_path is not None:
-        assert args.decoder == "beam", "Only the beam decoder supports keyword boosting"
+    if args.boost_keywords:
+        assert (
+            args.keywords_path is not None
+        ), "Must provide --keywords_path when --boost_keywords is set"
 
     check_mel_feat_norm_args(args)
 

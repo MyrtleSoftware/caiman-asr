@@ -14,7 +14,7 @@ def get_user_token(
     provided, return the index of the token in the tokenizer's vocab.
     """
 
-    all_toks = get_all_user_tokens(config)
+    all_toks, _ = get_all_user_tokens(config)
 
     if tok not in all_toks:
         return None

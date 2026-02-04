@@ -20,7 +20,7 @@ where:
 
 - **Throughput (s/s)** is the number of seconds of audio trained on per second (higher is better).
 - **Throughput (utt/s)** is the number of samples/utterances seen per second during training (higher is better). **NOTE:** This metric is deprecated and will be removed in a future update, it is provided here for comparison.
-- **No. of updates** is the number of optimiser steps taken at `--global_batch_size=1024`. You may need fewer/more steps depending on your dataset size.
+- **No. of updates** is the number of optimiser steps at `--global_batch_size=1024` that are required to train the models on the 13k hrs training dataset. You may need fewer steps when training with less data
 - **`grad_accumulation_batches`** is the number of gradient accumulation steps performed on each GPU before taking an optimizer step
 - **`batch_split_factor`** is the number of sub-batches that the `PER_GPU_BATCH_SIZE` is split into before these sub-batches are passed through the joint network and loss.
 - Times appended with a '\*' are estimates from throughput scaling and extrapolation.

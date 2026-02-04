@@ -40,11 +40,17 @@ Termination: TypeAlias = Union[Silence, Never, EOS]
 @beartype
 @dataclass
 class PerWordTimestamp:
-    """Word and corresponding model timestamps."""
+    """
+    Word and corresponding model timestamps.
+
+    The start and end frame are inclusive i.e. if a word is a single token then
+    `start_frame == end_frame`.
+
+    """
 
     word: str
-    start_frame: int
-    end_frame: int
+    start_frame: int  # inclusive
+    end_frame: int  # also inclusive
 
 
 @beartype
@@ -59,32 +65,42 @@ class WordTimestamps:
 def frame_to_time(
     stamp: PerWordTimestamp,
     frame_width: float,
+    initial_pad: float,
     head_offset: float = 0,
     tail_offset: float = 0,
 ) -> WordTimestamps:
     """
     Convert frame timestamps to time timestamps.
     """
-    # The user gets frame n after (n + 1) * frame_width of waiting for
-    # input however the word starts one frame_width earlier.
-    start_time = stamp.start_frame * frame_width
 
-    # The duration needs a +1 for the same reason as above.
-    duration = (stamp.end_frame - stamp.start_frame + 1) * frame_width
+    assert initial_pad < frame_width, "Assumptions invalid"
+
+    # The user gets frame `n` after `(n + 1) * frame_width - initial_pad` of
+    # input however the word starts one frame width earlier, the first frame
+    # is `frame_width - initial_pad` long and the following are all `frame_width`
+    if stamp.start_frame == 0:
+        start_time = 0.0
+    else:
+        start_time = stamp.start_frame * frame_width - initial_pad
+
+    # The end_time needs a +1 for the same reason as above.
+    end_time = (stamp.end_frame + 1) * frame_width - initial_pad
 
     # This results in the correct word end point as follows:
     #
-    # User receives frame 0 containing "<blank>" 60ms after start of recording.
-    # Uses receives frame 1 containing "<blank>" 120ms after start of recording.
-    # User receives frame 2 containing "cat" 180ms after start of recording.
+    # User receives frame 0 containing "<blank>" 60ms - 15ms after start of recording.
+    # Uses receives frame 1 containing "<blank>" 120ms - 15ms after start of recording.
+    # User receives frame 2 containing "cat" 180ms - 15ms after start of recording.
     #
-    # Hence start of cat = 2 * 60 = 120ms
-    # End of cat (i.e model outputs cat) = start + duration = 180ms
+    # Hence:
+    #   Start of cat = 2 * 60 - 15 = 120ms - 15ms
+    #   End of cat (i.e model outputs cat) = 3 * 60 - 15 = 180ms - 15ms
+    #   Duration of cat = 180ms - 120ms = 60ms
 
     return WordTimestamps(
         word=stamp.word,
-        start_time=start_time - head_offset,
-        end_time=start_time + duration - tail_offset,
+        start_time=max(0.0, start_time - head_offset),
+        end_time=max(0.0, end_time - tail_offset),
     )
 
 

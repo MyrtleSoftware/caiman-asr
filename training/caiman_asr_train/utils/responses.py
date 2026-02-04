@@ -12,25 +12,31 @@ from caiman_asr_train.utils.iter import flat, repeat_like
 @beartype
 def split_finals(
     responses: Dict[int, FrameResponses],
-) -> Tuple[List[int], List[int], List[float]]:
+) -> Tuple[List[int], List[int], List[int], List[float]]:
     """
     Convert a response to flat lists of y_seqs, timesteps and probabilities.
     """
-    finals = [x.final for x in responses.values() if x.final]
+    finals = {k: v.final for k, v in responses.items() if v.final}
 
-    y_seqs = flat((final.alternatives[0].y_seq for final in finals))
-    timesteps = flat(final.alternatives[0].timesteps for final in finals)
-    probs = flat(final.alternatives[0].confidence for final in finals)
+    y_seqs = flat((final.alternatives[0].y_seq for final in finals.values()))
+    timesteps = flat(final.alternatives[0].timesteps for final in finals.values())
+    final_timesteps = flat(
+        (k for _ in final.alternatives[0].timesteps) for k, final in finals.items()
+    )
+    probs = flat(final.alternatives[0].confidence for final in finals.values())
 
-    return y_seqs, timesteps, probs
+    return y_seqs, timesteps, final_timesteps, probs
 
 
 @beartype
 def split_batched_finals(
     responses: List[Dict[int, FrameResponses]],
-) -> Tuple[List[List[int]], List[List[int]], List[List[float]]]:
+) -> Tuple[List[List[int]], List[List[int]], List[List[int]], List[List[float]]]:
     """
     Apply split_finals to a batch of responses.
+
+    This returns batched lists of y_seqs, timesteps, final_timesteps and probabilities.
+    All of these quantities are computed from the finals.
     """
     return tuple(map(list, zip(*[split_finals(r) for r in responses])))
 

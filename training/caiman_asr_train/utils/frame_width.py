@@ -1,11 +1,28 @@
 #! /usr/bin/env python3
 
+from argparse import Namespace
+
 from beartype import beartype
 
 from caiman_asr_train.rnnt import config
 
 
 @beartype
+def initial_padding(args: Namespace) -> float:
+    if args.turn_off_initial_padding:
+        return 0.0
+
+    conf = config.load(args.model_config)
+
+    window_size = conf["input_train"]["filterbank_features"]["window_size"]
+    window_stride = conf["input_train"]["filterbank_features"]["window_stride"]
+
+    assert window_size == conf["input_val"]["filterbank_features"]["window_size"]
+    assert window_stride == conf["input_val"]["filterbank_features"]["window_stride"]
+
+    return window_size - window_stride
+
+
 def encoder_output_frame_width(model_config_path: str) -> float:
     """Calculates the effective frame width in seconds from model config.
 

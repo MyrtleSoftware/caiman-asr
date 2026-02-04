@@ -50,6 +50,18 @@ def add_val_multiple_args_in_place(parser: ArgumentParser) -> None:
         default=None,
     )
     val_multiple.add_argument(
+        "--all_keywords_paths",
+        help=(
+            "A list of the keyword boost paths for each dataset, "
+            "overriding `--keywords_path`. "
+            "Must be the same length as '--all_dataset_dirs'. "
+            "If unset, all datasets will default to `--keywords_path`."
+        ),
+        nargs="+",
+        type=str,
+        default=None,
+    )
+    val_multiple.add_argument(
         "--overwrite_ok",
         action="store_true",
         default=False,
@@ -74,6 +86,13 @@ def check_val_multiple_args(args: Namespace):
     ):
         raise ValueError(
             f"'--custom_batch_sizes'={args.custom_batch_sizes} and "
+            f"'--all_dataset_dirs'={args.all_dataset_dirs} must be the same length"
+        )
+    if args.all_keywords_paths is not None and len(args.all_keywords_paths) != len(
+        args.all_dataset_dirs
+    ):
+        raise ValueError(
+            f"'--all_keywords_paths'={args.all_keywords_paths} and "
             f"'--all_dataset_dirs'={args.all_dataset_dirs} must be the same length"
         )
 
@@ -107,8 +126,15 @@ def validate_multiple(args: Namespace):
         if args.custom_batch_sizes is None
         else args.custom_batch_sizes
     )
+    all_keywords_paths = (
+        [args.keywords_path] * len(args.all_dataset_dirs)
+        if args.all_keywords_paths is None
+        else args.all_keywords_paths
+    )
 
-    def _inner(manifest, dataset_dir, batch_size, skip_init) -> ErrorRate:
+    def _inner(
+        manifest, dataset_dir, batch_size, keywords_path, skip_init
+    ) -> ErrorRate:
         """
         Pythons tightest scope is a function
         """
@@ -123,6 +149,7 @@ def validate_multiple(args: Namespace):
         val_args.val_batch_size = batch_size
         val_args.output_dir = str(output_dir)
         val_args.skip_init = skip_init
+        val_args.keywords_path = keywords_path
 
         val_objects = setup_class().run(val_args)
         model_results = validate(val_args, val_objects=val_objects)
@@ -133,10 +160,14 @@ def validate_multiple(args: Namespace):
 
         return val_objects.error_rate
 
-    for manifest, dataset_dir, batch_size in zip(
-        args.all_val_manifests, args.all_dataset_dirs, all_batch_sizes, strict=True
+    for manifest, dataset_dir, batch_size, keywords_path in zip(
+        args.all_val_manifests,
+        args.all_dataset_dirs,
+        all_batch_sizes,
+        all_keywords_paths,
+        strict=True,
     ):
-        error_rate = _inner(manifest, dataset_dir, batch_size, skip_init)
+        error_rate = _inner(manifest, dataset_dir, batch_size, keywords_path, skip_init)
 
         # Only initialise logging once
         skip_init = True
@@ -154,7 +185,10 @@ def validate_multiple(args: Namespace):
         "sil_frac",
         "rem_frac",
         "latency_metrics",
+        "final_latency_metrics",
         "timestamp_metrics",
+        "per",
+        "keyword_metrics",
     ]
 
     out_json = {
@@ -211,6 +245,9 @@ def write_csv(abbrev, results_csv_fp, all_results):
     def to_row_from_timestamp(key: str):
         return to_row(key, from_nest("timestamp_metrics", key))
 
+    def to_row_from_keyword(key: str):
+        return to_row(key, from_nest("keyword_metrics", key))
+
     with open(results_csv_fp, "w", newline="") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=["Metric", *all_results.keys()])
 
@@ -232,6 +269,14 @@ def write_csv(abbrev, results_csv_fp, all_results):
         writer.writerow(to_row_from_timestamp("corrected_AAS"))
         writer.writerow(to_row_from_timestamp("optimal_head_offset"))
         writer.writerow(to_row_from_timestamp("optimal_tail_offset"))
+
+        writer.writerow(to_row("per", lambda x: x["per"]))
+
+        writer.writerow(to_row_from_keyword("b_wer"))
+        writer.writerow(to_row_from_keyword("u_wer"))
+        writer.writerow(to_row_from_keyword("precision"))
+        writer.writerow(to_row_from_keyword("recall"))
+        writer.writerow(to_row_from_keyword("f1"))
 
 
 if __name__ == "__main__":

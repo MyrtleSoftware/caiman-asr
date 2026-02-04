@@ -73,7 +73,14 @@ def model_loss_forward_train(
 ) -> Tuple[torch.Tensor, Optional[RNNTState]]:
     """ """
     loss, new_rnnt_state = model_loss_forward(
-        model, loss_fn, feats, feat_lens, txt, txt_lens, rnnt_state, loss_mods
+        model=model,
+        loss_fn=loss_fn,
+        feats=feats,
+        feat_lens=feat_lens,
+        txt=txt,
+        txt_lens=txt_lens,
+        rnnt_state=rnnt_state,
+        loss_mods=loss_mods,
     )
     loss /= args.grad_accumulation_batches
     return loss, new_rnnt_state

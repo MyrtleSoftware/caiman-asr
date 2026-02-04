@@ -89,6 +89,33 @@ This step takes generated trans files, aggregates them to a single `librispeech-
 
 Results will also be saved in `~/.cache/myrtle/benchmark/results/[append_results].csv`.
 
+### Prefix (punctuation/casing)
+
+Use `--prefix` to condition the RNN-T prediction network:
+
+- `<pnc>`: punctuated and cased output
+- `<nopnc>`: lowercase only (slightly more accurate)
+
+For example,
+
+```bash
+./transcribe_caiman.py --address <ADDRESS> --port <PORT> --run_name <unique name> --append_results caiman-base --prefix="<pnc>"
+```
+
+Note: ensure the server is running a model that supports `prefix`.
+
+### Keyword Boosting
+
+CAIMAN-ASR supports keyword boosting of up to 100 keywords.
+Keyword boosting is a technique to improve the recognition of domain-specific words/phrases and proper nouns,
+by boosting the probability of specific tokens at inference time.
+
+To provide keywords to the server, use the `--keywords` argument with a space-separated list of keywords e.g.
+
+```bash
+./transcribe_caiman.py --keywords caiman asr myrtle
+```
+
 ### List of arguments
 
 The arguments for `transcribe_caiman` are as follows:
@@ -105,4 +132,6 @@ The arguments for `transcribe_caiman` are as follows:
   Individual transcription files will be saved to `$HOME/.cache/myrtle/benchmark/<run name>`.
 --append_results <STRING_VALUE>: Results will be appended to `~/.cache/myrtle/benchmark/results/[append_results].csv`
   Must be one of caiman-base, caiman-large.
+--prefix <STRING_VALUE>: Prefix to condition RNN-T prediction network: "<pnc>" or "<nopnc>".
+--keywords <STRING_VALUE>: Space-separated list of keywords to be boosted.
 ```

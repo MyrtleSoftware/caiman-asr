@@ -15,6 +15,7 @@
 
 import json
 import time
+from argparse import Namespace
 
 import torch
 from beartype import beartype
@@ -23,17 +24,23 @@ from beartype.typing import Any, Dict
 from caiman_asr_train.data.webdataset import LengthUnknownError
 from caiman_asr_train.evaluate.distributed import process_evaluation_epoch
 from caiman_asr_train.evaluate.error_rates import ErrorRate, error_rate_abbrev
-from caiman_asr_train.evaluate.metrics import word_error_rate
+from caiman_asr_train.evaluate.metrics import (
+    compute_keyword_metrics,
+    punctuation_error_rate,
+    word_error_rate,
+)
 from caiman_asr_train.evaluate.state_resets import (
     state_resets_merge_batched_segments,
     state_resets_reshape_batched_feats,
 )
 from caiman_asr_train.evaluate.state_resets.timestamp import (
     FullStamp,
+    final_time,
     model_time,
     user_perceived_time,
 )
 from caiman_asr_train.evaluate.trim import EOSTrimConfig, trim_predictions
+from caiman_asr_train.keywords.process import return_list_of_keywords
 from caiman_asr_train.latency.ctm import (
     get_audio_filenames_from_tar,
     get_reference_ctms,
@@ -52,6 +59,7 @@ from caiman_asr_train.rnnt.model_forward import model_loss_forward_val
 from caiman_asr_train.train_utils.distributed import get_rank_or_zero
 from caiman_asr_train.utils.frame_width import (
     encoder_output_frame_width,
+    initial_padding,
     input_feat_frame_width,
 )
 from caiman_asr_train.utils.iter import flat, lmap, lstarmap_zip
@@ -107,7 +115,7 @@ def gather_predictions(predictions_list, detokenize):
     return [prediction for batch in rnnt_predictions for prediction in batch]
 
 
-def gather_transcripts(transcript_list, transcript_len_list, detokenize):
+def gather_transcripts(transcript_list, transcript_len_list, detokenize) -> list:
     return [
         detokenize(t[:l].long().cpu().numpy().tolist())
         for txt, lens in zip(transcript_list, transcript_len_list)
@@ -127,6 +135,43 @@ def calculate_wer(preds, tgt, tgt_lens, detokenize, standardize_wer, error_rate)
         hypotheses, references, error_rate, standardize=standardize_wer
     )
     return wer, hypotheses[0], references[0]
+
+
+@beartype
+def calculate_per(
+    preds, tgt, tgt_lens, detokenize, punctuation_marks, punctuation_normalization
+) -> float:
+    """
+    Calculates PER
+
+    Parameters
+    ----------
+    preds
+        model predictions tensor
+    tgt
+        target tensor
+    tgt_lens
+        target lengths
+    detokenize
+        detokenization function
+    punctuation_marks
+        punctuation marks that the PER will be calculated on
+    punctuation_normalization
+        punctuation normalization rules for the PER calculation
+
+    Returns
+    -------
+    per: Punctuation Error Rate
+
+    """
+    with torch.no_grad():
+        references = gather_transcripts([tgt], [tgt_lens], detokenize)
+        hypotheses = __rnnt_decoder_predictions_tensor(preds, detokenize)
+
+    per, _ = punctuation_error_rate(
+        hypotheses, references, punctuation_marks, punctuation_normalization
+    )
+    return per
 
 
 @beartype
@@ -166,7 +211,8 @@ def evaluate(
         "txts": [],
         "idx": [],
         "user_perceived_timestamps": [],
-        "final_timestamps": [],
+        "model_timestamps": [],
+        "finals_timestamps": [],
         "wordstamps": [],
         "token_probs": [],
         "fnames": [],
@@ -193,7 +239,7 @@ def evaluate(
         # note : these variable names are a bit misleading : 'audio' is already features
         # txt is      (batch, max(txt_lens))
         # txt_lens is (batch, )
-        audio, audio_lens, txt, txt_lens, raw_transcripts, fnames = batch
+        audio, audio_lens, txt, txt_lens, raw_transcripts, fnames, _ = batch
 
         # move tensors back to gpu, unless cpu is used during validation
         if args.dali_val_device == "cpu" and not using_cpu:
@@ -203,7 +249,7 @@ def evaluate(
             txt_lens = txt_lens.cuda()
 
         # now do frame stacking
-        feats, feat_lens = val_feat_proc([audio, audio_lens])
+        feats, feat_lens, _, _ = val_feat_proc([audio, audio_lens, 0, 0])
 
         if calculate_loss:
             loss = model_loss_forward_val(
@@ -211,56 +257,14 @@ def evaluate(
             )
             results["losses"] += gather_losses([loss.cpu()])
 
-        # if state resets is on, prepare the feats
-        if args.sr_segment:
-            (feats, feat_lens, meta) = state_resets_reshape_batched_feats(
-                args.sr_segment, args.sr_overlap, cfg, feats, feat_lens
-            )
-
-        responses = decoder.decode(feats, feat_lens)
-
-        pred, model_t, probs = split_batched_finals(responses)
-
-        responses = lmap(fuse_partials, responses)
-
-        _, emit_t, _ = split_batched_finals(responses)
-
-        timestamps = lstarmap_zip(
-            lambda *x: lstarmap_zip(FullStamp, *x), model_t, emit_t
-        )
-
-        # if state resets is used, merge predictions and timestamps of segments into one
-        if args.sr_segment:
-            pred, timestamps, probs = state_resets_merge_batched_segments(
-                pred,
-                timestamps,
-                probs,
-                enc_time_reduction,
-                meta,
-                decoder.eos_index if args.eos_is_terminal else None,
-            )
-
-        i_width = input_feat_frame_width(config.load(args.model_config))
-        o_width = encoder_output_frame_width(args.model_config)
-
-        if (eos_idx := decoder.eos_index) is None:
-            eos_info = None
-        else:
-            eos_info = EOSTrimConfig(
-                eos_idx=eos_idx,
-                eos_is_terminal=args.eos_is_terminal,
-                blank_idx=decoder.blank_idx,
-            )
-
-        pred, timestamps, probs, last_emit_time = trim_predictions(
-            pred,
-            timestamps,
-            probs,
-            i_width,
-            o_width,
+        pred, timestamps, probs, last_emit_time, o_width = run_rnnt_decoding(
+            feats,
             feat_lens,
-            eos_vad_threshold=args.eos_vad_threshold,
-            eos_info=eos_info,
+            decoder,
+            cfg,
+            args,
+            enc_time_reduction,
+            detokenize=detokenize,
         )
 
         # For each predicted sentence, detokenize token into subword
@@ -286,7 +290,8 @@ def evaluate(
 
             kinds = {
                 "user_perceived_timestamps": user_perceived_time,
-                "final_timestamps": model_time,
+                "model_timestamps": model_time,
+                "finals_timestamps": final_time,
             }
 
             for k, f in kinds.items():
@@ -297,34 +302,50 @@ def evaluate(
                     last_emit_time,
                 )
 
+            initial_pad = initial_padding(args)
+
             results["wordstamps"] += [
                 [
                     frame_to_time(
                         x,
                         o_width,
+                        initial_pad=initial_pad,
                         head_offset=args.latency_head_offset,
                         tail_offset=args.latency_tail_offset,
                     )
                     for x in xs.seqs
                 ]
-                for xs in results["final_timestamps"]
+                for xs in results["model_timestamps"]
             ]
 
     end_time = time.time()
 
-    wer, loss = process_evaluation_epoch(
+    wer, per, loss = process_evaluation_epoch(
         results,
         standardize_wer=standardize_wer,
         breakdown_wer=args.breakdown_wer,
         breakdown_chars=args.breakdown_chars,
         error_rate=error_rate,
+        punctuation_marks=args.punctuation_marks,
+        punctuation_normalization=args.punctuation_normalization,
     )
 
     abbrev = error_rate_abbrev(error_rate)
 
     results[abbrev] = wer
+    results["per"] = per
 
     data = {"loss": loss, abbrev: 100.0 * wer, "took": end_time - start_time}
+
+    if args.keywords_path:
+        keywords = return_list_of_keywords(args.keywords_path)
+
+        if get_rank_or_zero() == 0:
+            keyword_metrics = compute_keyword_metrics(
+                results["preds"], results["txts"], keywords, standardize_wer
+            )
+            results["keyword_metrics"] = keyword_metrics
+            data.update(keyword_metrics)
 
     if "user_perceived_timestamps" in results:
         eos_count = sum(count_eos(seq) for seq in results["user_perceived_timestamps"])
@@ -347,10 +368,7 @@ def evaluate(
                 get_audio_filenames_from_tar(args.dataset_dir, args.val_tar_files)
             )
         else:
-            # In the JSON case, files are sorted by duration,
-            # so read from the sampler to get the matching order
-            with open(val_loader.sampler.file_list_path, "r") as fh:
-                flist = [line.strip().split(" ")[0] for line in fh.readlines()]
+            flist = results["fnames"]
 
         # Measure emission and EOS latency with user perceived time
         latency_metrics, _, latencies, sil_latency, eos_latency = manage_ctm_export(
@@ -362,30 +380,42 @@ def evaluate(
         results["latency_metrics"] = latency_metrics
         data.update(latency_metrics)
 
-        # Measure word timestamps with model/final timestamps
+        # Measure word timestamps with model timestamps
         _, timestamp_metrics, *_ = manage_ctm_export(
             args,
-            results["final_timestamps"],
+            results["model_timestamps"],
             reference_ctms,
             flist,
         )
         results["timestamp_metrics"] = timestamp_metrics
         data.update(timestamp_metrics)
 
-        json_results = {
+        # Measure emission with finals timestamps
+        final_latency_metrics, _, final_latencies, _, _ = manage_ctm_export(
+            args,
+            results["finals_timestamps"],
+            reference_ctms,
+            flist,
+        )
+        results["final_latency_metrics"] = {
+            f"final_{k}": v for k, v in final_latency_metrics.items()
+        }
+
+        dump_json = {
             "sil_frac": results["sil_frac"],
             "eos_frac": results["eos_frac"],
+            "latency_metrics": latency_metrics,
+            "final_latency_metrics": final_latency_metrics,
             "sil_latency": sil_latency,
             "eos_latency": eos_latency,
             "latencies": latencies,
-            "latency_metrics": latency_metrics,
+            "final_latencies": final_latencies,
         }
 
-        with open(
-            f"{args.output_dir}/latencies{get_rank_or_zero()}_{args.timestamp}_{step}.json",
-            "w",
-        ) as f:
-            json.dump(json_results, f, indent=2, ensure_ascii=False)
+        # Only process 0 has the full set of latencies,
+        if get_rank_or_zero() == 0:
+            with open(f"{args.output_dir}/lats_{args.timestamp}_{step}.json", "w") as f:
+                json.dump(dump_json, f, indent=2, ensure_ascii=False)
 
     if not skip_logging:
         log((epoch,), step, "dev_ema", data)
@@ -397,6 +427,9 @@ def evaluate(
             error_rate_abbrev(error_rate): word_error_rate(
                 [hyp], [ref], error_rate, standardize_wer
             )[0],
+            "per": punctuation_error_rate(
+                [hyp], [ref], args.punctuation_marks, args.punctuation_normalization
+            )[0],
             "fname": fname,
         }
         for hyp, ref, fname in zip(
@@ -404,10 +437,81 @@ def evaluate(
         )
     ]
 
-    with open(
-        f"{args.output_dir}/preds{get_rank_or_zero()}_{args.timestamp}_{step}.json", "w"
-    ) as f:
-        json.dump(json_results, f, indent=2, ensure_ascii=False)
+    if get_rank_or_zero() == 0:
+        with open(f"{args.output_dir}/preds_{args.timestamp}_{step}.json", "w") as f:
+            json.dump(json_results, f, indent=2, ensure_ascii=False)
 
     ema_model.train()
     return results
+
+
+@torch.no_grad()
+@beartype
+def run_rnnt_decoding(
+    feats: torch.Tensor | str,
+    feat_lens: torch.Tensor,
+    decoder,
+    cfg: dict | None,
+    args: Namespace,
+    enc_time_reduction: int | float,
+    detokenize,
+):
+    """
+    Run core RNN-T decoding pipeline.
+    """
+    # If state resets is on, prepare the feats
+    if args.sr_segment:
+        (feats, feat_lens, meta) = state_resets_reshape_batched_feats(
+            args.sr_segment, args.sr_overlap, cfg, feats, feat_lens
+        )
+
+    responses = decoder.decode(feats, feat_lens)
+
+    # All of these are as-reported by the finals
+    pred, model_t, final_t, probs = split_batched_finals(responses)
+
+    # Makes timestamps optimistic on partials
+    responses = lmap(fuse_partials, responses)
+    # We can guarantee (emit, model) <= final
+    _, emit_t, _, _ = split_batched_finals(responses)
+
+    timestamps = lstarmap_zip(
+        lambda *x: lstarmap_zip(FullStamp, *x), model_t, emit_t, final_t
+    )
+
+    # If state resets is used, merge predictions and timestamps of segments into one
+    if args.sr_segment:
+        pred, timestamps, probs = state_resets_merge_batched_segments(
+            pred,
+            timestamps,
+            probs,
+            enc_time_reduction,
+            meta,
+            decoder.eos_index if args.eos_is_terminal else None,
+            detokenize=detokenize,
+        )
+
+    i_width = input_feat_frame_width(config.load(args.model_config))
+    o_width = encoder_output_frame_width(args.model_config)
+
+    if (eos_idx := decoder.eos_index) is None:
+        eos_info = None
+    else:
+        eos_info = EOSTrimConfig(
+            eos_idx=eos_idx,
+            eos_is_terminal=args.eos_is_terminal,
+            blank_idx=decoder.blank_idx,
+        )
+
+    pred, timestamps, probs, last_emit_time = trim_predictions(
+        pred,
+        timestamps,
+        probs,
+        i_width,
+        o_width,
+        initial_pad=initial_padding(args),
+        feat_lens=feat_lens,
+        eos_vad_threshold=args.eos_vad_threshold,
+        eos_info=eos_info,
+    )
+    return pred, timestamps, probs, last_emit_time, o_width

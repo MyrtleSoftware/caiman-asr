@@ -15,6 +15,7 @@ from caiman_asr_train.rnnt.config import get_tokenizer_conf, grad_noise_schedule
                 "sentpiece_model": "foo",
                 "sampling": 0.0,
                 "unk_handling": UnkHandling.FAIL,
+                "label_smoothing_kwargs": None,
             },
         )
     ],

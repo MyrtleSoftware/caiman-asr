@@ -1,0 +1,10 @@
+the
+quick
+brown
+fox
+jumps
+over
+lazy
+hazy
+dog
+dof

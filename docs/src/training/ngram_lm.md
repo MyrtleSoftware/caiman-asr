@@ -1,9 +1,9 @@
 # N-gram Language Model
 
 An external language model can improve ASR accuracy, especially in out-of-domain contexts with rare or specialised vocabulary.
-CAIMAN-ASR supports the use of [KenLM](https://github.com/kpu/kenlm) n-gram language model shallow fusion corrections when using `--decoder=beam`.
+CAIMAN-ASR supports the use of [KenLM](https://github.com/kpu/kenlm) n-gram language model shallow fusion corrections.
 We have seen a consistent WER improvement even when the N-gram is trained on ASR data transcripts.
-As such we automatically generate this N-gram during preprocessing and use it during validation by default.
+As such we automatically generate this N-gram during preprocessing and use it during validation (default for the beam decoder).
 See the [Validation with an N-gram](#validation) section for more details.
 
 ## Build an N-gram Language Model
@@ -49,7 +49,7 @@ The script will produce an ARPA file, which is a human-readable version of the l
 
 ## Validation with an N-gram <a name="validation"></a>
 
-During beam search validation, the n-gram language model generated during preprocessing is used by default, by reading from the following entries in the model configuration file:
+During validation, the n-gram language model generated during preprocessing is used, by reading from the following entries in the model configuration file:
 
 ```yaml
 ngram:
@@ -57,18 +57,30 @@ ngram:
   scale_factor: 0.05
 ```
 
-First, a binary file, named `ngram.binary`, in `NGRAM_SUBDIR` is searched for. If not found, an ARPA file - `ngram.arpa` - is searched for. If neither file exists, the process will crash with an error. To prevent this, use the `--skip_ngram` flag to disable the use of an n-gram during validation with beam search:
+First, a binary file, named `ngram.binary`, in `NGRAM_SUBDIR` is searched for. If not found, an ARPA file - `ngram.arpa` - is searched for. If neither file exists, the process will crash with an error. To prevent this, use the `--skip_ngram` flag to disable the use of an n-gram during validation (disabled by default for the greedy decoder):
 
 ```bash
-scripts/val.sh --decoder=beam --skip_ngram
+scripts/val.sh --skip_ngram
+```
+
+The n-gram is enabled by default for the beam decoder and disabled by default for the greedy decoder. To enable it for the greedy decoder use the `--no-skip_ngram` flag.
+
+```bash
+scripts/val.sh --decoder greedy --no-skip_ngram
 ```
 
 The `scale_factor` adjusts the scores from the n-gram language model, and this will require tuning for your dataset. Values between 0.05 and 0.1 are empirically effective for improving WER. See the [Sweep Scale Factor](#sweep-scale-factor) section below for details on running a sweep across the scale factor.
 
+In addition, the greedy decoder also uses a `top_k` value, where only the top k candidates are used by the n-gram model to adjust the scores. `top_k` is set to 5 by default. To use a different value use the `--top_k` flag
+
+```bash
+scripts/val.sh --decoder greedy --no-skip_ngram
+```
+
 To use an n-gram that was trained on a different dataset, use the `--override_ngram_path` argument, which will take precedence over any n-grams in `NGRAM_SUBDIR`:
 
 ```bash
-scripts/val.sh --decoder=beam --override_ngram_path /path/to/ngram.binary
+scripts/val.sh --override_ngram_path /path/to/ngram.binary
 ```
 
 ## Sweep Scale Factor

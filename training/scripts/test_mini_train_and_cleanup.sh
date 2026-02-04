@@ -22,8 +22,10 @@ trap cleanup EXIT
 # Make a config file that uses the testing model,
 # but with the saved mini sentencepiece model
 cat configs/testing-1023sp.yaml |
-	sed "s|/datasets/sentencepieces/SENTENCEPIECE.model|tests/test_data/librispeech30.eos.model|" |
+	sed 's|TRANSCRIPTS|"transcript"|' |
+	sed "s|/datasets/sentencepieces/SENTENCEPIECE.model|tests/test_data/librispeech59.eos.model|" |
 	sed "s|/datasets/stats/STATS_SUBDIR|tests/test_data/|" |
+	sed "s|/datasets/words/WORDS|tests/test_data/words|" |
 	sed "s/MAX_DURATION/16.7/" \
 		>/tmp/testing.yaml
 

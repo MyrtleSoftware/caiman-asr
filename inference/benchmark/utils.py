@@ -94,6 +94,16 @@ def shared_args(parser: argparse.ArgumentParser):
         help="Play audio to speakers as it's streamed. "
         "Requires aplay, incompatible with Docker",
     )
+    parser.add_argument(
+        "--manifest_suffix",
+        default="-wav.json",
+        help="This suffix will be used for the manifest files. ",
+    )
+    parser.add_argument(
+        "--ctm_suffix",
+        default=".wav.ctm",
+        help="This suffix will be used for the reference CTM files. ",
+    )
 
     return parser
 
@@ -104,8 +114,9 @@ def env_vars(args):
     data_dir = TMP_DIR / args.data_dir
     data_dir.mkdir(exist_ok=True, parents=True)
     dset = args.dset
-    manifest_fpath = data_dir / f"{dset}-wav.json"
-    ref_ctm_fpath = data_dir / f"{dset}.wav.ctm"
+
+    manifest_fpath = data_dir / f"{dset}{args.manifest_suffix}"
+    ref_ctm_fpath = data_dir / f"{dset}{args.ctm_suffix}"
 
     return TMP_DIR, data_dir, dset, manifest_fpath, ref_ctm_fpath
 

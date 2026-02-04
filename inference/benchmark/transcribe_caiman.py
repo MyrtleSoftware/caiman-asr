@@ -2,7 +2,9 @@
 import argparse
 import ast
 import json
+import threading
 from pathlib import Path
+from urllib.parse import urlencode
 
 import websocket
 from beartype import beartype
@@ -51,6 +53,19 @@ def caiman_parser():
         action="store_true",
         help="Stream audio to server but do not listen for responses",
     )
+    parser.add_argument(
+        "--prefix",
+        type=str,
+        default=None,
+        choices=["<pnc>", "<nopnc>"],
+        help="Prefix to condition RNN-T prediction network: <pnc> or <nopnc>",
+    )
+    parser.add_argument(
+        "--keywords",
+        type=str,
+        nargs="+",
+        help="List of keywords to be boosted.",
+    )
     shared_args(parser)
     return parser
 
@@ -68,21 +83,26 @@ class CaimanASR(Transcriber):
         play_audio: bool,
         pause_after_each: bool,
         ignore_server_response: bool,
+        prefix: str | None,
+        keywords: list[str] | None,
     ) -> None:
-        self.timer = Timer()
-        self.limit_to = limit_to
-        self.ws_config = (
-            f"ws://{address}:{port}/asr/v0.1/stream?content_type=audio"
-            f"/x-raw;format=S16LE;channels=1;rate=16000"
+        super().__init__(
+            limit_to, trans_dir, retries, data_dir, play_audio, "caiman-asr.trans"
         )
-        self.ws = websocket.WebSocket()
 
-        self.trans_dir = trans_dir
-        self.trans_dir.mkdir(exist_ok=True, parents=True)
-        self.retries = retries
-        self.suffix = "caiman-asr.trans"
-        self.data_dir = data_dir
-        self.play_audio = play_audio
+        base = f"ws://{address}:{port}/asr/v0.1/stream"
+        content_type = "audio/x-raw;format=S16LE;channels=1;rate=16000"
+        query = {
+            "content_type": content_type,
+        }
+        if prefix is not None:
+            query["prefix"] = prefix
+        if keywords is not None:
+            query["keywords"] = keywords
+        query = urlencode(query, doseq=True, safe=";/")
+        self.ws_config = f"{base}?{query}"
+
+        self.ws = websocket.WebSocket()
         self.pause_after_each = pause_after_each
         self.ignore_server_response = ignore_server_response
 
@@ -112,7 +132,7 @@ class CaimanASR(Transcriber):
                 f"N/A"
             )
 
-    def attempt_to_transcribe(self, file: str, ftrans: Path) -> None:
+    def attempt_to_transcribe(self, file: str, ftrans: Path, duration: float) -> None:
         messages = []
         self.ws.connect(self.ws_config)
 
@@ -124,48 +144,48 @@ class CaimanASR(Transcriber):
             chunk_duration=0.06,
             play_audio=self.play_audio,
         )
-        with file_streamer as streamer:
-            for chunk in streamer.stream():
-                # Send chunk, receive response, save to trans
-                self.ws.send(chunk, websocket.ABNF.OPCODE_BINARY)
-                if not self.ignore_server_response:
+
+        def fn():
+            with file_streamer as streamer:
+                for chunk in streamer.stream():
+                    # Send chunk, receive response, save to trans
+                    self.ws.send(chunk, websocket.ABNF.OPCODE_BINARY)
+
+            # Send end-of-stream message
+            self.ws.send("", websocket.ABNF.OPCODE_BINARY)
+
+        t = threading.Thread(target=fn, daemon=True)
+        t.start()
+
+        if not self.ignore_server_response:
+            while True:
+                try:
                     msg = self.ws.recv()
                     trans = self.on_message(msg)
                     if trans is not None:
                         messages.append(trans)
+                except websocket.WebSocketConnectionClosedException:
+                    break
 
-        # Keep listening after sending EOS token until server streams
-        self.ws.send("", websocket.ABNF.OPCODE_BINARY)
-        if not self.ignore_server_response:
-            msg = self.ws.recv()
-            while msg:
-                trans = self.on_message(msg)
-                if trans is not None:
-                    messages.append(trans)
-                msg = self.ws.recv()
+        t.join()
 
         # Close transcription
         file_streamer.close_trans()
         if self.pause_after_each:
             input("Press Enter to stream next audio")
 
-        # Dump to file
-        with open(ftrans, "w") as ftrans_fh:
-            ftrans_fh.write(f"{file_streamer.start_msg}\n")
-            for trans in messages:
-                ftrans_fh.write(f"{trans}\n")
-            ftrans_fh.write(f"{file_streamer.end_msg}\n")
+        self.write_trans_to_file(ftrans, file_streamer, messages)
 
     def trans_to_ctm(self, manifest: List[dict]) -> CTM:
         """
-        Convert transcripts in *.caiman-asr.trans files to a CTM object.
+        Convert the transcriptions to a CTM file.
         """
         ctm = CTM()
         invalid_files = 0
         for item in manifest:
             prev_len = len(ctm.items)
             file = item["files"][0]["fname"]
-            ftrans = self.trans_dir / f"{Path(file).stem}.caiman-asr.trans"
+            ftrans = self.trans_dir / f"{Path(file).stem}.{self.suffix}"
 
             if not ftrans_is_valid(ftrans):
                 invalid_files += 1
@@ -254,6 +274,8 @@ def main(args):
         play_audio=args.play_audio,
         pause_after_each=args.pause_after_each,
         ignore_server_response=args.ignore_server_response,
+        prefix=args.prefix,
+        keywords=args.keywords,
     )
 
     # 2) Transcription step

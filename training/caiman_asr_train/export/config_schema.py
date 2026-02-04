@@ -88,12 +88,14 @@ class TokenizerSchema(Schema):
 
     allow_ignore = {
         "sampling",
+        "label_smoothing_kwargs",
     }
 
 
 class InputValSchema(Schema):
     filterbank_features: FilterbankFeaturesSchema
     frame_splicing: FrameSplicingSchema
+    append_EOI: bool = False
 
     allow_ignore = {
         "audio_dataset",
@@ -110,4 +112,5 @@ class RNNTInferenceConfigSchema(Schema):
         "grad_noise_scheduler",
         "ngram",
         "user_tokens",
+        "use_transcripts",
     }

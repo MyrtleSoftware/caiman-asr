@@ -49,29 +49,27 @@ The script [forced_align.py](https://github.com/MyrtleSoftware/caiman-asr/blob/m
 To perform forced alignment, execute the script with the required arguments e.g.
 
 ```bash
-python caiman_asr_train/latency/forced_align.py --dataset_dir /path/to/dataset --manifests data.json --model_config /path/to/model/config.yaml
+python caiman_asr_train/latency/forced_align.py --dataset_dir /path/to/dataset --manifests data.json
 ```
 
-Please note that the config file should be provided, as it contains information on
-the transcription character set and normalization.
 By default, CTM files are exported to the same location as the manifest files and share the same base name e.g.
 if `--dataset_dir /path/to/dataset` and `--manifests data.json`, then the default filepath of the CTM file is `/path/to/dataset/data.ctm`.
 The output directory to which CTM files are saved can be changed as follows:
 
 ```bash
-python caiman_asr_train/latency/forced_align.py --dataset_dir /path/to/dataset --manifests manifest.json --output_dir /custom/output/directory --model_config /path/to/model/config.yaml
+python caiman_asr_train/latency/forced_align.py --dataset_dir /path/to/dataset --manifests manifest.json --output_dir /custom/output/directory
 ```
 
 Multiple manifest files can be passed to the script e.g.
 
 ```bash
-python caiman_asr_train/latency/forced_align.py --dataset_dir /path/to/dataset --manifests manifest1.json manifest2.json --model_config /path/to/model/config.yaml
+python caiman_asr_train/latency/forced_align.py --dataset_dir /path/to/dataset --manifests manifest1.json manifest2.json
 ```
 
 The script also supports (multiple) tar files:
 
 ```bash
-python caiman_asr_train/latency/forced_align.py --read_from_tar --tar_files data1.tar data2.tar --dataset_dir /path/to/dataset --model_config /path/to/model/config.yaml
+python caiman_asr_train/latency/forced_align.py --read_from_tar --tar_files data1.tar data2.tar --dataset_dir /path/to/dataset
 ```
 
 Both absolute and relative paths are accepted for `--manifests` and `--tar_files`.
@@ -81,13 +79,13 @@ Most datasets have utterances shorter than 5 minutes and are therefore unaffecte
 To change the segment length, pass the optional `--segment_len` argument with an integer number of minutes e.g.
 
 ```bash
-python caiman_asr_train/latency/forced_align.py --segment_len 15 --dataset_dir /path/to/dataset --manifests data.json --model_config /path/to/model/config.yaml
+python caiman_asr_train/latency/forced_align.py --segment_len 15 --dataset_dir /path/to/dataset --manifests data.json
 ```
 
 There is also a CPU option:
 
 ```bash
-python caiman_asr_train/latency/forced_align.py --cpu --dataset_dir /path/to/dataset --manifests data.json --model_config /path/to/model/config.yaml
+python caiman_asr_train/latency/forced_align.py --cpu --dataset_dir /path/to/dataset --manifests data.json
 ```
 
 ## CTM

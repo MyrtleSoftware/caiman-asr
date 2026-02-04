@@ -63,7 +63,7 @@ If you would like to run the tests manually run `$ pytest` inside a running cont
 To check test coverage, run the following inside a container:
 
 ```
-coverage run -m pytest tests
+coverage run -m --source=. pytest tests
 coverage report -m
 ```
 

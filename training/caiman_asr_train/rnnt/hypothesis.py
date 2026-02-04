@@ -187,3 +187,60 @@ def init_sos_hyp(sos_tkn: int, ngram_lm: KenLmModel | None) -> Hypothesis:
         ngram_lm_state=init_ngram_state,
         is_terminal=False,
     )
+
+
+@beartype
+def init_prefix_hyp(
+    sos_tkn: int,
+    prefix_token_ids: list[int],
+    ngram_lm: KenLmModel | None,
+    pred_state: Tuple[torch.Tensor, torch.Tensor],
+    detokenize_fn,
+) -> Hypothesis:
+    """
+    Return a hypothesis initialized with SOS + prefix tokens.
+
+    Args:
+        sos_tkn: Start of sequence token (-1)
+        prefix_token_ids: List of prefix token IDs to add
+        ngram_lm: Optional n-gram language model
+        pred_state: Prediction network state
+        detokenize_fn: Function to convert token IDs to strings
+    """
+    init_ngram_state = None
+    if ngram_lm:
+        init_ngram_state = kenlm.State()
+        ngram_lm.model.BeginSentenceWrite(init_ngram_state)
+
+    # Start with SOS
+    y_seq = [sos_tkn]
+    timesteps = [-1]
+    s_seq = [CHR_SPU_UNICODE]
+    p_seq = [1.0]
+    hashval = 0
+
+    # Add prefix tokens
+    for token_id in prefix_token_ids:
+        y_seq.append(token_id)
+        timesteps.append(-1)  # All prefix tokens at timestamp -1
+        token_str = detokenize_fn(token_id)
+        s_seq.append(token_str)
+        p_seq.append(1.0)  # Assuming prefix tokens have probability 1.0
+
+        # Update hash with token string
+        for c in token_str:
+            hashval = (hashval * MAX_UNICODE) + ord(c)
+            hashval = hashval % HASHSIZE
+
+    return Hypothesis(
+        score=0.0,
+        p_seq=p_seq,
+        y_seq=y_seq,
+        y_len_t=len(y_seq),
+        timesteps=timesteps,
+        s_seq=s_seq,
+        hashval=hashval,
+        pred_state=pred_state,
+        ngram_lm_state=init_ngram_state,
+        is_terminal=False,
+    )

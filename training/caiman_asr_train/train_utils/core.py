@@ -66,13 +66,24 @@ def train_step(
     scaler: Optional[GradScaler],
     rnnt_state: Optional[RNNTState],
     loss_mods: LossModifiers,
+    # kwargs are for prefix_lens in conditional training
+    # which is not supported when bsf=1
+    **kwargs,
 ) -> Tuple[float, bool, Optional[RNNTState]]:
     """
     Run a step of training.
     """
     model_fwd_fn = maybe_autocast(model_loss_forward_train, not args.no_amp)
     loss, new_rnnt_state = model_fwd_fn(
-        model, loss_fn, args, feats, feat_lens, txt, txt_lens, rnnt_state, loss_mods
+        model=model,
+        loss_fn=loss_fn,
+        args=args,
+        feats=feats,
+        feat_lens=feat_lens,
+        txt=txt,
+        txt_lens=txt_lens,
+        rnnt_state=rnnt_state,
+        loss_mods=loss_mods,
     )
     loss_nan = is_loss_nan(loss, args.num_gpus)
     if loss_nan:

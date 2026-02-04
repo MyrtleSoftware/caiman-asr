@@ -19,21 +19,29 @@
 
 user_tokens:
   eos: "<EOS>"
+use_transcripts:
+  to_use: [TRANSCRIPTS]
+  on_missing: "raise_error"
 tokenizer:
   sentpiece_model: /datasets/sentencepieces/SENTENCEPIECE.model
-  labels: [" ", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "'"]
+  labels: [" ", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "'", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", ",", ".", "?"]
   sampling: 0.05
+  label_smoothing_kwargs:
+    dict_path: "/datasets/words/WORDS.txt"
+    levenshtein_threshold: 0.34
+    prob_smooth_word: 0.01
 # For validation we don't trim silence: its effect on WER is very small, it pushes WER on clean and noisy speech
 # in different directions, it would be difficult to implement in a streaming system, and a VAD would be better.
 input_val:
   audio_dataset: &val_dataset
     sample_rate: &sample_rate 16000
     trim_silence: false
-    normalize_transcripts: lowercase
+    normalize_transcripts: digit_to_word
     standardize_wer: true
     replacements:
     remove_tags: true
     error_rate: word
+    append_EOI: true
   filterbank_features: &val_features
     normalize: per_feature
     sample_rate: *sample_rate
@@ -60,15 +68,16 @@ input_train:
       max_rate: 1.15
       p: 1.0
     standardize_text: true
+    preserve_case: true
+    preserve_punctuation: true
   filterbank_features: *val_features
   frame_splicing: *val_splicing
   spec_augment:
     freq_masks: 2
-    min_freq: 0
     max_freq: 20
     time_masks: 10
-    min_time: 0
     max_time: 0.03
+    ratio_spec_aug_on: 1.0
 rnnt:
   in_feats: 240 # n_filt x frame_stacking
   enc_n_hid: 1024

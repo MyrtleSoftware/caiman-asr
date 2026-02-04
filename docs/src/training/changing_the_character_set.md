@@ -1,7 +1,9 @@
 # Changing the character set
 
-With default training settings, the CAIMAN-ASR model will only output
-lowercase ASCII characters, space, and `'`.
+With default training settings, the CAIMAN-ASR model will output
+punctuated (space, full stop, comma, apostrophe, question mark)
+and cased English ASCII characters.
+
 This page describes how to change the settings to support additional characters
 or different languages.
 
@@ -14,7 +16,15 @@ please contact [caiman-asr@myrtle.ai](mailto:caiman-asr@myrtle.ai)
 
 ### Step 1: Choose a character set
 
-As described above, the default character set is `abcdefghijklmnopqrstuvwxyz '`.
+As described above, the default character set is:
+
+- 26 lowercase English letters,
+- 26 uppercase English letters,
+- space,
+- full stop (period),
+- comma,
+- apostrophe,
+- question mark.
 
 The maximum size of your character set is the sentencepiece vocabulary size,
 as each character in the character set receives a unique token
@@ -52,15 +62,15 @@ in the yaml config file. The options, in order of least to most interference, ar
   - For example, "café" becomes "cafe"
   - Recommended if model is predicting English with digits
   - Also applies `scrub`
-- `digit_to_word`
+- `digit_to_word` (default)
   - Replaces digits with their word equivalents
   - For example, "123rd" becomes "one hundred and twenty-third"
   - Assumes English names for numbers
+  - Recommended for predicting punctuated and cased English without digits.
   - Also applies `ascii` and `scrub`
 - `lowercase`
   - Lowercases text and expands abbreviations
   - For example, "Mr." becomes "mister"
-  - This is the default normalizer
   - Recommended for predicting lowercase English
     without digits
   - Also applies `digit_to_word`, `ascii`, and `scrub`

@@ -3,7 +3,7 @@ from argparse import Namespace
 
 import torch
 from beartype import beartype
-from beartype.typing import Optional, Tuple
+from beartype.typing import Dict, Optional, Tuple
 from torch.cuda.amp import GradScaler
 
 from caiman_asr_train.rnnt.loss import (
@@ -16,6 +16,67 @@ from caiman_asr_train.rnnt.sub_models import RNNTSubModels
 from caiman_asr_train.train_utils.core import is_loss_nan, maybe_autocast
 
 
+@beartype
+def strip_prefix_tokens(
+    txt: torch.Tensor,
+    txt_lens: torch.Tensor,
+    g: torch.Tensor,
+    g_lens: torch.Tensor,
+    prefix_lens: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Strip prefix tokens from both transcript and prediction features.
+
+    This approach removes prefix tokens from prediction features -
+    making the final prefix token the new SOS -
+    and strips the corresponding tokens from the transcript for loss computation.
+
+    Args:
+        txt: Transcript tensor of shape (B, U+prefix_length)
+        txt_lens: Transcript lengths of shape (B,)
+        g: Prediction features of shape (B, U+prefix_length+1, H)
+        g_lens: Prediction lengths of shape (B,)
+        prefix_lens: Tensor of prefix lengths of shape (B,)
+                     Note: All prefix lengths must be the same for now.
+
+    Returns:
+        Tuple of (stripped_txt, adjusted_txt_lens, stripped_g, adjusted_g_lens)
+    """
+    B = txt.shape[0]
+    assert (
+        prefix_lens.dim() == 1 and prefix_lens.shape[0] == B
+    ), f"prefix_lens must be a 1D tensor of shape (B,), got {prefix_lens.shape}"
+
+    # Fixed prefix length for all samples (for now)
+    first = prefix_lens[0]
+    assert torch.all(prefix_lens == first), "All prefix lengths must be the same"
+
+    p = int(first.item())
+    assert p >= 0, f"prefix_length must be non-negative, got {p}"
+
+    too_short_mask = txt_lens < p
+    if torch.any(too_short_mask):
+        bad_idxs = torch.where(too_short_mask)[0]
+        raise ValueError(
+            f"Prefix length {p} exceeds transcript length for {len(bad_idxs)} samples."
+        )
+
+    # Strip prefix tokens from transcript
+    stripped_txt = txt[:, p:]  # (B, U+p) ->(B, U)
+    adjusted_txt_lens = txt_lens - p
+
+    # Strip prefix tokens from prediction features
+    stripped_g = g[:, p:, :]  # (B, U+p+1, H) -> (B, U+1, H)
+    adjusted_g_lens = g_lens - p
+
+    return (
+        stripped_txt.contiguous(),
+        adjusted_txt_lens,
+        stripped_g.contiguous(),
+        adjusted_g_lens,
+    )
+
+
 def joint_and_loss(
     model: RNNTSubModels,
     loss_fn: ApexTransducerLoss,
@@ -26,12 +87,28 @@ def joint_and_loss(
     g_lens: torch.Tensor,
     txt: torch.Tensor,
     txt_lens: torch.Tensor,
-    meta_data: dict,
+    meta_data: Optional[Dict],
     loss_mods: LossModifiers,
+    prefix_lens: Optional[torch.Tensor] = None,
+    original_feat_lens: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """
     Run joint and loss.
     """
+    if args.conditional:
+        txt, txt_lens, g, g_lens = strip_prefix_tokens(
+            txt, txt_lens, g, g_lens, prefix_lens
+        )
+
+        # Recalculate metadata with adjusted transcript lengths
+        # Use original feat_lens (before enc reduction) not f_lens (after enc reduction)
+        if original_feat_lens is not None:
+            meta_data = get_packing_meta_data(
+                feat_lens=original_feat_lens,
+                txt_lens=txt_lens,
+                enc_time_reduction=model.rnnt.enc_stack_time_factor,
+            )
+
     logits = model.joint(f, g, f_lens, g_lens, batch_offset=meta_data["batch_offset"])
 
     loss = loss_fn(
@@ -62,6 +139,7 @@ def train_step_batch_split(
     scaler: Optional[GradScaler],
     rnnt_state: Optional[RNNTState],
     loss_mods: LossModifiers,
+    prefix_lens: Optional[torch.Tensor] = None,
 ) -> Tuple[float, bool, Optional[RNNTState]]:
     """
     Run a step of training when batch_split_factor > 1.
@@ -83,13 +161,16 @@ def train_step_batch_split(
     enc_time_stack_factor = model.rnnt.enc_stack_time_factor
     joint_fn = maybe_autocast(joint_and_loss, not args.no_amp)
 
-    for i in range(args.batch_split_factor):
-        meta_entry = get_packing_meta_data(
-            feat_lens=feat_lens[i * b_split : (i + 1) * b_split],
-            txt_lens=txt_lens[i * b_split : (i + 1) * b_split],
-            enc_time_reduction=enc_time_stack_factor,
-        )
-        meta_data.append(meta_entry)
+    if not args.conditional:
+        # If conditional training, meta data is computed after stripping prefix tokens
+        # so we skip computing it here
+        for i in range(args.batch_split_factor):
+            meta_entry = get_packing_meta_data(
+                feat_lens=feat_lens[i * b_split : (i + 1) * b_split],
+                txt_lens=txt_lens[i * b_split : (i + 1) * b_split],
+                enc_time_reduction=enc_time_stack_factor,
+            )
+            meta_data.append(meta_entry)
 
     (f, f_lens), (g, g_lens), new_rnnt_state = enc_pred_fn(
         feats,
@@ -120,8 +201,14 @@ def train_step_batch_split(
             g_lens=g_lens[i * b_split : (i + 1) * b_split],
             txt=txt[i * b_split : (i + 1) * b_split],
             txt_lens=txt_lens[i * b_split : (i + 1) * b_split],
-            meta_data=meta_data[i],
+            meta_data=meta_data[i] if not args.conditional else None,
             loss_mods=loss_mods,
+            prefix_lens=(
+                prefix_lens[i * b_split : (i + 1) * b_split]
+                if prefix_lens is not None
+                else None
+            ),
+            original_feat_lens=feat_lens[i * b_split : (i + 1) * b_split],
         )
 
         if is_loss_nan(loss, args.num_gpus):

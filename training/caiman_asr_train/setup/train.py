@@ -179,6 +179,7 @@ class TrainSetup(Setup):
         # tokenizer for validation dataset remove sampling effect
         tokenizer_kw_val = get_tokenizer_conf(cfg)
         tokenizer_kw_val["sampling"] = 0.0
+        tokenizer_kw_val["label_smoothing_kwargs"] = None
         tokenizer_val = Tokenizer(**tokenizer_kw_val)
 
         return (

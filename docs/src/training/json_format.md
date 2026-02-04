@@ -162,7 +162,162 @@ It is advised that you use all of your training data transcripts to build the se
 
 Before running make_json_artifacts.sh on your custom dataset, you may want to create an EOS version as explained [here](./endpointing.md#generating-segmented-transcripts)
 
-### Next steps
+## Selecting transcripts
+
+Each JSON manifest should include a "transcript" field, which contains the
+transcript of the corresponding audio file. However, the key for the transcript
+field can be customized, the default is "transcript".
+
+If multiple transcripts exist for the same audio file, the model can be trained
+using a specific transcript by specifying it in the use_transcripts field of
+the YAML configuration:
+
+```yaml
+use_transcripts:
+  to_use: ["<transcript_key_1>", "<transcript_key_2>", ...]
+  on_missing: "raise_error" # or "skip" or "use_default"
+```
+
+The first transcript key that is found in the JSON manifest will be used.
+
+If no key is found in the JSON manifest, the behaviour will depend on the
+value of the on_missing field:
+
+- "raise_error": an error will be raised.
+- "skip": the audio file will be skipped.
+- "use_default": the default transcript will be used, if this does not exist,
+  an error will be raised.
+
+Selecting transcripts is only supported when the JSON format is used.
+
+If your dataset format is different, follow the respective documentation,
+and use the default "transcript" field.
+
+## Standardizing transcripts
+
+Training on multiple datasets can negatively impact performance, as identical words may
+be transcribed differently across datasets - for example, "colour" (British English)
+vs "color" (American English). This inconsistency splits the model's probability distribution
+across multiple spellings, reducing prediction confidence.
+
+To address this, we standardize the training transcripts using Whisper EnglishTextNormalizer.
+This process follows the same approach as WER standardization
+(see [WER calculation docs](./wer_calculation.md) for more details).
+
+There are two methods to do this:
+
+### Recommended approach: Pre-standardizing manifests
+
+The recommended approach is to standardize your manifests before training using the `standardize_manifest.py` script:
+
+```bash
+python caiman_asr_train/data/text/standardize_manifest.py \
+  --manifests input.json \
+  --preserve-case \
+  --preserve-punctuation
+```
+
+This creates standardized versions of each transcript field as `<field-name>-standardized` (e.g., `transcript-standardized`).
+You can then use these standardized fields during training by configuring your model's YAML:
+
+```yaml
+use_transcripts:
+  to_use: ["transcript-standardized"]
+  on_missing: "raise_error" # or "skip" or "use_default"
+```
+
+This approach offers several advantages:
+
+- Faster training startup (standardization is done only once)
+- Ability to standardize multiple transcript fields in the same manifest
+
+Multiple manifests and fields can be standardized at once:
+
+```bash
+python caiman_asr_train/data/text/standardize_manifest.py \
+  --manifests input1.json input2.json \
+  --transcript-fields transcript transcript2 transcript3 \
+```
+
+This will standardize the `transcript`, `transcript2`, and `transcript3` fields in each of `input1.json` and `input2.json`,
+producing `input1_standardized.json` and `input2_standardized.json` with the following fields:
+
+- `transcript`
+- `transcript2`
+- `transcript3`
+- `transcript-standardized`
+- `transcript2-standardized`
+- `transcript3-standardized`
+
+All arguments:
+
+- `--manifests [str] ...`: Absolute path to dataset manifest (.json) files [required].
+- `--transcript-fields [str] ...`: Names of transcript fields to standardize [default: "transcript"].
+- `--preserve-case`: Flag to preserve the original casing of the text [optional].
+- `--preserve-punctuation`: Flag to preserve the original punctuation of the text [optional].
+- `--no-expand-contractions`: Flag to disable expansion of contractions (e.g. "don't" -> "do not") [optional].
+- `--output-dir [str]`: Directory to save standardized manifests [default: same directories as input manifests].
+- `--output-filenames [str]`: Filenames to save standardized manifest
+  [default: same as input manifest plus "\_standardized"].
+- `--model-config [str]`: Path to model config to extract user symbols to preserve e.g. `<EOS>`
+  \[default: `configs/testing-1023sp_run.yaml`\].
+- `--num-workers [int]`: Number of worker processes to use [default: CPU count].
+- `--overwrite`: Flag to enable overwrite of existing output files.
+
+```admonish
+If using offline standardization of manifests, please ensure to disable on-the-fly standardization by setting
+`standardize_text` to false in the model config (.yaml) file.
+```
+
+```admonish
+By default, standardization expands all contractions (e.g "don't" -> "do not").
+As a result, if you train a model on standardized transcripts,
+it will always predict the expanded form e.g. it will output "do not"
+whether the speaker says "don't" or "do not".
+
+If this behaviour is not desired,
+you can disable contraction expansion during train-time standardization
+by passing the `--no-expand-contractions` flag to the `standardize_manifest.py` script.
+This will however worsen WERs by ~1-2% relative.
+```
+
+### Alternative: On-the-fly standardization
+
+Alternatively, the YAML config includes the entry `standardize_text: true|false`,
+enabling on-the-fly standardization of training transcripts during training.
+This process standardizes all transcripts at the start of training,
+which leads to longer start-up times, but can be more flexible if you are constantly changing datasets.
+
+### Preserving casing and punctuation
+
+By default, standardization lowercases and strips punctuation,
+which is the desired behaviour for WER standardization.
+However, this is undesirable when training models that predict
+punctuation or casing (i.e. when `normalize_transcripts` is not set to `lowercase`).
+
+Hence, both approaches support these standardization parameters:
+
+- `preserve_case: true|false` - preserve the original casing of the text during standardization.
+- `preserve_punctuation: true|false` - retain the original punctuation in the text during standardization.
+
+```admonish
+If `normalize_transcripts` is set to `lowercase`, these arguments have no effect,
+as the text is already being lowercased before standardization.
+```
+
+Whether you choose pre-standardization or on-the-fly standardization, the process generally improves WER by ensuring consistent text formatting across datasets.
+
+Default settings:
+
+```yaml
+normalize_transcripts: digit_to_word
+...
+standardize_text: true
+preserve_case: true
+preserve_punctuation: true
+```
+
+## Next steps
 
 Having run the data preparation steps, go to the [training docs](./training.md) to start training.
 

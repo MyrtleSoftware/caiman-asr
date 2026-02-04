@@ -4,6 +4,7 @@ import json
 import wave
 from itertools import count
 from threading import Thread
+from urllib.parse import urlencode
 
 import pyaudio
 import websocket
@@ -15,7 +16,7 @@ from stack import PipeStack, Style
 
 # Instructions:
 # The CAIMAN-ASR server must already be running!
-# python3 ./client.py
+# python3 ./live_client.py
 # Start talking when you see "Recording" printed to stdout.
 # ctrl+c to stop recording
 # `aplay output.wav` to listen to the recording
@@ -96,9 +97,20 @@ def run_asr_server(args, stream):
     # Set up websocket connection to asr server. CAIMAN-ASR SERVER MUST ALREADY BE RUNNING!
     ws = websocket.WebSocket(enable_multithread=True)
 
+    base = f"ws://{args.host}:{args.port}/asr/v0.1/stream"
+    content_type = f"audio/x-raw;format=S16LE;channels={CHANNELS};rate={SAMPLE_RATE}"
+    query = {
+        "content_type": content_type,
+    }
+    if args.prefix is not None:
+        query["prefix"] = args.prefix
+    if args.keywords is not None:
+        query["keywords"] = args.keywords
+    query = urlencode(query, doseq=True, safe=";/")
+    ws_config = f"{base}?{query}"
+
     ws.connect(
-        f"ws://{args.host}:{args.port}/asr/v0.1/stream"
-        f"?content_type=audio/x-raw;format=S16LE;channels={CHANNELS};rate={SAMPLE_RATE}",
+        ws_config,
         timeout=100,
     )
 
@@ -138,6 +150,19 @@ parser.add_argument(
     type=int,
     default=None,
     help="The index of the audio input device",
+)
+parser.add_argument(
+    "--prefix",
+    type=str,
+    default=None,
+    choices=["<pnc>", "<nopnc>"],
+    help="Prefix to condition RNN-T prediction network: <pnc> or <nopnc>",
+)
+parser.add_argument(
+    "--keywords",
+    type=str,
+    nargs="+",
+    help="List of keywords to be boosted.",
 )
 
 args = parser.parse_args()

@@ -21,7 +21,7 @@ def check_tokenized_transcript(
     has_unk = 0 in tokens
     if not has_unk:
         return
-    message = f"<unk> found during tokenization (OOV?)\n{transcript}"
+    message = f"<unk> found during tokenization of '{transcript}'"
     match unk_handling:
         case UnkHandling.FAIL:
             raise ValueError(

@@ -88,7 +88,7 @@ def test_manifest_balancing_ratios(
 
     all_fnames = []
     for batch in dataloader:
-        _, _, _, _, _, fnames = batch
+        _, _, _, _, _, fnames, _ = batch
         all_fnames.extend(fnames)
     assert (
         count_ps_files(all_fnames) / count_dummy_files(all_fnames) == expected_ps_ratio

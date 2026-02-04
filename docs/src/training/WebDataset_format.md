@@ -19,9 +19,10 @@ At tarfile creation time, you must ensure that each audio file is stored sequent
 
 #### Text normalization
 
-```admonish
-As discussed in more detail [here](./data_preparation.md#text_norm) it is necessary to normalize your transcripts so that they contain just spaces, apostrophes and lower-case letters. It is recommended to do this on the fly by setting `normalize_transcripts: true` in your config file. Another option is to perform this step offline when you create the WebDataset shards.
-```
+As discussed in more detail [here](./data_preparation.md#text_norm)
+it is necessary to normalize your transcripts.
+It is recommended to do this on the fly by setting `normalize_transcripts: digit_to_word` in your config file.
+Another option is to perform this step offline when you create the WebDataset shards.
 
 ### Data preparation: `preprocess_webdataset.sh`
 

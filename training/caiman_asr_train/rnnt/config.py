@@ -18,11 +18,14 @@ from pathlib import Path
 
 import yaml
 from beartype import beartype
-from beartype.typing import Dict
+from beartype.typing import Dict, Optional
 from pydantic import BaseModel, ConfigDict, confloat
 
 from caiman_asr_train.data import features
-from caiman_asr_train.data.dali.pipeline import PipelineParams, SpeedPerturbationParams
+from caiman_asr_train.data.dali.pipeline import (
+    PipelineParams,
+    SpeedPerturbationParams,
+)
 from caiman_asr_train.data.unk_handling import UnkHandling
 from caiman_asr_train.rnnt.model import RNNT
 from caiman_asr_train.train_utils.grad_noise_scheduler import GradNoiseScheduler
@@ -110,12 +113,17 @@ def input(conf_yaml, split="train"):
             "remove_tags",
             "user_symbols",
             "standardize_text",
+            "preserve_case",
+            "preserve_punctuation",
         ],
     )
 
     conf_splicing = validate_and_fill(features.FrameSplicing, conf_splicing)
+    if conf_dataset["append_EOI"]:
+        assert conf_splicing["frame_stacking"] == conf_splicing["frame_subsampling"]
+
     conf_specaugm = conf_specaugm and validate_and_fill(
-        features.SpecAugment, conf_specaugm
+        features.SpecAugment, conf_specaugm, optional=["eoi_frames"]
     )
 
     # Check params shared between classes
@@ -147,6 +155,8 @@ class TokenizerConfig(BaseModel):
     labels: list[str]
     # If using an old config, set sampling to 0.
     sampling: confloat(ge=0.0, le=1.0) = 0.0
+    # If using an old config, disable label smoothing.
+    label_smoothing_kwargs: Optional[dict] = None
 
     model_config = ConfigDict(extra="forbid")
 

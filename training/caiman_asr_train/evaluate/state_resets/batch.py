@@ -88,6 +88,7 @@ def state_resets_merge_batched_segments(
     enc_time_reduction: int,
     meta: List[Tuple[int, int, int]],
     eos_idx: Optional[int],
+    detokenize,
 ) -> Tuple[List[List[int]], List[List[Timestamp]], Optional[List[List[float]]]]:
     """Return prediction tokens and timestamps for all segments concatenated.
 
@@ -148,6 +149,7 @@ def state_resets_merge_batched_segments(
             enc_time_reduction,
             sr_segment_frames,
             sr_overlap_frames,
+            detokenize=detokenize,
         )
 
         o_pred.extend(l_pred)

@@ -1,3 +1,5 @@
+merge_queue:
+  max_parallel_checks: 1
 queue_rules:
   - name: default
     # When auto-updating PRs for the base branch, rebase.
@@ -9,6 +11,7 @@ pull_request_rules:
       queue:
         name: default
     conditions:
+      - linear-history
       - label=ready-for-merge
       - label!=WIP
       - "#approved-reviews-by>=1"

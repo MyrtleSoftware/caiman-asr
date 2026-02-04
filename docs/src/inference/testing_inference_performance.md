@@ -47,6 +47,13 @@ WebSocket connection:
       --quiet
           Suppress printing of transcriptions
 
+      --prefix <PREFIX>
+          Prefix to the prediction network to select the output style, either "<pnc>" for punctuated and cased output,
+          or "<nopnc>" for lowercase only (more accurate).
+
+          [default: None]
+
+
 Audio:
   <INPUTS>...
           The input wav files. The audio is required to be 16 kHz S16LE single channel wav
@@ -77,12 +84,49 @@ $ cargo build --release
 
 and the executable will be in `target/release/caiman-asr-client`.
 
-## Latency
+## How the latency is calculated
 
-The CAIMAN-ASR server provides a response for every 60 ms of audio input, even if that response has no
-transcription. We can use this to calculate the latency from sending the audio to getting back the
-associated response.
+This client splits the audio in 60ms chunks and sends a chunk every 60ms, so it's mimicking live audio.
+The latency is measured by the client, and it is the time from the chunk being sent to the response for that chunk being
+received.
+(The CAIMAN-ASR server sends a response for every 60ms chunk it receives, whether or not it has a token for this chunk,
+so this is always well-defined.)
+
+This means that the reported latency includes the following:
+
+- The time for the packet to go from the client to the server across the network
+- The time for the chunk to be processed by the server
+- The time for the response to go from the server back to the client.
+
+It doesn't include:
+
+- The size of the chunk itself (60ms). If you imagine a live stream of audio that starts at t=0, then at t=60ms the
+  first chunk of audio would be sent. Say that the time taken to receive a response from the server is 50ms, then the
+  first response would be received at 110ms. But we don't say that the latency is 110ms because we don't include the
+  size of the chunk in the calculation.
+
+The latency reported by the client is the average and p99 for all the chunks in the previous (configurable) reporting
+period.
+The latency reported when the transcription comes back is the average and p99 for all the chunks in that transcription.
 
 To prevent each connection sending audio at the same time, the client waits a random length of time
 (within the frame duration) before starting each connection. This provides a better model of real
 operation where the clients would be connecting independently.
+
+## Troubleshooting
+
+The client uses a file descriptor for each audio connection.
+The number of file descriptors available to a process is limited by the operating system.
+If you see the error `Too many open files`, you can increase the limit by adding the following lines
+to `/etc/security/limits.conf`:
+
+```
+* soft nofile 40000
+* hard nofile 40000
+```
+
+You can check the limit with:
+
+```
+ulimit -n
+```

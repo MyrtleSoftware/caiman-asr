@@ -53,7 +53,7 @@ def test_samplers_initialization(
     txt_list = []
 
     for _ in range(3):
-        for _, _, txt, _, _, _ in dataloader2:
+        for _, _, txt, _, _, _, _ in dataloader2:
             txt_list.append(txt)
 
     assert len(txt_list) == training_steps
@@ -129,7 +129,7 @@ def test_dali_dataloader_build(
             len(dataloader)
     samples_seen = 0
     for batch in dataloader:
-        audio, audio_lens, txt, txt_lens, _, _ = batch
+        audio, audio_lens, txt, txt_lens, _, _, _ = batch
         B, H, T = audio.shape
         B2, U = txt.shape
         assert B == B2 == len(audio_lens) == len(txt_lens) == batch_size
@@ -151,7 +151,7 @@ def test_dali_dataloader_build(
         return
     samples_seen = 0
     for batch in dataloader:
-        audio, _, _, _, _, _ = batch
+        audio, _, _, _, _, _, _ = batch
         B, H, T = audio.shape
         samples_seen += B
 
@@ -175,7 +175,7 @@ def test_shuffle_train_webdataset(
     prev_txt = None
     shuffle_seen = False
     for idx in range(n_epochs):
-        for _, _, txt, _, _, _ in dataloader:
+        for _, _, txt, _, _, _, _ in dataloader:
             print(idx, txt)
             if prev_txt is None or torch.allclose(prev_txt, txt):
                 prev_txt = txt
@@ -190,18 +190,18 @@ def test_shuffle_train_webdataset(
 def test_no_shuffle_val_webdataset(
     dataload_args_webdataset,
     mini_config_fp,
-    tokenizer,
+    val_tokenizer,
     batch_size=2,
     n_epochs=5,
 ):
     dataloader = build_dataloader_util(
-        dataload_args_webdataset, "val", batch_size, mini_config_fp, tokenizer
+        dataload_args_webdataset, "val", batch_size, mini_config_fp, val_tokenizer
     )
     # for n_epochs it's expected to see samples appear in same order since no
     # shuffling has happened
     prev_txt = None
     for _ in range(n_epochs):
-        for _, _, txt, _, _, _ in dataloader:
+        for _, _, txt, _, _, _, _ in dataloader:
             if prev_txt is None or torch.allclose(prev_txt, txt):
                 prev_txt = txt
                 continue
@@ -254,7 +254,7 @@ def test_dali_equivalence(
         tokenizer,
         deterministic_ex_noise=True,
     )
-    for audio, _, _, _, _, _ in dali_dataloder_deterministic:
+    for audio, _, _, _, _, _, _ in dali_dataloder_deterministic:
         assert torch.allclose(audio, saved_tensor_no_noise, atol=2e-04)
 
 

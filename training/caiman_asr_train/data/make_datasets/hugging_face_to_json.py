@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 import uuid
 from argparse import ArgumentParser, Namespace
-from functools import partial
-from itertools import starmap
+from multiprocessing import Pool
 from pathlib import Path
 
 import datasets
@@ -14,6 +13,7 @@ from tqdm import tqdm
 from caiman_asr_train.data.hugging_face.core import check_transcript_key
 from caiman_asr_train.data.make_datasets.manifest import prepare_manifest, save_manifest
 from caiman_asr_train.data.make_datasets.sox_utils import convert_to_standard_format
+from caiman_asr_train.utils.math import ceil_div
 from caiman_asr_train.utils.timeprint import timeprint
 
 
@@ -37,6 +37,12 @@ def make_argparser() -> ArgumentParser:
         Defaults to None""",
     )
     parser.add_argument(
+        "--hugging_face_data_files_path",
+        type=str,
+        default=None,
+        help="Restrict the dataset to specific files. Defaults to None",
+    )
+    parser.add_argument(
         "--hugging_face_split",
         "--hf_split",
         type=str,
@@ -56,6 +62,12 @@ def make_argparser() -> ArgumentParser:
         Defaults to "text", but could be something else, like "transcription".
         To find out the key, please look at the dataset's documentation
         on the Hugging Face Hub""",
+    )
+    parser.add_argument(
+        "--hugging_face_audio_key",
+        type=str,
+        default="audio",
+        help="""The key in the Hugging Face dataset that refers to the audio.""",
     )
     parser.add_argument(
         "--data_dir",
@@ -113,13 +125,23 @@ def get_extension(bytes_: bytes, fallback: str | None) -> str:
 
 
 @beartype
+def drill_down(d: dict, keys: list):
+    """
+    `drill_down(d, ["key1", "key2", ...]) -> d["key1"]["key2"]...`
+    """
+    return d[keys[0]] if len(keys) == 1 else drill_down(d[keys[0]], keys[1:])
+
+
+@beartype
 def convert_utterance(
     args: Namespace,
     combined_name: str,
     i: int,
     hugging_face_elt: dict,
 ) -> dict[str, str]:
-    transcript = hugging_face_elt[args.hugging_face_transcript_key]
+    transcript = drill_down(
+        hugging_face_elt, args.hugging_face_transcript_key.split("/")
+    )
 
     branch_dir = i // (args.max_leaf_dir_audios * args.max_branch_dir_audios)
     leaf_dir = (i // args.max_leaf_dir_audios) % args.max_branch_dir_audios
@@ -160,30 +182,57 @@ def make_json(
     num_jsons: int,
     args: Namespace,
 ) -> None:
-    timeprint("Creating json...")
     manifest = prepare_manifest(
         path_transcript_list,
-        args.num_jobs_manifest_preparation,
+        num_jobs=args.num_jobs_manifest_preparation,
         data_dir=args.data_dir,
         use_relative_path=args.use_relative_path,
+        desc=f"Build json {json_idx + 1} of {num_jsons}",
     )
-    timeprint("Writing json...")
     manifest_path = (
-        Path(args.data_dir) / f"{combined_name}_{json_idx+1}_of_{num_jsons}.json"
+        Path(args.data_dir) / f"{combined_name}_{json_idx + 1}_of_{num_jsons}.json"
     )
     save_manifest(manifest, manifest_path)
 
 
+class _Fn:
+    def __init__(self, args, combined_name):
+        self.args = args
+        self.combined_name = combined_name
+
+    def __call__(self, args):
+        return convert_utterance(self.args, self.combined_name, *args)
+
+
 def main(args):
     timeprint("Loading Hugging face dataset...")
+
+    if (p := args.hugging_face_data_files_path) is not None:
+        data_files = {args.hugging_face_split: p}
+    else:
+        data_files = None
+
     dataset = datasets.load_dataset(
         args.hugging_face_dataset,
         name=args.hugging_face_config,
         split=args.hugging_face_split,
-    ).cast_column("audio", datasets.Audio(decode=False))
+        data_files=data_files,
+        download_config=datasets.DownloadConfig(
+            max_retries=3,
+            num_proc=4,
+        ),
+        verification_mode=datasets.VerificationMode.ALL_CHECKS,
+    )
+
+    if (key := args.hugging_face_audio_key) != "audio":
+        dataset = dataset.rename_column(key, "audio")
+
+    dataset = dataset.cast_column("audio", datasets.Audio(decode=False))
 
     check_transcript_key(
-        dataset, args.hugging_face_transcript_key, args.hugging_face_dataset
+        dataset,
+        args.hugging_face_transcript_key.split("/")[0],
+        args.hugging_face_dataset,
     )
 
     combined_name = (
@@ -192,15 +241,19 @@ def main(args):
     ).replace("/", "_")
 
     timeprint("Writing audio files...")
-    convert_utt = partial(convert_utterance, args, combined_name)
 
-    flac_dataset = starmap(convert_utt, enumerate(tqdm(dataset)))
-    batched_dataset = chunked(flac_dataset, args.max_utterances_per_json)
-    num_jsons = (len(dataset) - 1) // args.max_utterances_per_json + 1
-    for json_idx, path_transcript_list in enumerate(batched_dataset):
-        make_json(path_transcript_list, json_idx, combined_name, num_jsons, args)
+    N = len(dataset)
+    fn = _Fn(args, combined_name)
 
-    timeprint("Done")
+    with Pool(args.num_jobs_manifest_preparation) as p:
+        flac_dataset = p.imap(fn, enumerate(dataset), chunksize=10)
+        flac_dataset = tqdm(flac_dataset, total=N, desc="Converting audio")
+        batched_dataset = chunked(flac_dataset, args.max_utterances_per_json)
+        num_jsons = ceil_div(N, by=args.max_utterances_per_json)
+        for json_idx, path_transcript_list in enumerate(batched_dataset):
+            make_json(path_transcript_list, json_idx, combined_name, num_jsons, args)
+
+        timeprint("Done")
 
 
 if __name__ == "__main__":

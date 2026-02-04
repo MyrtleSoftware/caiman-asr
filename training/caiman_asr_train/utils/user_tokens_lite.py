@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 
 from beartype import beartype
-from beartype.typing import Dict
+from beartype.typing import Dict, List, Tuple
 
 from caiman_asr_train.data.text.is_tag import is_tag
 
 
 @beartype
-def get_all_user_tokens(config: Dict) -> Dict[str, str]:
+def get_all_user_tokens(config: Dict) -> Tuple[Dict[str, str], List[str]]:
     """
     Fetch and validate all user tokens/symbols from the config.
     """
 
     if "user_tokens" not in config:
-        return {}
+        return {}, []
 
     if config["user_tokens"] is None:
-        return {}
+        return {}, []
 
     assert isinstance(config["user_tokens"], dict), "User tokens must be a dictionary."
 
@@ -33,4 +33,4 @@ def get_all_user_tokens(config: Dict) -> Dict[str, str]:
 
         out[k] = v
 
-    return out
+    return out, list(out.values())

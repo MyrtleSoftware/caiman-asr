@@ -29,7 +29,11 @@ def loss_fn(n_classes_fixture):
 @pytest.fixture()
 def args():
     return Namespace(
-        grad_accumulation_batches=1, batch_split_factor=8, num_gpus=1, delay_penalty=0.0
+        grad_accumulation_batches=1,
+        batch_split_factor=8,
+        num_gpus=1,
+        delay_penalty=0.0,
+        conditional=False,
     )
 
 
@@ -142,6 +146,39 @@ def test_batch_split_train_step_equiv(
     )
 
     compare_step_results(results1, results2, model1, model2, scaler1, scaler2)
+
+
+def test_batch_split_train_step_conditional(
+    model_factory,
+    loss_fn,
+    input_data_factory,
+    args,
+    device,
+):
+    """
+    Test forward passes for train_step_batch_split with conditional training.
+    """
+    args.conditional = True
+    (model1, scaler1, data1), (_, _, _) = build_objects(
+        model_factory, input_data_factory, args, device, True
+    )
+    prefix_seq_len = 1
+    prefix_lens = torch.tensor(
+        [prefix_seq_len] * data1[3].shape[0], device=device, dtype=torch.int
+    )
+
+    results = train_step_batch_split(
+        model1,
+        loss_fn,
+        args,
+        *data1,
+        scaler=scaler1,
+        rnnt_state=None,
+        loss_mods=IDENTITY_LOSS_MODIFIERS,
+        prefix_lens=prefix_lens,
+    )
+    assert results
+    assert results[0] >= 0  # loss is non-negative
 
 
 ALLOW_FAIL_200 = pytest.param(

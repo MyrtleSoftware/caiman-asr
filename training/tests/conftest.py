@@ -38,6 +38,14 @@ def tokenizer_kw(config_fp, test_data_dir):
 
 
 @pytest.fixture()
+def val_tokenizer_kw(config_fp, test_data_dir):
+    kw = load_tokenizer_kw(config_fp, test_data_dir)
+    kw["sampling"] = 0.0
+    kw["label_smoothing_kwargs"] = None
+    return kw
+
+
+@pytest.fixture()
 def mel_stats_dir(test_data_dir) -> str:
     return str(test_data_dir)
 
@@ -45,6 +53,11 @@ def mel_stats_dir(test_data_dir) -> str:
 @pytest.fixture()
 def tokenizer(tokenizer_kw) -> Tokenizer:
     return Tokenizer(**tokenizer_kw)
+
+
+@pytest.fixture()
+def val_tokenizer(val_tokenizer_kw) -> Tokenizer:
+    return Tokenizer(**val_tokenizer_kw)
 
 
 @pytest.fixture()
@@ -74,7 +87,13 @@ def mini_config_fp_factory(tmp_path, mel_stats_dir, ngram_subdir, test_data_dir)
         rnnt_config["joint_n_hid"] = 4
 
         cfg["rnnt"] = rnnt_config
+
+        # The test expect specific token outputs so we keep the
+        # legacy settings fos now
         cfg["tokenizer"]["sentpiece_model"] = str(test_data_dir / "librispeech29.model")
+        cfg["tokenizer"]["labels"] = [x for x in "abcdefghijklmnopqrstuvwxyz' "]
+        cfg["input_val"]["audio_dataset"]["normalize_transcripts"] = "lowercase"
+        cfg["input_train"]["audio_dataset"]["normalize_transcripts"] = "lowercase"
 
         cfg["input_val"]["filterbank_features"]["stats_path"] = mel_stats_dir
         cfg["input_train"]["filterbank_features"]["stats_path"] = mel_stats_dir

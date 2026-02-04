@@ -7,6 +7,7 @@ from hypothesis.strategies import text
 
 from caiman_asr_train.data.text.normalizers import (
     punctuation_normalize,
+    remove_user_symbols,
     select_and_normalize,
 )
 from caiman_asr_train.data.text.preprocess import norm_and_tokenize
@@ -15,6 +16,17 @@ from caiman_asr_train.setup.text_normalization import (
     NormalizeLevel,
     get_normalize_config,
 )
+
+
+@pytest.mark.parametrize(
+    "text, symbols, expected",
+    [
+        ("hello <EOS> <*>", ["<EOS>", "<*>"], "hello  "),
+        ("<hi> <[unk]> hi", ["<EOS>", "<[unk]>"], "<hi> hi"),
+    ],
+)
+def remove_user_symbols_test(text, symbols, expected):
+    assert remove_user_symbols(text, symbols) == expected
 
 
 def test_digit_normalize():
@@ -26,14 +38,18 @@ def test_digit_normalize():
         return select_and_normalize(
             x,
             allowed_chars,
-            NormalizeConfig(NormalizeLevel.DIGIT_TO_WORD, [], False, [], False),
+            NormalizeConfig(
+                NormalizeLevel.DIGIT_TO_WORD, [], False, [], {}, False, False, False
+            ),
         )
 
     def norm_default(x):
         return select_and_normalize(
             x,
             allowed_chars_default,
-            NormalizeConfig(NormalizeLevel.LOWERCASE, [], False, [], False),
+            NormalizeConfig(
+                NormalizeLevel.LOWERCASE, [], False, [], {}, False, False, False
+            ),
         )
 
     assert norm("Testing, 1, 2, 3.") == "Testing, one, two, three."
@@ -77,7 +93,7 @@ def test_digit_normalize():
     assert norm_default(("about one-five")) == "about one five"
     assert norm_default(("  word-word     ")) == "wordword"
     assert norm_default(("foo:bar")) == "foo bar"
-    assert norm(("foo:bar")) == "foobar"
+    assert norm(("foo:bar")) == "foo bar"
 
 
 def test_lowercase_normalize():
@@ -88,14 +104,18 @@ def test_lowercase_normalize():
         return select_and_normalize(
             x,
             allowed_chars,
-            NormalizeConfig(NormalizeLevel.LOWERCASE, [], False, [], False),
+            NormalizeConfig(
+                NormalizeLevel.LOWERCASE, [], False, [], {}, False, False, False
+            ),
         )
 
     def norm_and_standard(x):
         return select_and_normalize(
             x,
             allowed_chars,
-            NormalizeConfig(NormalizeLevel.LOWERCASE, [], False, [], True),
+            NormalizeConfig(
+                NormalizeLevel.LOWERCASE, [], False, [], {}, True, False, False
+            ),
         )
 
     assert (
@@ -130,7 +150,7 @@ def test_lowercase_normalize():
         (
             NormalizeLevel.DIGIT_TO_WORD,
             False,
-            "<silence> Mr Smith visited the cafe  one hundred and twenty-third Street",
+            "<silence> Mr Smith visited the cafe  at  one hundred and twenty-third Street",
         ),
         (
             NormalizeLevel.LOWERCASE,
@@ -148,7 +168,7 @@ def test_lowercase_normalize():
         (
             NormalizeLevel.DIGIT_TO_WORD,
             True,
-            " Mr Smith visited the cafe  one hundred and twenty-third Street",
+            " Mr Smith visited the cafe  at  one hundred and twenty-third Street",
         ),
         (
             NormalizeLevel.LOWERCASE,
@@ -160,7 +180,9 @@ def test_lowercase_normalize():
 def test_variants(normalizer, remove_tags, expected):
     charset = list(string.ascii_letters + " -")
     text = "<silence> Mr. Smith visited the café @ 123rd Street."
-    normalize_config = NormalizeConfig(normalizer, [], remove_tags, [], False)
+    normalize_config = NormalizeConfig(
+        normalizer, [], remove_tags, [], {}, False, False, False
+    )
     result = norm_and_tokenize(
         text, tokenizer=None, normalize_config=normalize_config, charset=charset
     )
@@ -171,7 +193,9 @@ def test_variants(normalizer, remove_tags, expected):
 def test_implemented(normalizer):
     """Make sure norm_and_tokenize can handle all NormalizeLevels,
     including ones added later"""
-    normalize_config = NormalizeConfig(normalizer, [], False, [], False)
+    normalize_config = NormalizeConfig(
+        normalizer, [], False, [], {}, False, False, False
+    )
     norm_and_tokenize(
         "foo",
         tokenizer=None,
@@ -192,7 +216,9 @@ def test_implemented(normalizer):
     ],
 )
 def test_no_forbidden_chars(input_text, default_charset, normalizer, remove_tags):
-    normalize_config = NormalizeConfig(normalizer, [], remove_tags, [], False)
+    normalize_config = NormalizeConfig(
+        normalizer, [], remove_tags, [], {}, False, False, False
+    )
     result = norm_and_tokenize(
         input_text,
         tokenizer=None,
@@ -222,7 +248,39 @@ def test_replacements(normalizer, expected):
         {"old": "colour", "new": "color"},
     ]
     text = "Blue is a colour; red is a colour; yellow is---also a colour"
-    normalize_config = get_normalize_config(normalizer, replacements, False, [], False)
+    normalize_config = get_normalize_config(
+        normalizer, replacements, False, [], {}, False, False, False
+    )
+    result = norm_and_tokenize(
+        text, tokenizer=None, normalize_config=normalize_config, charset=charset
+    )
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    "normalizer, charset, text, expected",
+    [
+        (
+            "digit_to_word",
+            list(string.ascii_letters + " ,"),
+            "Blue is a color",
+            "Blue is a color",
+        ),
+        (
+            "digit_to_word",
+            list(string.ascii_lowercase + " ,"),
+            "Blue is a color",
+            "lue is a color",
+        ),
+    ],
+)
+def test_digit_to_word(normalizer, charset, text, expected):
+    replacements = [
+        {"old": ";", "new": ","},
+    ]
+    normalize_config = get_normalize_config(
+        normalizer, replacements, False, [], {}, False, False, False
+    )
     result = norm_and_tokenize(
         text, tokenizer=None, normalize_config=normalize_config, charset=charset
     )
@@ -234,7 +292,9 @@ def test_tag_removal(default_charset):
         return select_and_normalize(
             x,
             default_charset,
-            NormalizeConfig(NormalizeLevel.LOWERCASE, [], True, [], False),
+            NormalizeConfig(
+                NormalizeLevel.LOWERCASE, [], True, [], {}, False, False, False
+            ),
         )
 
     assert norm("<tags> <like_these> are removed") == "  are removed"
@@ -254,3 +314,181 @@ def test_tag_removal(default_charset):
 def test_punctuation_normalize(text, norm_text):
     ret_text = punctuation_normalize(text)
     assert ret_text == norm_text
+
+
+@pytest.mark.parametrize(
+    "text, expected, charset, normalize_config",
+    [
+        # lowercase
+        (
+            "I am British and this is how I spell sanitise!",
+            "i am british and this is how i spell sanitise",
+            list(string.ascii_letters + " "),
+            NormalizeConfig(
+                NormalizeLevel.LOWERCASE, [], False, [], {}, False, False, False
+            ),
+        ),
+        # + standardize
+        (
+            "I am British and this is how I spell sanitise!",
+            "i am british and this is how i spell sanitize",
+            list(string.ascii_letters + " "),
+            NormalizeConfig(
+                NormalizeLevel.LOWERCASE, [], False, [], {}, True, False, False
+            ),
+        ),
+        # + preserve case and punctuation
+        # has no effect as already in lowercase
+        (
+            "I am British and this is how I spell sanitise!",
+            "i am british and this is how i spell sanitize",
+            list(string.ascii_letters + " "),
+            NormalizeConfig(
+                NormalizeLevel.LOWERCASE, [], False, [], {}, True, True, True
+            ),
+        ),
+        # + add punc to charset
+        (
+            "I am British and this is how I spell sanitise!",
+            "i am british and this is how i spell sanitize!",
+            list(string.ascii_letters + " !?.,-"),
+            NormalizeConfig(
+                NormalizeLevel.LOWERCASE, [], False, [], {}, True, True, True
+            ),
+        ),
+        # - preserve case and punctuation
+        (
+            "I am British and this is how I spell sanitise!",
+            "i am british and this is how i spell sanitize",
+            list(string.ascii_letters + " !?.,-"),
+            NormalizeConfig(
+                NormalizeLevel.LOWERCASE, [], False, [], {}, True, False, False
+            ),
+        ),
+        # digit to word
+        (
+            "I am British and this is how I spell sanitise!",
+            "I am British and this is how I spell sanitise!",
+            list(string.ascii_letters + " !?.,-"),
+            NormalizeConfig(
+                NormalizeLevel.DIGIT_TO_WORD, [], False, [], {}, False, False, False
+            ),
+        ),
+        # + standardize
+        # standardization lowercases and strips punctuation
+        (
+            "I am British and this is how I spell sanitise!",
+            "i am british and this is how i spell sanitize",
+            list(string.ascii_letters + " !?.,-"),
+            NormalizeConfig(
+                NormalizeLevel.DIGIT_TO_WORD, [], False, [], {}, True, False, False
+            ),
+        ),
+        # + preserve case and punctuation
+        (
+            "I am British and this is how I spell sanitise!",
+            "I am British and this is how I spell sanitize!",
+            list(string.ascii_letters + " !?.,-"),
+            NormalizeConfig(
+                NormalizeLevel.DIGIT_TO_WORD, [], False, [], {}, True, True, True
+            ),
+        ),
+        (
+            "UHHHH HOW MANY WORDS ARE THERE IN THIS SENTENCE?",
+            "HOW MANY WORDS ARE THERE IN THIS SENTENCE?",
+            list(string.ascii_letters + " !?.,-"),
+            NormalizeConfig(
+                NormalizeLevel.DIGIT_TO_WORD, [], False, [], {}, True, True, True
+            ),
+        ),
+        (
+            "Dr. you are my saviour",
+            "Doctor you are my savior",
+            list(string.ascii_letters + " !?.,-"),
+            NormalizeConfig(
+                NormalizeLevel.DIGIT_TO_WORD, [], False, [], {}, True, True, True
+            ),
+        ),
+        (
+            "One two 3 4 5 SIX SEVEN 8 9 Ten!",
+            "One two three four five SIX SEVEN eight nine Ten!",
+            list(string.ascii_letters + " !?.,-"),
+            NormalizeConfig(
+                NormalizeLevel.DIGIT_TO_WORD, [], False, [], {}, True, True, True
+            ),
+        ),
+        (
+            "No. Um, um, well",
+            "No. Well",
+            list(string.ascii_letters + " !?.,-"),
+            NormalizeConfig(
+                NormalizeLevel.DIGIT_TO_WORD, [], False, [], {}, True, True, True
+            ),
+        ),
+        (
+            "We represent individual, um. The fastest way is meetings",
+            "We represent individual. The fastest way is meetings",
+            list(string.ascii_letters + " !?.,-"),
+            NormalizeConfig(
+                NormalizeLevel.DIGIT_TO_WORD, [], False, [], {}, True, True, True
+            ),
+        ),
+        (
+            '"We represent individual, um. The fastest way is meetings"',
+            "We represent individual. The fastest way is meetings",
+            list(string.ascii_letters + " !?.,-"),
+            NormalizeConfig(
+                NormalizeLevel.DIGIT_TO_WORD, [], False, [], {}, True, True, True
+            ),
+        ),
+        (
+            '"We represent individual, um. The fastest way is meetings"',
+            '"We represent individual. The fastest way is meetings"',
+            list(string.ascii_letters + ' !?.,-"'),
+            NormalizeConfig(
+                NormalizeLevel.DIGIT_TO_WORD, [], False, [], {}, True, True, True
+            ),
+        ),
+        # lowercase + standardize
+        (
+            '"We represent individual, um. The fastest way is meetings"',
+            "we represent individual the fastest way is meetings",
+            list(string.ascii_letters + " "),
+            NormalizeConfig(
+                NormalizeLevel.LOWERCASE, [], False, [], {}, True, False, False
+            ),
+        ),
+        (
+            "No. Um, um, well",
+            "no well",
+            list(string.ascii_letters + " "),
+            NormalizeConfig(
+                NormalizeLevel.LOWERCASE, [], False, [], {}, True, False, False
+            ),
+        ),
+        (
+            (
+                "Dr. umm Smith mmhmm umm, yes please, MMM. "
+                "Prof. um Smith and umm prof. umm, yes please."
+            ),
+            "doctor smith yes please professor smith and professor yes please",
+            list(string.ascii_letters + " "),
+            NormalizeConfig(
+                NormalizeLevel.LOWERCASE, [], False, [], {}, True, False, False
+            ),
+        ),
+        (
+            "UH MM-HMM UH HUH-HUH MMMM. HMMM?!",
+            "",
+            list(string.ascii_letters + " "),
+            NormalizeConfig(
+                NormalizeLevel.LOWERCASE, [], False, [], {}, True, False, False
+            ),
+        ),
+    ],
+)
+def test_select_and_normalize(text, expected, charset, normalize_config):
+    result = select_and_normalize(
+        text, charset=charset, normalize_config=normalize_config
+    )
+    assert result == expected

@@ -31,6 +31,7 @@ def trim_predictions(
     probs: List[List[float]],
     pre_enc_width: float,
     post_enc_width: float,
+    initial_pad: float,
     feat_lens: torch.Tensor,
     eos_vad_threshold: float,
     eos_info: Optional[EOSTrimConfig] = None,
@@ -72,7 +73,7 @@ def trim_predictions(
             o_probs.append(p)
 
             if proc_end > eos_vad_threshold:
-                o_emit.append(Silence(eos_vad_threshold))
+                o_emit.append(Silence(eos_vad_threshold - initial_pad))
             else:
                 o_emit.append(Never())
 
@@ -86,12 +87,13 @@ def trim_predictions(
         # just as in the streaming case
 
         if eos_vad_threshold != float("inf"):
+            # +1 because tokens are zero indexed.
             last_tok = (user_perceived_time(t[-1]) + 1) * post_enc_width
             sil_frames = round(eos_vad_threshold / post_enc_width)
 
             # Look for n-consecutive blanks at end.
             if proc_end - last_tok > eos_vad_threshold:
-                term = Silence(last_tok + eos_vad_threshold)
+                term = Silence(last_tok + eos_vad_threshold - initial_pad)
 
             # Look for n-consecutive blanks in middle.
             # Don't check for n consecutive blanks before the first non-blank,
@@ -102,13 +104,14 @@ def trim_predictions(
                 t_idx = user_perceived_time(t_idx)
 
                 if t_idx - t_prev > sil_frames:
+                    # Again +1 because tokens are zero indexed.
                     frames = t_prev + 1 + sil_frames
 
                     y = y[:idx]
                     t = t[:idx]
                     p = p[:idx]
 
-                    term = Silence(frames * post_enc_width)
+                    term = Silence(frames * post_enc_width - initial_pad)
                     break
 
         if eos_info is not None:
@@ -135,7 +138,9 @@ def trim_predictions(
 
             if idx is not None:
                 # Plus one because zero indexed.
-                term = EOS((user_perceived_time(t[idx]) + 1) * post_enc_width)
+                term = EOS(
+                    (user_perceived_time(t[idx]) + 1) * post_enc_width - initial_pad
+                )
 
                 assert y[idx] == eos_info.eos_idx
 

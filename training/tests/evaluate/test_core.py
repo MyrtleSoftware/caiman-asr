@@ -36,6 +36,7 @@ class FakeLoader:
             "txt_len",
             ["raw_transcripts"],
             ["fnames"],
+            ["prefix_lens"],
         ]
 
     def __iter__(self):
@@ -94,6 +95,8 @@ def test_unk_token(tokenizer, tokens):
     args = Namespace(
         breakdown_wer=False,
         breakdown_chars="",
+        punctuation_marks=[",", ".", "?"],
+        punctuation_normalization=True,
         output_dir="/tmp",
         timestamp="19700101",
         dali_train_device="cuda",
@@ -105,6 +108,13 @@ def test_unk_token(tokenizer, tokens):
         eos_is_terminal=False,
         latency_head_offset=0.0,
         latency_tail_offset=0.0,
+        turn_off_initial_padding=True,
+        decoder="greedy",
+        keywords_path=None,
+        boost_keywords=False,
+        keyword_boost_c0=0.3,
+        keyword_boost_beta=0.9,
+        keyword_boost_context_score=1.0,
     )
 
     evaluate(

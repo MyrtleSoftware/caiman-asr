@@ -19,8 +19,6 @@
 import re
 from collections import namedtuple
 
-from tqdm import tqdm
-
 
 class OccurancePunctuationErrorRate:
     """
@@ -472,11 +470,7 @@ class DatasetPunctuationErrorRate:
                         amounts[outer_key][inner_key] += value
             return amounts
 
-        print("Computing Punctuation Error Rate")
-
-        for reference, hypothesis in tqdm(
-            zip(self.references, self.hypotheses), total=len(self.references)
-        ):
+        for reference, hypothesis in zip(self.references, self.hypotheses):
             operation_amounts, substitution_amounts, punctuation_rates = (
                 self.oper_obj.compute(reference, hypothesis)
             )

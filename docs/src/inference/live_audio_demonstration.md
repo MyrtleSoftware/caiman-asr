@@ -21,7 +21,34 @@ pip install pyaudio websocket-client
 
 Then run the client with `./live_client.py --host <host> --port <port>` where `<host>` and `<port>` are the host and port of the ASR server respectively.
 
-## Troubleshooting
+### Prefix (punctuation/casing)
+
+Use `--prefix` to condition the RNN-T prediction network:
+
+- `<pnc>`: punctuated and cased output
+- `<nopnc>`: lowercase only (slightly more accurate)
+
+For example,
+
+```bash
+python ./live_client.py --host <host> --port <port> --prefix="<pnc>"
+```
+
+Note: ensure the server is running a model that supports `prefix`.
+
+### Keyword Boosting
+
+CAIMAN-ASR supports keyword boosting of up to 100 keywords.
+Keyword boosting is a technique to improve the recognition of domain-specific words/phrases and proper nouns,
+by boosting the probability of specific tokens at inference time.
+
+To provide keywords to the server, use the `--keywords` argument with a space-separated list of keywords e.g.
+
+```bash
+python ./live_client.py --keywords caiman asr myrtle
+```
+
+### Troubleshooting
 
 If the client raises `OSError: [Errno -9997] Invalid sample rate`, you may need to
 use a different audio input device:

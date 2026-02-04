@@ -152,7 +152,7 @@ def _pre_norm_num_expressions(text):
     text = re.sub(r"(?<=\d)-(?=\d)", " to ", text)
 
     # keep remaining dashes as "minus" because scrub will remove it
-    text = re.sub(r"-(\d+)", r"minus \1", text)
+    text = re.sub(r"(?:^|\s+)-(\d+)", r" minus \1", text)
 
     # keep hours and minutes separate because scrub will remove it
     text = re.sub(r"(?<=\d):(?=\d)", " ", text)

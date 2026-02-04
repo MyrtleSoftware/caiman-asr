@@ -21,7 +21,7 @@ RESULTS=$3
 # This allows docker container to follow symlinks in the mounted
 # <DATASETS>, <CHECKPOINTS>, and <RESULTS> directories to different
 # drives on the host machine
-volumes=""
+volumes="-v $DATASETS:$DATASETS "
 for i in "${@:4}"; do
 	volumes=$volumes"-v $i:$i "
 done
@@ -31,7 +31,7 @@ done
 : ${COMMAND:="bash"}
 : ${TTY=true}
 : ${HF_CACHE:="$HOME/.cache/huggingface"}
-: ${NOISE_CACHE:="$HOME/.cache/myrtle/noise_cache"}
+: ${MYRTLE_CACHE:="$HOME/.cache/myrtle"}
 : ${PORTS:=""}
 
 DOCKER_ARGS=""
@@ -41,7 +41,6 @@ if [ "$TTY" = true ]; then
 fi
 
 DOCKER_ARGS+="-i --rm --gpus=all --shm-size=4g --ulimit memlock=-1 --ulimit stack=67108864 "
-DOCKER_ARGS+="-v $DATASETS:/datasets "
 DOCKER_ARGS+="-v $CHECKPOINTS:/checkpoints/ "
 DOCKER_ARGS+="-v $RESULTS:/results/ "
 DOCKER_ARGS+="-v $PWD:/code "
@@ -50,9 +49,9 @@ DOCKER_ARGS+="-v $PWD:/code "
 hf_cache_volume="$HF_CACHE:/root/.cache/huggingface"
 DOCKER_ARGS+=" -v $hf_cache_volume "
 
-# Keep cached noise datasets even when restarting the container
-noise_cache_volume="$NOISE_CACHE:/root/.cache/myrtle/noise_cache"
-DOCKER_ARGS+=" -v $noise_cache_volume "
+# Keep cached data even when restarting the container
+myrtle_cache_volume="$MYRTLE_CACHE:/root/.cache/myrtle"
+DOCKER_ARGS+=" -v $myrtle_cache_volume "
 
 DOCKER_ARGS+="$EXTRA_VOLUMES $volumes "
 DOCKER_ARGS+="-e TZ=$(cat /etc/timezone) "
@@ -78,4 +77,7 @@ if [ -n "$JENKINS_JOB" ]; then
 	DOCKER_ARGS+="--name $JENKINS_JOB "
 fi
 
-docker run ${DOCKER_ARGS} ${DOCKER_NAME} sh -c "/workspace/training/scripts/docker/settimezone.sh && $COMMAND"
+# Symlink to /datasets to preserve relative symlinks between drives
+LINK="ln -s $DATASETS /datasets"
+
+docker run ${DOCKER_ARGS} ${DOCKER_NAME} sh -c "/workspace/training/scripts/docker/settimezone.sh && $LINK && $COMMAND"

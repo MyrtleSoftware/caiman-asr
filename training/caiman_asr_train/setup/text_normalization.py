@@ -43,7 +43,10 @@ class NormalizeConfig:
     replacements: list[Replacement]
     remove_tags: bool
     user_symbols: list[str]
+    user_symbols_dict: dict[str, str]
     standardize_text: bool
+    preserve_case: bool
+    preserve_punctuation: bool
 
 
 IDENTITY_NORMALIZE_CONFIG = NormalizeConfig(
@@ -51,27 +54,35 @@ IDENTITY_NORMALIZE_CONFIG = NormalizeConfig(
     replacements=[],
     remove_tags=False,
     user_symbols=[],
+    user_symbols_dict={},
     standardize_text=False,
+    preserve_case=False,
+    preserve_punctuation=False,
 )
 
 
 @beartype
 def normalize_config_from_full_yaml(model_config: dict) -> NormalizeConfig:
     config_data = model_config["input_train"]["audio_dataset"]
-    user_symbols = list(get_all_user_tokens(model_config).values())
-    return normalize_config_from_config_data(config_data, user_symbols)
+    user_symbols_dict, user_symbols = get_all_user_tokens(model_config)
+    return normalize_config_from_config_data(
+        config_data, user_symbols, user_symbols_dict
+    )
 
 
 @beartype
 def normalize_config_from_config_data(
-    config_data: dict, user_symbols: List[str]
+    config_data: dict, user_symbols: List[str], user_symbols_dict: dict[str, str]
 ) -> NormalizeConfig:
     return get_normalize_config(
         config_data["normalize_transcripts"],
         config_data.get("replacements"),
         config_data.get("remove_tags", True),
         user_symbols,
+        user_symbols_dict,
         config_data.get("standardize_text"),
+        config_data.get("preserve_case", False),
+        config_data.get("preserve_punctuation", False),
     )
 
 
@@ -81,7 +92,10 @@ def get_normalize_config(
     replacements_config: list[dict[str, str]] | None,
     remove_tags: bool,
     user_symbols: list[str],
+    user_symbols_dict: dict[str, str],
     standardize_text: bool,
+    preserve_case: bool,
+    preserve_punctuation: bool,
 ) -> NormalizeConfig:
     replacements = (
         []
@@ -94,5 +108,8 @@ def get_normalize_config(
         replacements=replacements,
         remove_tags=remove_tags,
         user_symbols=user_symbols,
+        user_symbols_dict=user_symbols_dict,
         standardize_text=standardize_text,
+        preserve_case=preserve_case,
+        preserve_punctuation=preserve_punctuation,
     )

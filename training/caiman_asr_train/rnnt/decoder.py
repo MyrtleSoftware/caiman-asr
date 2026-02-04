@@ -113,6 +113,7 @@ class RNNTCommonDecoder(RNNTDecoder):
         max_symbol_per_sample: Optional[int],
         max_symbols_per_step: Optional[int],
         max_inputs_per_batch: int = int(1e7),
+        prefix_token_ids: Optional[List[int]] = None,
         temperature: float = 1.0,
         # This isn't user-configurable for the greedy decoder.
         # This is configurable for the beam decoder, and the default is 1.4 for beam
@@ -127,6 +128,7 @@ class RNNTCommonDecoder(RNNTDecoder):
         self.max_symbol_per_sample = max_symbol_per_sample
         self._SOS = -1  # start of sequence token
         self.temperature = temperature
+        self.prefix_token_ids = prefix_token_ids or []
 
     def _pred_step_raw(self, label, hidden):
         return self.model.predict(label, hidden, add_sos=False)
@@ -137,6 +139,48 @@ class RNNTCommonDecoder(RNNTDecoder):
 
         label = label_collate([[label]]).to(device)
         return self._pred_step_raw(label, hidden)
+
+    def _pred_step_with_prefix(self, device=None, batch_size=1, beam=False):
+        """
+        Initialize prediction network with prefix tokens.
+        This replaces the standard SOS initialization when prefix tokens are available.
+
+        Args:
+            device: Device to place tensors on
+            batch_size: Batch size for expansion
+            beam: If True, handles beam decoder's special case where we need to
+                      process prefix[:-1] to avoid double processing the last token
+        """
+        if not self.prefix_token_ids:
+            # No prefix, use standard SOS initialization
+            return self._pred_step(self._SOS, hidden=None, device=device)
+
+        if beam and len(self.prefix_token_ids) == 1:
+            # For beam decoder with single token prefix, just use SOS.
+            # Note (beam + prefix):
+            # Prefix is included in the hypothesis,
+            # and will be processed by pred network in the beam decoder loop,
+            # before the beam search is started.
+            # See _batched_decode in beam.py
+            return self._pred_step(self._SOS, hidden=None, device=device)
+
+        prefix_tensor = torch.tensor([self.prefix_token_ids]).to(device)
+        if batch_size > 1:
+            prefix_tensor = prefix_tensor.expand(batch_size, -1)
+
+        if beam:
+            # For beam decoder, process prefix[:-1] to avoid double processing.
+            # See `Note (beam + prefix)` above.
+            prefix_tensor = prefix_tensor[:, :-1]
+
+        g, (h, c), _ = self.model.predict(
+            y=prefix_tensor, pred_state=None, add_sos=True
+        )
+
+        # Return the final timestep output
+        final_g = g[:, -1:, :]  # (B, 1, H)
+
+        return final_g, (h, c), None
 
     def _eos_prob_correction(self, logprobs):
         match self.eos_strategy:

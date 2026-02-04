@@ -1,9 +1,10 @@
 import pytest
 
 from caiman_asr_train.evaluate.state_resets.overlap_processing import (
+    best_split,
     combine_predictions,
+    denorm,
     get_unique_predictions,
-    manage_boundary_common_tokens,
     process_time,
 )
 
@@ -42,189 +43,49 @@ def test_process_time(test_input, expected):
 
 
 @pytest.mark.parametrize(
-    """pred, timestamps, probs, enc_time, overlap, lookahead,
-    expected_pred, expected_timestamps, expected_probs""",
+    """pred, expected_pred""",
     [
         (
             [[1, 2, 3, 4], [4, 5, 6, 7]],
-            [[20, 60, 100, 200], [10, 61, 101, 201]],
-            [[0.81, 0.95, 0.83, 0.91], [0.33, 0.61, 0.88, 0.92]],
-            2,
-            67,
-            3,
             [[1, 2, 3, 4], [5, 6, 7]],
-            [[20, 60, 100, 200], [61, 101, 201]],
-            [[0.81, 0.95, 0.83, 0.91], [0.61, 0.88, 0.92]],
         ),
         (
             [[1, 2, 3, 4], [4, 4, 6, 7]],
-            [[20, 60, 100, 200], [10, 61, 101, 201]],
-            [[0.81, 0.95, 0.83, 0.91], [0.33, 0.61, 0.88, 0.92]],
-            2,
-            67,
-            3,
-            [[1, 2, 3, 4], [6, 7]],
-            [[20, 60, 100, 200], [101, 201]],
-            [[0.81, 0.95, 0.83, 0.91], [0.88, 0.92]],
+            [[1, 2, 3, 4], [4, 6, 7]],
         ),
         (
             [[], [1, 2, 3, 4], [4, 4, 6, 7]],
-            [[], [40, 60, 100, 110], [35, 61, 101, 111]],
-            [[], [0.81, 0.95, 0.83, 0.91], [0.33, 0.61, 0.88, 0.92]],
-            2,
-            67,
-            3,
             [[], [1, 2, 3, 4], [4, 6, 7]],
-            [[], [40, 60, 100, 110], [61, 101, 111]],
-            [[], [0.81, 0.95, 0.83, 0.91], [0.61, 0.88, 0.92]],
-        ),
-        (
-            [[], [1, 2, 3, 4], [4, 4, 6, 7]],
-            [[], [33, 60, 100, 110], [40, 61, 101, 111]],
-            [[], [0.81, 0.95, 0.83, 0.91], [0.33, 0.61, 0.88, 0.92]],
-            2,
-            67,
-            3,
-            [[], [2, 3, 4], [4, 6, 7]],
-            [[], [60, 100, 110], [61, 101, 111]],
-            [[], [0.95, 0.83, 0.91], [0.61, 0.88, 0.92]],
         ),
         (
             [[7, 2, 3, 6, 5], [2, 6, 5, 9, 7]],
-            [[1, 2, 3, 4, 6], [1, 3, 4, 5, 6]],
-            [[0.81, 0.95, 0.83, 0.91, 0.92], [0.33, 0.61, 0.88, 0.92, 0.78]],
-            1,
-            2,
-            3,
             [[7, 2, 3, 6, 5], [9, 7]],
-            [[1, 2, 3, 4, 6], [5, 6]],
-            [[0.81, 0.95, 0.83, 0.91, 0.92], [0.92, 0.78]],
         ),
         (
             [[7, 2, 3, 6, 5], [2, 6, 5, 9, 7]],
-            [[1, 2, 3, 4, 6], [1, 3, 4, 5, 6]],
-            [],
-            1,
-            2,
-            3,
             [[7, 2, 3, 6, 5], [9, 7]],
-            [[1, 2, 3, 4, 6], [5, 6]],
-            None,
         ),
     ],
 )
 def test_get_unique_predictions(
     pred,
-    timestamps,
-    probs,
-    enc_time,
-    overlap,
-    lookahead,
     expected_pred,
-    expected_timestamps,
-    expected_probs,
 ):
+    timestamps = pred[:]
+    probs = [list(map(float, p)) for p in pred]
+
+    expected_timestamps = expected_pred[:]
+    expected_probs = [list(map(float, p)) for p in expected_pred]
+
     adjusted_pred, adjusted_timestamps, adjusted_probs = get_unique_predictions(
-        pred, timestamps, probs, enc_time, overlap, lookahead
+        pred, timestamps, probs, detokenize=lambda x: str(x) + str(x)
     )
+
     for i, segment in enumerate(adjusted_pred):
         assert len(segment) == len(adjusted_timestamps[i])
     assert adjusted_pred == expected_pred
     assert adjusted_timestamps == expected_timestamps
     assert adjusted_probs == expected_probs
-
-
-@pytest.mark.parametrize(
-    "segm, t_st, probs, trusted_list, lookahead, exp_segm, exp_time, exp_probs",
-    [
-        (
-            [7, 5, 9, 7, 6],
-            [0, 1, 2, 3, 4],
-            [0.9, 0.9, 0.8, 0.7, 0.9],
-            [7],
-            1,
-            [5, 9, 7, 6],
-            [1, 2, 3, 4],
-            [0.9, 0.8, 0.7, 0.9],
-        ),
-        (
-            [7, 5, 9, 7, 6],
-            [0, 1, 2, 3, 4],
-            [0.9, 0.9, 0.8, 0.7, 0.9],
-            [7, 5, 9],
-            3,
-            [7, 6],
-            [3, 4],
-            [0.7, 0.9],
-        ),
-        (
-            [7, 5, 9, 7, 6],
-            [0, 1, 2, 3, 4],
-            None,
-            [7],
-            3,
-            [5, 9, 7, 6],
-            [1, 2, 3, 4],
-            None,
-        ),
-        (
-            [7, 5, 9, 7, 6],
-            [0, 1, 2, 3, 4],
-            [0.9, 0.9, 0.8, 0.7, 0.9],
-            [5],
-            3,
-            [7, 9, 7, 6],
-            [0, 2, 3, 4],
-            [0.9, 0.8, 0.7, 0.9],
-        ),
-        (
-            [7, 5, 9, 7, 6],
-            [0, 1, 2, 3, 4],
-            [0.9, 0.9, 0.8, 0.7, 0.9],
-            [],
-            3,
-            [7, 5, 9, 7, 6],
-            [0, 1, 2, 3, 4],
-            [0.9, 0.9, 0.8, 0.7, 0.9],
-        ),
-        (
-            [7, 5, 7, 7, 6],
-            [0, 1, 2, 3, 4],
-            [0.9, 0.9, 0.8, 0.7, 0.9],
-            [7, 5, 1],
-            3,
-            [7, 7, 6],
-            [2, 3, 4],
-            [0.8, 0.7, 0.9],
-        ),
-        (
-            [1, 2, 3, 4, 5],
-            [0, 1, 2, 3, 4],
-            [0.9, 0.9, 0.8, 0.7, 0.9],
-            [1, 4],
-            3,
-            [2, 3, 4, 5],
-            [1, 2, 3, 4],
-            [0.9, 0.8, 0.7, 0.9],
-        ),
-    ],
-)
-def test_manage_boundary_common_tokens(
-    segm,
-    t_st,
-    probs,
-    trusted_list,
-    lookahead,
-    exp_segm,
-    exp_time,
-    exp_probs,
-):
-    ret_segm, ret_time, ret_probs = manage_boundary_common_tokens(
-        segm, t_st, probs, trusted_list, lookahead
-    )
-    assert exp_segm == ret_segm
-    assert exp_time == ret_time
-    assert exp_probs == ret_probs
 
 
 @pytest.mark.parametrize(
@@ -243,3 +104,35 @@ def test_manage_boundary_common_tokens(
 def test_combine_predictions(ex_input, expected):
     returned = combine_predictions(ex_input)
     assert expected == returned
+
+
+@pytest.mark.parametrize(
+    "lhs, rhs, expect",
+    [
+        (["the", "cat", "sat"], ["sat", "on", "a"], (1, 0, 0, 1)),
+        (["the", "cat", "sat"], ["cat", "sat", "on", "a"], (2, 0, 0, 2)),
+        (["the", "cat", "flap"], ["cat", "flip", "a"], (2, 0, 0, 2)),
+    ],
+)
+def test_best_split(lhs: list[str], rhs: list[str], expect):
+    #
+    ll = list(enumerate(lhs))
+    rr = list(enumerate(rhs))
+
+    _, n, m, x, y = best_split(ll, rr)
+
+    assert (n, m, x, y) == expect, f"Expected {expect}, got {(n, m, x, y)=}"
+
+
+@pytest.mark.parametrize(
+    "input, expect",
+    [
+        ("ooh", "ooh"),
+        ("a!", "a"),
+        ("A!", "a"),
+        ("!", ""),
+        ("<enen>", ""),
+    ],
+)
+def test_denorm(input: str, expect: str):
+    assert denorm(input, detokenize=lambda x: x) == expect

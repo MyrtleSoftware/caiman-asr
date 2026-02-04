@@ -66,6 +66,7 @@ class JSONEntry(BaseModel):
     whisper: dict = {}
     parakeet: dict = {}
     original: dict = {}
+    rnnt: dict = {}
 
 
 class JSONDataset(BaseModel):

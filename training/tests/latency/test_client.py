@@ -216,7 +216,7 @@ def test_vs_client():
 
         # === Test word timestamps ===
 
-        ml_tokens_int, ml_timestamps, _ = split_finals(copy_ml_fused)
+        ml_tokens_int, ml_timestamps, _, _ = split_finals(copy_ml_fused)
         ml_tokens_str = [IDX_2_TOK[x] for x in ml_tokens_int]
         ml_sentence = "".join(ml_tokens_str)
         sequence_timestamp = group_timestamps(

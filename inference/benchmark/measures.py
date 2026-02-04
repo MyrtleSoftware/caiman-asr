@@ -3,9 +3,10 @@ import difflib
 from beartype import beartype
 from beartype.typing import Dict, List
 from ctm import CTM
-from levenshtein_rs import levenshtein_list as levenshtein
 
-from caiman_asr_train.evaluate.metrics import standardize_wer
+from caiman_asr_train.data.text.normalizers import lowercase_normalize as norm
+from caiman_asr_train.evaluate.error_rates import ErrorRate
+from caiman_asr_train.evaluate.metrics import word_error_rate
 from caiman_asr_train.latency.measure_latency_lite import compute_latency_metrics
 
 
@@ -36,29 +37,21 @@ def calculate_wer(ref_ctm: CTM, hyp_ctm: CTM) -> Dict:
     refs = ref_ctm.get_transcripts()
     hyps = hyp_ctm.get_transcripts()
 
-    scores, words = 0, 0
-    for ref_id, ref_txt in refs.items():
-        if ref_id not in hyps.keys():
-            continue
+    keys = list(set(refs.keys()) & set(hyps.keys()))
 
-        hyp_txt = hyps[ref_id]
-        hyp_txt = standardize_wer(hyp_txt)
-        hyp_txt = hyp_txt.strip().split(" ")
+    refs = [refs[k] for k in keys]
+    hyps = [hyps[k] for k in keys]
 
-        ref_txt = standardize_wer(ref_txt)
-        ref_txt = ref_txt.strip().split(" ")
+    wer, scores, words = word_error_rate(
+        hypotheses=hyps,
+        references=refs,
+        error_rate=ErrorRate.WORD,
+        standardize=True,
+    )
 
-        words += len(ref_txt)
-        scores += levenshtein(ref_txt, hyp_txt)
+    print(f"wer: {wer:.3%}, errors: {scores}, words: {words}")
 
-    if words != 0:
-        wer = 1.0 * scores / words
-    else:
-        wer = float("inf")
-
-    rounded_wer = round(wer * 100, 4)
-    print(f"wer: {rounded_wer}%, errors: {scores}, words: {words}")
-    return {"WER %": rounded_wer, "Errors": scores, "Total words": words}
+    return {"WER %": wer * 100, "Errors": scores, "Total words": words}
 
 
 @beartype
@@ -101,6 +94,9 @@ def calculate_latency(
     return latency_metrics, utt_stats
 
 
+BASIC_CHAR_SET = list(" abcdefghijklmnopqrstuvwxyz'")
+
+
 @beartype
 def _align_transcripts(
     ref_ctm: CTM, hyp_ctm: CTM, include_subs: bool = False
@@ -125,8 +121,8 @@ def _align_transcripts(
             continue
         hyp_tstamp = hyp_tstamps[fname]
 
-        ref_words = [t[0] for t in ref_tstamp]
-        hyp_words = [t[0] for t in hyp_tstamp]
+        ref_words = [norm(t[0], BASIC_CHAR_SET) for t in ref_tstamp]
+        hyp_words = [norm(t[0], BASIC_CHAR_SET) for t in hyp_tstamp]
 
         # Initialize the SequenceMatcher for each file
         matcher = difflib.SequenceMatcher(None, ref_words, hyp_words, autojunk=False)

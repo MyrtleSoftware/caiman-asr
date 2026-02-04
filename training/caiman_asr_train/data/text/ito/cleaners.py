@@ -82,12 +82,32 @@ def convert_to_ascii(text):
     return unidecode(text)
 
 
-def expand_punctuation(text):
-    text = re.sub(r"&", " and ", text)
-    text = re.sub(r"\+", " plus ", text)
-    text = re.sub(r"%", " percent ", text)
-    text = re.sub(r"@", " at ", text)
-    text = re.sub(r":", " ", text)
+def expand_punctuation(text, charset):
+    """
+    Expands pronounceable punctuation characters if they are not in the charset.
+    """
+
+    if "&" not in charset:
+        text = re.sub(r"&", " and ", text)
+
+    if "#" not in charset:
+        text = re.sub(r"#", " number ", text)
+
+    if "+" not in charset:
+        text = re.sub(r"\+", " plus ", text)
+
+    if "%" not in charset:
+        text = re.sub(r"%", " percent ", text)
+
+    if "@" not in charset:
+        text = re.sub(r"@", " at ", text)
+
+    if "=" not in charset:
+        text = re.sub(r"=", " equal ", text)
+
+    if ":" not in charset:
+        text = re.sub(r":", " ", text)
+
     return text
 
 
@@ -99,6 +119,6 @@ def english_cleaners(text, charset, table=None):
     text = expand_abbreviations(text)
     if table is not None:
         text = text.translate(table)
-    text = expand_punctuation(text)
+    text = expand_punctuation(text, charset)
     text = collapse_whitespace(text)
     return text

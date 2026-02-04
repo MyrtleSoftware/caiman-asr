@@ -92,6 +92,16 @@ def main(args):
         is_best=False,
         filepath=args.output_path,
     )
+    if args.save_hw_ckpt:
+        # remove duplicate keys not used in inference
+        averaged_state_dict.pop("joint_fc.weight")
+        averaged_state_dict.pop("joint_fc.bias")
+        checkpointer.save_hardware_checkpoint(
+            args.output_path,
+            1.0,
+            args.model_config,
+            averaged_state_dict,
+        )
 
 
 if __name__ == "__main__":
@@ -114,6 +124,13 @@ if __name__ == "__main__":
         type=str,
         default="/workspace/training/configs/testing-1023sp_run.yaml",
         help="Path of the model configuration file.",
+    )
+    parser.add_argument(
+        "--save_hw_ckpt",
+        action="store_true",
+        help="Whether to save hardware checkpoint. "
+        "If provided, the hardware checkpoint will be saved in the output_path "
+        "with suffix '.hw.pt' instead of '.pt'.",
     )
     args = parser.parse_args()
 

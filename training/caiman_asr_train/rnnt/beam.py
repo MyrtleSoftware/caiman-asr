@@ -30,11 +30,15 @@ from beartype.typing import Dict, Generator, List, Optional, Tuple, Union, Value
 from sentencepiece import SentencePieceProcessor as SPP
 
 from caiman_asr_train.keywords.process import load_keywords
-from caiman_asr_train.keywords.trie import Keywords
 from caiman_asr_train.lm.kenlm_ngram import KenLmModel, NgramInfo
 from caiman_asr_train.rnnt.decoder import RNNTCommonDecoder
 from caiman_asr_train.rnnt.eos_strategy import EOSPredict, EOSStrategy
-from caiman_asr_train.rnnt.hypothesis import SPU_UNICODE, Hypothesis, init_sos_hyp
+from caiman_asr_train.rnnt.hypothesis import (
+    SPU_UNICODE,
+    Hypothesis,
+    init_prefix_hyp,
+    init_sos_hyp,
+)
 from caiman_asr_train.rnnt.model import RNNT
 from caiman_asr_train.rnnt.response import FrameResponses
 from caiman_asr_train.rnnt.serialise_responses import ResponseSerializer
@@ -110,6 +114,7 @@ class RNNTBeamDecoder(RNNTCommonDecoder):
         frame_width: The width of the encoder output frames in seconds. This is only
             required if `eos_vad_threshold` or `final_emission_thresh` is set to a
             non-infinite value.
+        prefix_token_ids: List of prefix tokens to add to start of each hypothesis
     """
 
     def __init__(
@@ -133,7 +138,12 @@ class RNNTBeamDecoder(RNNTCommonDecoder):
         eos_vad_threshold: float = float("inf"),
         final_emission_thresh: float = float("inf"),
         frame_width: Optional[float] = None,
-        keyword_boost_path: Optional[str] = None,
+        keywords_path: Optional[str] = None,
+        boost_keywords: bool = False,
+        keyword_boost_c0: float = 0.3,
+        keyword_boost_beta: float = 0.9,
+        keyword_boost_context_score: float = 1.0,
+        prefix_token_ids: Optional[List[int]] = None,
     ):
         super().__init__(
             model=model,
@@ -143,6 +153,7 @@ class RNNTBeamDecoder(RNNTCommonDecoder):
             max_symbol_per_sample=max_symbol_per_sample,
             max_symbols_per_step=max_symbols_per_step,
             temperature=temperature,
+            prefix_token_ids=prefix_token_ids,
         )
         assert beam_width > 0
         self.beam_width = beam_width
@@ -166,10 +177,15 @@ class RNNTBeamDecoder(RNNTCommonDecoder):
         self.user_tokens = [] if user_tokens is None else user_tokens
         self.eos_is_terminal = eos_is_terminal
 
-        if keyword_boost_path is None:
-            self.keywords = Keywords[str]([])
+        if boost_keywords:
+            self.keywords = load_keywords(
+                keywords_path,
+                keyword_boost_c0,
+                keyword_boost_beta,
+                keyword_boost_context_score,
+            )
         else:
-            self.keywords = load_keywords(keyword_boost_path)
+            self.keywords = None
 
         if ngram_info:
             ngram_path, self.ngram_alpha = ngram_info.path, ngram_info.scale_factor
@@ -291,7 +307,15 @@ class RNNTBeamDecoder(RNNTCommonDecoder):
 
         blank_tensor = torch.tensor([self.blank_idx], device="cpu", dtype=torch.long)
 
-        sos_hyp = init_sos_hyp(self._SOS, self.ngram_lm)
+        if self.prefix_token_ids:
+            _, (h, c), _ = self._pred_step_with_prefix(
+                device=encs.device, batch_size=1, beam=True
+            )
+            sos_hyp = init_prefix_hyp(
+                self._SOS, self.prefix_token_ids, self.ngram_lm, (h, c), self.detokenize
+            )
+        else:
+            sos_hyp = init_sos_hyp(self._SOS, self.ngram_lm)
 
         kept_hyps = {sos_hyp.hashval: sos_hyp}
 

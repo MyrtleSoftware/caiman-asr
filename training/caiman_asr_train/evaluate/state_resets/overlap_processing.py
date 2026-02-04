@@ -1,13 +1,13 @@
+import string
 import warnings
-from math import ceil
 
 from beartype import beartype
-from beartype.typing import List, Optional, Tuple, Union
+from beartype.typing import Callable, List, Optional, Tuple, TypeVar, Union
+from Levenshtein import distance
 
 from caiman_asr_train.evaluate.state_resets.timestamp import (
     Timestamp,
     add_frames,
-    model_time,
 )
 
 
@@ -64,45 +64,104 @@ def process_time(
 
 
 @beartype
+def best_split(lhs: list[tuple[int, str]], rhs: list[tuple[int, str]], k: int = 3):
+    """
+    Given the primary stream of tokens 'lhs', and the secondary stream 'rhs'.
+    Find the partition of `lhs : z | n | m` and rhs : `x | y | _` such that
+    the concatenation `merged : z | n | _` is continuous speech.
+
+    Arguments:
+        lhs: List of tuples (index, token) for the primary stream.
+        rhs: List of tuples (index, token) for the secondary stream.
+
+    Returns:
+        tuple (best, n, m, x, y) where:
+            best: The best score for the partition.
+               n: the number of tokens in the primary stream before the partition.
+               m: the number of tokens in the primary stream after the partition.
+               x: the number of tokens in the secondary stream before the partition.
+               y: the number of tokens in the secondary stream after the partition.
+
+        Also see descriptions of n, m, x, y in the docstring above.
+    """
+
+    # This parameter is kept fixed to align with the streaming implementation
+    # which can't backtrack on the primary stream.
+    m = 0
+
+    best, N, M, X, Y = 0, 0, 0, 0, 0
+
+    lhs_toks = [x for (_, x) in lhs]
+    rhs_toks = [x for (_, x) in rhs]
+
+    for x in range(min(10, len(lhs_toks))):
+        for n in range(len(lhs_toks) - m):
+            z = len(lhs_toks) - n - m
+            lhs_s = "".join(lhs_toks[z : z + n])
+            # Search the fat-diagonal
+            for y in range(max(0, n - k), min(len(rhs_toks) - x, n + k - 1)):
+                rhs_s = "".join(rhs_toks[x : x + y])
+                d = distance(lhs_s, rhs_s)
+                s = n - m - x + y - d
+                if s > best:
+                    best = s
+                    N = n
+                    M = m
+                    X = x
+                    Y = y
+
+    return best, N, M, X, Y
+
+
+T = TypeVar("T")
+
+
+@beartype
+def denorm(tok: T, detokenize: Callable[[T], str]) -> str:
+    """
+    De-tokenize with primitive normalization.
+    """
+    seg = detokenize(tok)
+
+    # Catch special tokens
+    if seg.startswith("<") and seg.endswith(">"):
+        return ""
+
+    seg = seg.translate(str.maketrans("", "", string.punctuation))
+    seg = seg.strip().lower()
+
+    return seg
+
+
+@beartype
 def get_unique_predictions(
     pred: List[List[int]],
     timestamps: List[List[Timestamp]],
     probs: List[List[float]],
-    enc_time_reduction: int,
-    overlap_frames: int,
-    lookahead: int = 3,
+    detokenize: Callable[[int], str],
 ) -> Tuple[List[List[int]], List[List[Timestamp]], Optional[List[List[float]]]]:
-    """Return transcripts without the overlapping segment.
+    """
+    Return transcripts without the overlapping segment.
 
-    This function receives the segments of the transcripts and their corresponding
-    timestamps. It then scans the timestamps, and the ones
-    that are less than or equal to the number of overlap frames are dropped, along
-    with the respective tokens. This is happening because the tokens belong to the
-    overlapping region. Furthermore, the first "lookahead" number of
-    tokens is scanned, and if any of these tokens are among the last few tokens
-    of the previous segment, they are dropped.
-
-    If per-token probabilities are provided, then the corresponding probabilities are
-    also removed.
+    This function receives the segments of the transcripts and their
+    corresponding timestamps/probs. It then scans the transcripts and removes
+    the overlapping region with a levenshtein based heuristic. If per-token
+    probabilities are provided, then the corresponding probabilities are also
+    removed.
 
     For example, assume the following example input:
+
     pred:        [[7, 2, 3, 6, 5], [2, 6, 5, 9, 7]]
-    timestamps:  [[1, 2, 3, 4, 6], [1, 3, 4, 5, 6]]
-    overlap_frames: 2
-    lookahead: 3
+    timestamps:  ...
+    probs:       ...
+
     The output of the function will be:
 
-    will return:
     pred:        [[7, 2, 3, 6, 5], [9, 7]]
-    timestamps:  [[1, 2, 3, 4, 6], [5, 6]]
+    timestamps:  ...
+    probs:       ...
+
     where the second segment has the first 3 tokens ("2", "6" and "5") removed.
-    The first token ("2") is removed because it belongs to the overlap region
-    (timestamp=1 where the overlap duration is 2 frames). Then, the last lookahead tokens
-    of the previous segment ( "3", "6" and "5") are kept in a list of trusted tokens.
-    The length of this list is up to the lookahead number. Then, the first lookahead
-    number of tokens in the current segment (which is [6, 5, 9, 7] after dropping the token
-    that belongs to the overlapping region) are scanned for tokens that exist in the
-    trusted list. The common tokens "6" and "5" are removed.
 
     Parameters
     ----------
@@ -128,102 +187,40 @@ def get_unique_predictions(
     - List of adjusted probabilities corresponding to the transcripts or None
     """
 
-    # alter the duration to match the stack time
-    overlap_dur = ceil(overlap_frames / enc_time_reduction)
+    assert detokenize is not None
 
-    unique_pred = [pred[0]]
-    unique_timestamps = [timestamps[0]]
-    unique_probs = [probs[0]] if probs else None
+    def as_words(toks):
+        return [
+            (i, s) for i, tok in enumerate(toks) if (s := denorm(tok, detokenize)) != ""
+        ]
 
-    for seg, (curr_pred, curr_timestamps) in enumerate(
-        zip(pred[1:], timestamps[1:], strict=True), start=1
-    ):
-        # Decide how many tokens to omit from the start of the current segment
-        to_omit = 0
-        for timestamp in curr_timestamps:
-            # Use model timestamps to decide how many tokens to omit
-            if model_time(timestamp) < overlap_dur:
-                to_omit += 1
-            else:
-                break
+    for i in range(len(pred) - 1):
+        #
+        acc = as_words(pred[i])
+        nxt = as_words(pred[i + 1])
 
-        # Append the modified segment predictions and timestamps, omitting the
-        # calculated number of elements
-        unique_pred.append(curr_pred[to_omit:])
-        unique_timestamps.append(curr_timestamps[to_omit:])
+        if len(acc) == 0 or len(nxt) == 0:
+            continue
+
+        _, _, m, x, y = best_split(acc, nxt)
+
+        # Discard last m from acc,
+        # Discard first x + y from nxt
+
+        keep_lhs_idx, _ = acc[len(acc) - m - 1]
+        keep_rhs_idx, _ = nxt[0 if x + y == 0 else x + y - 1]
+
+        pred[i] = pred[i][: keep_lhs_idx + 1]
+        pred[i + 1] = pred[i + 1][keep_rhs_idx + 1 :]
+
+        timestamps[i] = timestamps[i][: keep_lhs_idx + 1]
+        timestamps[i + 1] = timestamps[i + 1][keep_rhs_idx + 1 :]
+
         if probs:
-            unique_probs.append(probs[seg][to_omit:])
+            probs[i] = probs[i][: keep_lhs_idx + 1]
+            probs[i + 1] = probs[i + 1][keep_rhs_idx + 1 :]
 
-    # after removing overlap, scan for common tokens at the boundary
-    remove_common, adjusted_timestamps, adjusted_probs = (
-        [unique_pred[0]],
-        [unique_timestamps[0]],
-        [unique_probs[0]] if unique_probs else None,
-    )
-
-    for seg in range(1, len(unique_pred)):
-        trusted_list = unique_pred[seg - 1][-lookahead:]
-
-        # Remove the trusted tokens from the current segment
-        (
-            unique_pred_segm,
-            unique_pred_time,
-            unique_prob_segm,
-        ) = manage_boundary_common_tokens(
-            segm=unique_pred[seg],
-            t_st=unique_timestamps[seg],
-            probs=unique_probs[seg] if unique_probs else None,
-            trusted_list=trusted_list,
-            lookahead=lookahead,
-        )
-        remove_common.append(unique_pred_segm)
-        adjusted_timestamps.append(unique_pred_time)
-        if probs:
-            adjusted_probs.append(unique_prob_segm)
-
-    return remove_common, adjusted_timestamps, adjusted_probs
-
-
-@beartype
-def manage_boundary_common_tokens(
-    segm: List[int],
-    t_st: List[Timestamp],
-    probs: Optional[List[float]],
-    trusted_list: List[int],
-    lookahead: int,
-) -> Tuple[List[int], List[Timestamp], Optional[List[float]]]:
-    """
-    Return segment tokens, timestamps, and probs without duplicates from previous segment.
-
-    This function cleans the duplicate tokens in the current segment, based on the
-    last lookahead number of tokens found in the previous segment.
-    This method is streaming compatible, as every token can be checked independently
-    of the previous and following tokens.
-
-    Parameters
-    ----------
-    segm
-        list of tokens in the current segment
-    t_st
-        timestamps for tokens in the current segment
-    probs
-        probabilities for tokens in the current segment
-    trusted_list
-        list of up to lookahead number of tokens from previous segment
-    lookahead
-        number of tokens to check in the current segment if exist in trusted list
-    """
-    for token in segm[:lookahead]:
-        if token in trusted_list:
-            # remove token & timestamp from the segment list & timestamp list respectively
-            t_st.pop(segm.index(token))
-            if probs:
-                probs.pop(segm.index(token))
-            segm.remove(token)
-            # get the token index in the trusted list and update it
-            index_trusted = trusted_list.index(token)
-            trusted_list = trusted_list[index_trusted + 1 :]
-    return segm, t_st, probs
+    return pred, timestamps, probs
 
 
 @beartype

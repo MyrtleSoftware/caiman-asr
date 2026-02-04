@@ -12,13 +12,23 @@ TRAIN_MANIFESTS=$*
 
 . scripts/create_config_set_env.sh
 
+echo "Make SentencePiece model"
+
+# If EXTERN_CONFIG defined use it, otherwise use the RUN_CONFIG
+if [[ -n ${EXTERN_CONFIG:-} ]]; then
+	RUN_CONFIG="$EXTERN_CONFIG"
+fi
+
 # ANCHOR: spm_in_mdbook
 python caiman_asr_train/data/spm/spm_from_json.py --spm_size "$SPM_SIZE" \
 	--spm_name "$SPM_NAME" --data_dir "$DATA_DIR" \
 	--train_manifests $TRAIN_MANIFESTS \
 	--output_dir /datasets/sentencepieces \
-	--model_config "$RUN_CONFIG"
+	--model_config "$RUN_CONFIG" \
+	--input_sentence_size 5000000
 # ANCHOR_END: spm_in_mdbook
+
+echo "Generate mel stats"
 
 python caiman_asr_train/data/generate_mel_stats.py \
 	--output_dir "$MEL_STATS_DIR" \
@@ -28,6 +38,8 @@ python caiman_asr_train/data/generate_mel_stats.py \
 	--dali_train_device cpu \
 	--n_utterances_only 500000 \
 	--canary_exponent -1
+
+echo "Generate n-gram data"
 
 python caiman_asr_train/lm/prep_kenlm_data.py \
 	--data_dir "$DATA_DIR" \

@@ -38,6 +38,7 @@ from caiman_asr_train.train_utils.grad_noise_scheduler import GradNoiseScheduler
 from caiman_asr_train.train_utils.optimizer import OptimizerWrapper
 from caiman_asr_train.train_utils.schedule import Schedule
 from caiman_asr_train.utils.frame_width import encoder_output_frame_width
+from caiman_asr_train.utils.select_transcripts import SelectTranscript
 from caiman_asr_train.utils.user_tokens import get_user_token
 from caiman_asr_train.utils.user_tokens_lite import get_all_user_tokens
 
@@ -195,6 +196,7 @@ class Setup(ABC):
     ) -> Tuple[RNNTDecoder, ApexTransducerLoss]:
         loss_fn = self.build_loss_fn(blank_idx, eos_idx, star_idx, cfg)
         ngram_info = self.build_ngram_info(args, cfg.get("ngram"))
+        user_symbols_dict, _ = get_all_user_tokens(cfg)
         decoder = self.build_decoder(
             ema_model,
             args,
@@ -204,6 +206,7 @@ class Setup(ABC):
             ngram_info,
             world_size,
             user_tokens=[i for i in [star_idx, eos_idx] if i is not None],
+            user_symbols_dict=user_symbols_dict,
         )
         return decoder, loss_fn
 
@@ -254,6 +257,7 @@ class Setup(ABC):
         ngram_info: Optional[NgramInfo],
         world_size: int,
         user_tokens: List[int],
+        user_symbols_dict: Dict[str, str],
     ) -> RNNTDecoder:
         if eos_idx is None:
             eos_strategy = None
@@ -269,7 +273,22 @@ class Setup(ABC):
         else:
             raise ValueError(f"Unknown EOS decoding strategy: {args.eos_decoding}")
 
+        if args.prefix is None:
+            prefix_token_ids = None
+        elif args.prefix == "pnc" or args.prefix == "nopnc":
+            prefix_token_ids = self._get_prefix_tokens(
+                args.prefix, user_symbols_dict, tokenizer
+            )
+        else:
+            raise ValueError(f"Unknown prefix: {args.prefix}")
+
         if args.decoder == "greedy":
+            keyword_boost_context_score = (
+                args.keyword_boost_context_score
+                if args.keyword_boost_context_score is not None
+                else 0.4
+            )
+
             return RNNTBatchedGreedyDecoder(
                 model=ema_model,
                 blank_idx=blank_idx,
@@ -277,6 +296,14 @@ class Setup(ABC):
                 max_inputs_per_batch=args.max_inputs_per_batch,
                 max_symbol_per_sample=args.max_symbol_per_sample,
                 tokenizer=tokenizer,
+                keywords_path=args.keywords_path,
+                boost_keywords=args.boost_keywords,
+                keyword_boost_c0=args.keyword_boost_c0,
+                keyword_boost_beta=args.keyword_boost_beta,
+                keyword_boost_context_score=keyword_boost_context_score,
+                ngram_info=ngram_info,
+                top_k=args.top_k,
+                prefix_token_ids=prefix_token_ids if prefix_token_ids else None,
             )
         else:
             inf = float("inf")
@@ -285,6 +312,12 @@ class Setup(ABC):
                 width = encoder_output_frame_width(args.model_config)
             else:
                 width = None
+
+            keyword_boost_context_score = (
+                args.keyword_boost_context_score
+                if args.keyword_boost_context_score is not None
+                else 1.0
+            )
 
             kwargs = {
                 "model": ema_model,
@@ -304,8 +337,13 @@ class Setup(ABC):
                 "eos_is_terminal": args.eos_is_terminal,
                 "eos_vad_threshold": args.eos_vad_threshold,
                 "final_emission_thresh": args.beam_final_emission_thresh,
-                "keyword_boost_path": args.keyword_boost_path,
+                "keywords_path": args.keywords_path,
+                "boost_keywords": args.boost_keywords,
+                "keyword_boost_c0": args.keyword_boost_c0,
+                "keyword_boost_beta": args.keyword_boost_beta,
+                "keyword_boost_context_score": keyword_boost_context_score,
                 "frame_width": width,
+                "prefix_token_ids": prefix_token_ids,
             }
 
             nprocs = get_num_procs(args, world_size)
@@ -348,12 +386,30 @@ class Setup(ABC):
     def build_a_feat_proc(
         self, pipeline_type: PipelineType, args: Namespace, cfg: dict
     ) -> torch.nn.Module:
-        (_, _, splicing_kw, specaugm_kw) = config.input(
+        (dataset_kw, _, splice_kw, specaugm_kw) = config.input(
             cfg, self.pipeline_type_to_str(pipeline_type)
         )
+
+        if dataset_kw["append_EOI"]:
+            eoi_frames = (
+                splice_kw["frame_stacking"] * cfg["rnnt"]["enc_stack_time_factor"]
+            )
+        else:
+            if args.val_final_padding_secs == 0.0:
+                print_once(
+                    "WARNING: This model was trained without end-of-input tokens, "
+                    "but validation is running with --val_final_padding_secs=0.0. "
+                    "Legacy models typically require ~0.24s of silence padding "
+                    "to flush out all predictions. "
+                    "Please set --val_final_padding_secs accordingly to avoid degradation."
+                )
+            eoi_frames = 0
+
         feat_proc = torch.nn.Sequential(
-            specaugm_kw and features.SpecAugment(**specaugm_kw) or torch.nn.Identity(),
-            features.FrameSplicing(**splicing_kw),
+            specaugm_kw
+            and features.SpecAugment(eoi_frames=eoi_frames, **specaugm_kw)
+            or torch.nn.Identity(),
+            features.FrameSplicing(**splice_kw),
             features.PermuteAudio(),
         )
         feat_proc.to(self.preferred_device())
@@ -370,14 +426,19 @@ class Setup(ABC):
         world_size: int,
     ) -> DataObject:
         print_once("Setting up datasets...")
-        (dataset_kw, features_kw, _, _) = config.input(
+        (dataset_kw, features_kw, splicing_kw, _) = config.input(
             cfg, self.pipeline_type_to_str(pipeline_type)
         )
-        user_symbols = list(get_all_user_tokens(cfg).values())
+        user_symbols_dict, user_symbols = get_all_user_tokens(cfg)
+        use_transcript = SelectTranscript(cfg)
+        enc_stf = cfg["rnnt"]["enc_stack_time_factor"]
         dali_yaml_config = build_dali_yaml_config(
             config_data=dataset_kw,
             config_features=features_kw,
             user_symbols=user_symbols,
+            user_symbols_dict=user_symbols_dict,
+            select_transcripts=use_transcript,
+            total_time_stack_factor=enc_stf * splicing_kw["frame_stacking"],
         )
         mel_feat_normalizer = build_mel_feat_normalizer(
             args,
@@ -385,6 +446,7 @@ class Setup(ABC):
             batch_size=batch_sizes[pipeline_type],
             pipeline_type=pipeline_type,
         )
+
         loader = build_dali_loader(
             args,
             self.pipeline_type_to_str(pipeline_type),
@@ -409,9 +471,13 @@ class Setup(ABC):
     def build_ngram_info(
         self, args: Namespace, ngram_cfg: Optional[dict]
     ) -> Optional[NgramInfo]:
-        """Build n-gram info if beam search is used and n-gram is not disabled."""
+        """Build n-gram info if n-gram is not disabled."""
 
-        if args.decoder == "beam" and not args.skip_ngram and ngram_cfg is not None:
+        # n-gram is disabled for greedy decoding by default
+        if args.decoder == "greedy" and args.skip_ngram is None:
+            args.skip_ngram = True
+
+        if not args.skip_ngram and ngram_cfg is not None:
             ngram_path = args.override_ngram_path or self._find_ngram_file(
                 ngram_cfg["ngram_path"]
             )
@@ -431,6 +497,24 @@ class Setup(ABC):
                 "or pass the `--skip_ngram` argument to disable n-grams during validation."
             )
         return file
+
+    def _get_prefix_tokens(
+        self, prefix: str, user_symbols_dict: Dict[str, str], tokenizer: Tokenizer
+    ) -> List[int]:
+        """Get the token IDs for the prefix (control tokens <pnc> or <nopnc>)."""
+        assert prefix in user_symbols_dict, (
+            f"`{prefix}` token not found in user_symbols_dict. "
+            "Add it to `user_symbols` in the model config (.yaml)."
+        )
+        tokens = tokenizer.tokenize(user_symbols_dict[prefix])
+        if tokens:
+            # 2 tokens: space token + control token (<pnc> or <nopnc>)
+            assert (
+                len(tokens) == 2
+            ), f"Expected 2 tokens for {prefix}, got {len(tokens)}"
+            return [tokens[1]]
+        else:
+            raise ValueError(f"No {prefix} token found in tokenizer")
 
     @abstractmethod
     def build_tokenizer(

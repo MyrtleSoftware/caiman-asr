@@ -9,7 +9,10 @@ from caiman_asr_train.data.text.is_tag import is_tag
 
 @beartype
 def add_eos_to_manifest(
-    manifest: List[Dict], eos_token: str, use_cuda: bool = True
+    manifest: List[Dict],
+    eos_token: str,
+    use_cuda: bool = True,
+    transcript_field: str = "transcript",
 ) -> List[Dict]:
     """
     This function performs a manifest->manifest transformation that segments
@@ -31,7 +34,7 @@ def add_eos_to_manifest(
         # This moves the model to GPU in place.
         sat.half().to("cuda")
 
-    single = [x["transcript"].strip() for x in manifest]
+    single = [x[transcript_field].strip() for x in manifest]
     # Also segment the repeated transcript
     # to detect if there's an EOS at the end
     repeat = [" ".join([x, x]) for x in single]
@@ -47,7 +50,7 @@ def add_eos_to_manifest(
 
         n, out = build_transcript(ms, mr, eos_for)
 
-        m["transcript"] = out
+        m[transcript_field] = out
         m["eos_count"] = n
 
     return manifest
@@ -147,12 +150,18 @@ def build_transcript(
 
 @beartype
 def add_eos_to_manifest_avoid_empty(
-    manifest: list[dict], eos_token: str, use_cuda: bool
+    manifest: list[dict],
+    eos_token: str,
+    use_cuda: bool,
+    transcript_field: str = "transcript",
 ) -> list[dict]:
     # wtpsplit will crash on empty transcripts,
     # so just pass those through the script
-    has_transcript, only_has_whitespace = partition(
-        lambda utt: utt["transcript"].strip() == "", manifest
+    has_transcript, missing_or_empty = partition(
+        lambda utt: transcript_field not in utt or utt[transcript_field].strip() == "",
+        manifest,
     )
-    has_transcript_eos = add_eos_to_manifest(list(has_transcript), eos_token, use_cuda)
-    return has_transcript_eos + list(only_has_whitespace)
+    has_transcript_eos = add_eos_to_manifest(
+        list(has_transcript), eos_token, use_cuda, transcript_field
+    )
+    return has_transcript_eos + list(missing_or_empty)

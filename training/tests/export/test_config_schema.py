@@ -49,8 +49,6 @@ class TestConfigSchema(unittest.TestCase):
                     "freq_masks": 2,
                     "max_freq": 20,
                     "max_time": 0.03,
-                    "min_freq": 0,
-                    "min_time": 0,
                     "time_masks": 10,
                 },
             },

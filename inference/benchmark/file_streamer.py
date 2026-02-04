@@ -1,6 +1,8 @@
 import os
 import shutil
 import subprocess
+import tempfile
+from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
 
@@ -11,6 +13,34 @@ from timer import Timer
 from utils import bold_yellow
 
 from caiman_asr_train.data.make_datasets.pretty_print import pretty_path
+
+
+@contextmanager
+def temporary_filename(suffix=None):
+    """Context that introduces a temporary file.
+
+    Creates a temporary file, yields its name, and upon context exit, deletes it.
+    (In contrast, tempfile.NamedTemporaryFile() provides a 'file' object and
+    deletes the file as soon as that file object is closed, so the temporary file
+    cannot be safely re-opened by another library or process.)
+
+    Args:
+      suffix: desired filename extension (e.g. '.mp4').
+
+    Yields:
+      The name of the temporary file.
+    """
+
+    tmp_name = None
+
+    try:
+        f = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+        tmp_name = f.name
+        f.close()
+        yield tmp_name
+    finally:
+        if tmp_name is not None and os.path.exists(tmp_name):
+            os.unlink(tmp_name)
 
 
 @beartype
@@ -75,11 +105,34 @@ class FileStreamer:
         """
         pass
 
+    @contextmanager
+    def open_as_wav(self, input_path):
+        if str(input_path).endswith(".wav"):
+            # Short-circuit if already in WAV format
+            with open(input_path, "rb") as wav:
+                yield wav
+
+            return
+
+        with temporary_filename(suffix=".wav") as output_path:
+            subprocess.run(
+                [
+                    "sox",
+                    input_path,
+                    "-c",
+                    "1",
+                    "-r",
+                    str(self.sampling_rate),
+                    output_path,
+                ],
+            )
+
+            with open(output_path, "rb") as wav:
+                yield wav
+
     def stream(self) -> Generator[bytes, None, None]:
         """
         Mimics a stream of audio data by reading it chunk by chunk from a file.
-
-        NOTE: Only supports WAV/PCM16 files as of now.
 
         Returns: A generator that yields chunks of audio data.
         """
@@ -87,9 +140,11 @@ class FileStreamer:
         self.chunk_idx = 0
         chunk_size = int(self.sampling_rate * self.chunk_duration) * 2
         num_warnings = 0
-        with open(self.audio_fpath, "rb") as audio_file:
+
+        with self.open_as_wav(self.audio_fpath) as audio_file:
             if self.play_audio:
                 subprocess.Popen([self.aplay_path, self.audio_fpath])
+
             audio_bytes = audio_file.read()
             audio_stream = BytesIO(audio_bytes)
             session_start = self.timer.datetime()
@@ -134,8 +189,8 @@ class FileStreamer:
         if num_warnings > 1:
             print(
                 bold_yellow(
-                    f"{pretty_path(self.audio_fpath)} had {num_warnings-1} hidden warnings "
-                    "about slow file streaming"
+                    f"{pretty_path(self.audio_fpath)} had {num_warnings - 1} hidden "
+                    "warnings about slow file streaming"
                 )
             )
 

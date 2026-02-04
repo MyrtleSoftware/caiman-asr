@@ -11,7 +11,8 @@
       }
     ],
     "original_duration": 8.89,
-    "original_num_samples": 142240
+    "original_num_samples": 142240,
+    "extra_transcript": "order. <EOS> Even though it may have been brought by a final application. That, it was only an interim order, and because it was an interim order the court didn't have jurisdiction."
   },
   {
     "transcript": "second clip is repeated <EOS>",
@@ -25,6 +26,7 @@
       }
     ],
     "original_duration": 8.89,
-    "original_num_samples": 142240
+    "original_num_samples": 142240,
+    "extra_transcript": "second clip is repeated. <EOS>"
   }
 ]

@@ -78,6 +78,43 @@ Requests can specify the transcription model version. Can be `"latest"` or a spe
 
 The [BCP47](https://en.wikipedia.org/wiki/IETF_language_tag) language tag for the speech in the audio.
 
+### Prefix
+
+| Parameter | Required | Default |
+| :-------- | :------- | :------ |
+| `prefix`  | No\*     | None    |
+
+A prefix may be supplied to the model, allowing users to select between punctuated and cased output (`<pnc>`)
+and lowercase output (`<nopnc>`). If specified, the prefix is applied for the duration of the WebSocket session.
+
+Example:
+
+```
+prefix=<pnc>
+```
+
+\*Note: Prefix usage depends on the deployed model on the server: latest CAIMAN-ASR pretrained models expect a prefix
+and will perform suboptimally without one, whilst older models must not receive one, and user-trained models require
+it only if [trained conditionally](../training/conditional_training.md).
+
+### Keyword Boosting
+
+| Parameter  | Required | Default |
+| :--------- | :------- | :------ |
+| `keywords` | No       | None    |
+
+Keyword boosting allows you to provide a list of words or phrases that are prioritised during decoding.
+CAIMAN-ASR supports keyword boosting of up to 100 keywords.
+
+Keywords are supplied by repeating the keywords query parameter in the WebSocket request URL.
+For each keyword, append `&keywords=<KEYWORD>` to the query string.
+
+For example:
+
+```
+&keywords=caiman&keywords=asr
+```
+
 ### Max Number of Alternatives
 
 | Parameter      | Required | Default |

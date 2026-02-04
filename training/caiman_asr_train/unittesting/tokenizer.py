@@ -7,4 +7,7 @@ def load_tokenizer_kw(config_fp, test_data_dir):
     tokenizer_kw = get_tokenizer_conf(cfg)
     # replace the spm with the one in the test data dir
     tokenizer_kw["sentpiece_model"] = str(test_data_dir / "librispeech29.model")
+    tokenizer_kw["label_smoothing_kwargs"]["dict_path"] = str(
+        test_data_dir / "words.txt"
+    )
     return tokenizer_kw

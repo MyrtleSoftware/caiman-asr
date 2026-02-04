@@ -13,7 +13,8 @@
 # limitations under the License.
 
 import torch
-from beartype.typing import List, Tuple
+from beartype import beartype
+from beartype.typing import List, Optional, Tuple
 from nvidia.dali.plugin.base_iterator import LastBatchPolicy
 from nvidia.dali.plugin.pytorch import DALIGenericIterator
 
@@ -30,7 +31,7 @@ class DaliRnntIterator:
     """
     Returns batches of data for RNN-T training:
         (preprocessed_signal, preprocessed_signal_length,
-        transcript, transcript_length, raw_transcript)
+        transcript, transcript_length, raw_transcript, file name)
 
     This iterator is not meant to be the entry point to Dali processing pipeline.
     Use DataLoader instead.
@@ -46,14 +47,24 @@ class DaliRnntIterator:
         data_source: DataSource,
         normalize_config: NormalizeConfig,
         output_files: dict[str, dict] | None,
+        audio_align: Optional[int],
+        conditional: bool = False,
+        pnc_prob: float = 0.25,
     ):
         time_print_once(f"Making normalized text cache for {pipeline_type}")
         self.normalize_cache = NormalizeCache(
-            normalize_config, tokenizer, device_type, data_source, transcripts
+            normalize_config=normalize_config,
+            tokenizer=tokenizer,
+            device_type=device_type,
+            data_source=data_source,
+            transcripts=transcripts,
+            conditional=conditional,
+            pnc_prob=pnc_prob,
         )
         time_print_once(f"Done making token cache for {pipeline_type}")
 
         self.file_name_extractor = FileNameExtractor(output_files, data_source)
+        self.audio_align = audio_align
 
         # in train pipeline shard_size is set to divisible by batch_size, so
         # PARTIAL policy is safe
@@ -76,10 +87,17 @@ class DaliRnntIterator:
             last_batch_policy=LastBatchPolicy.PARTIAL,
         )
 
+    @beartype
     def __next__(
         self,
     ) -> Tuple[
-        torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[str], list[str]
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        list[str],
+        list[str],
+        torch.Tensor,
     ]:
         """
         Return next sample as ('audio', 'audio_lens', 'transcript',
@@ -92,12 +110,12 @@ class DaliRnntIterator:
             # and this GPU has nothing to do; calling `__next__` raises StopIteration
             return self.dali_it.__next__()
         audio = audio[:, :, : audio_shape.max()]  # the last batch
-        (
-            transcripts,
-            transcripts_lengths,
-            raw_transcripts,
-        ) = self.normalize_cache.get_transcripts(data[0])
+        (transcripts, transcripts_lengths, raw_transcripts, prefix_lens) = (
+            self.normalize_cache.get_transcripts(data[0])
+        )
         fnames = self.file_name_extractor.get_fnames(data[0])
+        if self.audio_align is not None:
+            assert torch.all(audio_shape % self.audio_align == 0)
         return (
             audio,
             audio_shape,
@@ -105,11 +123,15 @@ class DaliRnntIterator:
             transcripts_lengths,
             raw_transcripts,
             fnames,
+            prefix_lens,
         )
 
+    @beartype
     def next(
         self,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[str]]:
+    ) -> Tuple[
+        torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[str], list[str]
+    ]:
         return self.__next__()
 
     def __iter__(self):

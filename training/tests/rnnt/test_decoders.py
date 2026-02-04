@@ -64,7 +64,13 @@ def args():
         eos_vad_threshold=float("inf"),
         beam_final_emission_thresh=float("inf"),
         eos_decoding="none",
-        keyword_boost_path=None,
+        keywords_path=None,
+        boost_keywords=False,
+        keyword_boost_c0=0.3,
+        keyword_boost_beta=0.9,
+        keyword_boost_context_score=1.0,
+        prefix=None,
+        top_k=5,
     )
 
 
@@ -139,12 +145,13 @@ def test_decoders(
         ngram_info=ngram_info,
         world_size=1,
         user_tokens=[],
+        user_symbols_dict={},
     )
 
     feats = torch.randn((time_dim, 1, model_dim))
     feat_lens = torch.tensor([time_dim])
 
-    tks, timesteps, probs = split_batched_finals(decoder.decode(feats, feat_lens))
+    tks, timesteps, _, probs = split_batched_finals(decoder.decode(feats, feat_lens))
 
     assert tks == [expected_tokens]
     assert timesteps == [expected_timesteps]

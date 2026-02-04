@@ -1,7 +1,9 @@
+import math
+from collections import deque
 from dataclasses import dataclass, field
 
 from beartype import beartype
-from beartype.typing import Generic, Iterable, Optional, TypeAlias, TypeVar
+from beartype.typing import Generic, Iterable, List, Optional, Tuple, TypeAlias, TypeVar
 
 T = TypeVar("T")
 
@@ -20,15 +22,9 @@ def unwrap(x: Optional[T]) -> T:
 @beartype
 @dataclass
 class _Edge:
-    """An edge in a FSM's graph.
-
-    Attributes:
-        idx: Target index
-        wgt: Weight of the edge
-    """
+    """A goto edge in the trie"""
 
     idx: int
-    wgt: float = 0.0
 
 
 @beartype
@@ -36,13 +32,15 @@ class _Edge:
 class _Inst(Generic[T]):
     """An instruction in a FSM.
 
+    Node in the goto trie (before AC failure links are added).
+
     Attributes:
         term: Set if the instruction is a terminal state of the FSM
         inst: Mapping of possible next instructions
     """
 
-    term: float | None = None
-    inst: dict[T, _Edge] = field(default_factory=dict)
+    term: float | None = None  # terminal => commit reward
+    inst: dict[T, _Edge] = field(default_factory=dict)  # goto edges
 
     def __repr__(self):
         if exists(self.term):
@@ -51,14 +49,14 @@ class _Inst(Generic[T]):
 
 
 @beartype
-def _build(vocab: Iterable[Iterable[T]]) -> list[_Inst[T]]:
+def _build(vocab: Iterable[Iterable[T]]) -> List[_Inst[T]]:
     """
-    Compile a Sequence of keywords into a dense trie structure.
+    Compile a sequence of keywords (each an iterable of tokens) into a dense trie.
 
-    The weights of the edges are not set by this function nor
-    are the term flags/weights.
+    This function does not mark terminal nodes; `_mark_terminals()` must be called
+    after `_build()` to flag phrase ends.
     """
-    fsa = [_Inst[T]()]
+    fsa = [_Inst[T]()]  # root = 0
 
     for it in map(iter, vocab):
         idx = 0
@@ -86,78 +84,143 @@ def _build(vocab: Iterable[Iterable[T]]) -> list[_Inst[T]]:
 
 
 @beartype
-def _weight(
-    trie: list[_Inst[T]], vocab: Iterable[tuple[Iterable[T], float]]
-) -> list[_Inst[T]]:
+def _mark_terminals(
+    trie: List[_Inst[T]], vocab: Iterable[Iterable[T]]
+) -> List[_Inst[T]]:
     """
-    Assign weights to the edges of the trie.
-
-    These weights are the score delta of incurred moving along the edge.
-
-    Returns:
-        The updated trie
+    Mark terminal nodes for each keyword (used to zero backoff after completion).
     """
-    for word, w in vocab:
+    for word in vocab:
         idx = 0
-        # How much has been accumulated along the real path
-        acc_real = 0.0
-        # How much has been accumulated along the theoretical path
-        acc_imag = 0.0
-
         for tok in word:
-            # The weight is the cumulative delta
-            trie[idx].inst[tok].wgt = w + trie[idx].inst[tok].wgt
-
-            acc_real += trie[idx].inst[tok].wgt
-            acc_imag += w
-
             idx = trie[idx].inst[tok].idx
-
+        # Just need a non-None sentinel; numeric value is unused by scoring
         assert trie[idx].term is None, "Duplicate keyword"
-        # The theoretical value for terminating here
-        trie[idx].term = acc_imag
-
+        trie[idx].term = 0.0
     return trie
 
 
-class Keywords(Generic[T]):
-    # Decoding state: key = instruction index, value = accumulated weight
-    State: TypeAlias = dict[int, float]
+@beartype
+def _build_ac(
+    trie: List[_Inst[T]],
+    c_0: float = 0.3,
+    beta: float = 0.9,
+    context_score: float = 1.0,
+) -> Tuple[List[int], List[float], List[float], List[float]]:
+    """
+    Build an Aho–Corasick automaton with depth-shaped node potentials.
 
-    @beartype
-    def __init__(self, vocab: Iterable[tuple[Iterable[T], float]]):
+    Scoring:
+        - Let
+            shape(depth=0) = 0
+            shape(depth=1) = c_0
+            shape(depth>=2) = c_0 * beta + log(depth)
+        - Node potential:
+            S[node] = context_score * shape(depth[node])
+        - Goto transition u -> v:
+            edge_delta[v] = S[v] - S[fail[v]]
+        - Failure transition s -> f, add backoff_w[s], where
+            backoff_w[s] = 0.0            if s is terminal
+                         = S[f] - S[s]    otherwise
+    """
+
+    def shape(depth: int) -> float:
+        if depth == 0:
+            return 0.0
+        elif depth == 1:
+            return c_0
+        return c_0 * beta + math.log(depth)
+
+    N = len(trie)
+    fail = [0] * N
+    S = [0.0] * N
+    backoff_w = [0.0] * N
+    edge_delta = [0.0] * N
+    depth = [0] * N
+
+    q = deque()
+
+    # Root children: parent is root (0)
+    for ch, e in trie[0].inst.items():
+        v = e.idx
+        fail[v] = 0
+        depth[v] = 1
+        S[v] = context_score * shape(depth[v])
+        edge_delta[v] = S[v] - S[fail[v]]  # = S[v]
+        backoff_w[v] = 0.0 if exists(trie[v].term) else (S[fail[v]] - S[v])
+        q.append(v)
+
+    # BFS over the rest
+    while q:
+        u = q.popleft()
+        for ch, e in trie[u].inst.items():
+            v = e.idx
+
+            # Failure link for v based on u's fail chain
+            f = fail[u]
+            while ch not in trie[f].inst and f != 0:
+                f = fail[f]
+            f = trie[f].inst[ch].idx if ch in trie[f].inst else 0
+            fail[v] = f
+
+            # Depth, potentials, deltas
+            depth[v] = depth[u] + 1
+            S[v] = context_score * shape(depth[v])
+            edge_delta[v] = S[v] - S[fail[v]]  # failure based delta
+            backoff_w[v] = 0.0 if exists(trie[v].term) else (S[fail[v]] - S[v])
+
+            q.append(v)
+
+    return fail, S, backoff_w, edge_delta
+
+
+@beartype
+class Keywords(Generic[T]):
+    # External decoding state is an integer AC node id (root=0).
+    State: TypeAlias = int
+
+    def __init__(
+        self,
+        vocab: Iterable[Iterable[T]],
+        c_0: float = 0.3,
+        beta: float = 0.9,
+        context_score: float = 1.0,
+    ):
         """
-        A collection of keywords that can be used to score a decoding state.
+        Keyword biasing via AC automaton with depth-shaped potentials.
 
         Args:
-            vocab: pairs of keywords and their weights
+            vocab: Iterable of token sequences (e.g. list of strings)
+            c_0: Start-of-keyword boost (depth 1) [default 0.3].
+            beta: Extra front-loading from depth 2; later steps taper via log(depth)
+                  [default 0.9].
+            context_score: Global bias strength [default 1.0].
         """
-
-        v = next(zip(*vocab), [])
-
+        v = list(vocab)
         assert len(set(v)) == len(v), "Duplicate keywords"
 
-        self.inst = _weight(_build(v), vocab)
+        # Build goto trie + weights
+        self.inst = _mark_terminals(_build(v), v)
+
+        # Build AC failure links and scoring tables
+        self.fail, self.S, self.backoff_w, self.edge_delta = _build_ac(
+            self.inst,
+            c_0=c_0,
+            beta=beta,
+            context_score=context_score,
+        )
 
     def __repr__(self):
         return "\n".join(map(str, self.inst))
 
-    @beartype
     @classmethod
     def init(cls) -> State:
-        """
-        Get a start of sentence state.
-        """
-        return {0: 0.0}
+        """Start state (root)."""
+        return 0
 
-    @beartype
-    def steps(self, toks: Iterable[T], state: State) -> tuple[float, State]:
+    def steps(self, toks: Iterable[T], state: State) -> Tuple[float, State]:
         """
-        Compute the cumulative score delta of step() called on each token in
-        toks.
-
-        Returns:
-            cumulative score, final state
+        Compute cumulative score delta of calling step() on each token in `toks`.
         """
         acc = 0.0
         for tok in toks:
@@ -165,39 +228,28 @@ class Keywords(Generic[T]):
             acc += tmp
         return acc, state
 
-    @beartype
-    def step(self, tok: T, state: State) -> tuple[float, State]:
+    def step(self, tok: T, state: State) -> Tuple[float, State]:
         """
-        Compute the score delta of advancing state by one token tok.
-
-        Returns:
-           score delta, new state
+        Advance the AC state by one character `tok`.
+        Returns (score_delta, new_state).
         """
-
         # If string check for single char, probably meant to call steps()
         if isinstance(tok, str):
             assert len(tok) == 1, f"Did you mean to call steps() with: {tok}?"
 
-        # Every step can be a new start
-        assert 0 in state, "All states should have the initial inst"
-        new_state = Keywords.init()
-
         delta = 0.0
 
-        for i, acc in state.items():
-            if exists(self.inst[i].term):
-                # If this is a terminal node we commit the
-                # accumulated score.
-                acc = acc - unwrap(self.inst[i].term)
+        # Follow failure links until we can consume tok (or we're at root)
+        while tok not in self.inst[state].inst and state != 0:
+            delta += self.backoff_w[state]  # undo the excess partial boost
+            state = self.fail[state]
 
-            edge = self.inst[i].inst.get(tok, None)
+        # Consume goto edge if present; otherwise stay at root (no score change)
+        e = self.inst[state].inst.get(tok, None)
+        if e is not None:
+            state = e.idx
+            delta += self.edge_delta[
+                state
+            ]  # add forward gain relative to its fail state
 
-            if edge is None:
-                # Thread dies, any uncommitted score is lost.
-                delta -= acc
-            else:
-                # Thread continues in keyword
-                new_state[edge.idx] = acc + edge.wgt
-                delta += edge.wgt
-
-        return delta, new_state
+        return delta, state

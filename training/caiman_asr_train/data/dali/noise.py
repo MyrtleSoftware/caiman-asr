@@ -160,6 +160,8 @@ def blend(
         Length ratio [0, 1] that determines start point of noise clip. This must be a
         numpy array of shape (1,) to run with numba.
     """
+    assert noise.shape[0] >= speech.shape[0] > 0
+
     diff_frames = noise.shape[0] - speech.shape[0]
     if diff_frames < 0:
         # then noise is shorter than speech, use all of the noise clip
@@ -167,18 +169,29 @@ def blend(
 
     start_frame = np.floor(diff_frames * start_ratio).astype(np.int64)[0]
     cropped_noise = noise[start_frame : start_frame + speech.shape[0]]
+
+    # dB = 10 * log10(ms)
+    # min_dB = silence_threshold -60 = 10 * log10(min_ms)
+    # min_ms ~ 1e-6
+    #
+    eff_zero = 1e-7
+
     # Power of a speech signal is given by its mean-square value
-    speech_MS = (speech * speech).mean()
+    speech_MS = max((speech * speech).mean(), eff_zero)
+    noise_MS = max((cropped_noise * cropped_noise).mean(), eff_zero)
+
     speech_dB = 10.0 * np.log10(speech_MS)
-    noise_dB = 10.0 * np.log10((cropped_noise * cropped_noise).mean())
+    noise_dB = 10.0 * np.log10(noise_MS)
+
     actual_snr = speech_dB - noise_dB
     inc_snr = target_snr - actual_snr
-    inc_mag = np.power(10.0, inc_snr / 20.0)
-    adj_noise = cropped_noise / inc_mag
+    inc_mag = np.power(10.0, -inc_snr / 20.0)
+    adj_noise = cropped_noise * inc_mag
     # At this point speech and adj_noise have the target SNR
     merged = speech + adj_noise
     # Scale merged to have the same power as the original speech signal
-    merged_MS = (merged * merged).mean()
+    merged_MS = max((merged * merged).mean(), eff_zero)
+
     result = merged * np.sqrt(speech_MS / merged_MS)
     return result
 
@@ -269,6 +282,9 @@ def duplicate_audio(
     """
     cos_values_in = np.cos(np.linspace(0, np.pi / 2, overlap_frames))
     cos_values_out = cos_values_in[::-1]
+
+    assert input.shape[0] > 0, "need longer input"
+
     input = input.astype(np.float32)
     while input.shape[0] <= target_length:
         in_frame_idx = input.shape[0] - overlap_frames

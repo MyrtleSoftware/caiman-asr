@@ -8,6 +8,7 @@ from caiman_asr_train.lm.prep_kenlm_data import (
 )
 from caiman_asr_train.rnnt import config
 from caiman_asr_train.setup.text_normalization import normalize_config_from_full_yaml
+from caiman_asr_train.utils.select_transcripts import SelectTranscript
 
 
 def load_text_file_to_list(file_path):
@@ -23,7 +24,7 @@ def load_text_file_to_list(file_path):
 )
 def test_prep_kenlm_data(
     test_data_dir,
-    tokenizer,
+    val_tokenizer,
     tmp_path,
     mini_config_fp,
     dataset,
@@ -39,15 +40,20 @@ def test_prep_kenlm_data(
 
     if read_from_tar:
         transcripts = extract_transcripts_from_tars(
-            [dataset], str(test_data_dir), tokenizer, normalize_config, labels
+            [dataset], str(test_data_dir), val_tokenizer, normalize_config, labels
         )
     else:
         transcripts = extract_transcripts_from_manifests(
-            [dataset], str(test_data_dir), tokenizer, normalize_config, labels
+            [dataset],
+            str(test_data_dir),
+            val_tokenizer,
+            normalize_config,
+            labels,
+            SelectTranscript(cfg),
         )
 
     token_sentences = [
-        " ".join(tokenizer.sentpiece.id_to_piece(token) for token in sentence)
+        " ".join(val_tokenizer.sentpiece.id_to_piece(token) for token in sentence)
         for sentence in transcripts
     ]
     assert token_sentences == loaded_txt

@@ -31,6 +31,8 @@ def update_args_stats_generation(args: Namespace, batch_size) -> Namespace:
     args.prob_background_noise = 0.0
     args.prob_babble_noise = 0.0
     args.prob_train_narrowband = 0.0
+    args.prob_room_aug = 0.0
+    args.prob_microphone_aug = 0.0
 
     args.global_batch_size = batch_size
     args.num_gpus = 1

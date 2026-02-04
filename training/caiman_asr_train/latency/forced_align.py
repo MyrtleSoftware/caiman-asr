@@ -4,6 +4,7 @@
 
 import argparse
 import os
+import string
 import tarfile
 from argparse import Namespace
 from dataclasses import dataclass
@@ -12,18 +13,18 @@ from pathlib import Path
 import torch
 import torchaudio
 import torchaudio.functional as F
-import yaml
 from beartype import beartype
 from beartype.typing import Generator, List, Tuple, Union
 from torchaudio.functional import TokenSpan
 from torchaudio.transforms import Resample
 from tqdm import tqdm
 
+from caiman_asr_train.data.text.normalizers import remove_user_symbols
 from caiman_asr_train.data.text.preprocess import norm_and_tokenize
 from caiman_asr_train.latency.ctm import get_abs_manifest_paths, get_abs_tar_paths
 from caiman_asr_train.setup.text_normalization import (
     NormalizeConfig,
-    normalize_config_from_full_yaml,
+    get_normalize_level,
 )
 from caiman_asr_train.train_utils.distributed import print_once
 from caiman_asr_train.utils.fast_json import fast_read_json
@@ -71,12 +72,6 @@ def parse_args() -> Namespace:
         default=5,
         help="""Audio is split into segments of this length in minutes. Forced
         alignment is run on each segment and the results are then concatenated.""",
-    )
-    parser.add_argument(
-        "--model_config",
-        type=str,
-        required=True,
-        help="Only reads the allowed characters from the model config file",
     )
 
     return parser.parse_args()
@@ -133,7 +128,12 @@ def write_ctm(
     transcript: List[str],
     sample_rate: int,
 ) -> None:
-    """Process forced alignment timestamps and write to ctm file."""
+    """
+    Process forced alignment timestamps and write to ctm file.
+
+    Arguments:
+        ratio: total_num_input_samples / total_num_model_output_samples
+    """
     with open(output_file, "a") as f:
         for i, span in enumerate(spans):
             start = int(ratio * span[0].start) / sample_rate
@@ -147,7 +147,7 @@ def write_ctm(
 
 @beartype
 def load_audio(
-    speech_file: Union[str, tarfile.ExFileObject], bundle_sample_rate: int
+    speech_file: Union[str, tarfile.ExFileObject, Path], bundle_sample_rate: int
 ) -> torch.Tensor:
     """Loads an audio file into a waveform and resamples if necessary."""
     waveform, sample_rate = torchaudio.load(speech_file)
@@ -325,7 +325,25 @@ def normalise(
     normalize_config: NormalizeConfig,
     charset: List[str],
 ):
+    """
+    Normalizes and tokenizes the transcript.
+
+    Also removes user symbols from the transcript as the wav2vec2 model
+    will not be able to recognize them.
+
+    Parameters:
+    ----------
+    transcript: The list of words in the transcript.
+    normalize_config: The normalization configuration.
+    charset: The list of allowed characters.
+
+
+    Returns:
+    List[str]: The normalized and tokenized transcript.
+    """
+
     raw_transcript = " ".join(transcript)
+    raw_transcript = remove_user_symbols(raw_transcript, normalize_config.user_symbols)
     raw_transcript = norm_and_tokenize(raw_transcript, normalize_config, None, charset)
     raw_transcript = raw_transcript.split()
 
@@ -358,6 +376,9 @@ def perform_forced_alignment(
         output_file (str): The filepath where the CTM output will be written.
         bundle_sample_rate (int): The sample rate expected by the model.
         device (str): CUDA or CPU.
+        normalize_config (NormalizeConfig): The normalization configuration.
+        charset (List[str]): The list of allowed characters.
+        segment_length (int): The length of audio segments in minutes.
     """
 
     pbar = tqdm(total=num_samples)
@@ -429,10 +450,18 @@ def main(args: Namespace):
     else:
         output_dir = data_dir
 
-    with open(args.model_config) as f:
-        model_config = yaml.safe_load(f)
-        normalize_config = normalize_config_from_full_yaml(model_config)
-        allowed_chars = model_config["tokenizer"]["labels"]
+    normalize_config = NormalizeConfig(
+        normalize_level=get_normalize_level("lowercase"),
+        replacements=[],
+        remove_tags=True,
+        user_symbols=[],
+        user_symbols_dict={},
+        standardize_text=False,
+        preserve_case=False,
+        preserve_punctuation=False,
+    )
+
+    allowed_chars = [" ", "'"] + list(string.ascii_lowercase)
 
     if args.read_from_tar:
         tar_paths = get_abs_tar_paths(data_dir, args.tar_files)

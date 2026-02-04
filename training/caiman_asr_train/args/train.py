@@ -84,6 +84,12 @@ def train_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="If dev WER > 99% at step 10k or later, raise an error",
     )
+    training.add_argument(
+        "--eoi_drop_fraction",
+        type=float,
+        default=0.5,
+        help="Fraction of utterances to drop EOI from, ignored if not appending EOI",
+    )
     optim = parser.add_argument_group("optimization setup")
     optim.add_argument(
         "--num_gpus",
@@ -403,6 +409,22 @@ def train_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Perform expensive logging of utterance statistics",
     )
+    io.add_argument(
+        "--skip_first_val_eval",
+        action="store_true",
+        help="Skip the first validation evaluation after training starts.",
+    )
+    io.add_argument(
+        "--conditional",
+        action="store_true",
+        help="Enable conditional training.",
+    )
+    io.add_argument(
+        "--pnc_prob",
+        type=float,
+        default=0.25,
+        help="Probability that a training utterance is PNC",
+    )
 
     add_noise_augmentation_args(parser)
     add_shared_args(parser)
@@ -527,4 +549,8 @@ def verify_train_args(args: Namespace) -> Namespace:
             )
         raise ValueError(error_msg)
 
+    if args.conditional:
+        assert (
+            args.batch_split_factor > 1
+        ), "batch_split_factor must be greater than 1 when conditional training is enabled."
     return args

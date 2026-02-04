@@ -130,8 +130,9 @@ class Checkpointer(object):
                 f"Not saving hardware checkpoint as {logmel_norm_weight=} is not yet 1.0"
             )
             return
-
+        # replace .pt with .hw.pt
         output_ckpt = Path(fpath).with_suffix(".hw.pt")
+
         hw_ckpt_args = Namespace(
             ckpt=fpath,
             config=config,

@@ -8,6 +8,7 @@ from caiman_asr_train.rnnt import config
 from caiman_asr_train.setup.core import PipelineType
 from caiman_asr_train.setup.dali import build_dali_yaml_config
 from caiman_asr_train.setup.mel_normalization import build_mel_feat_normalizer
+from caiman_asr_train.utils.select_transcripts import SelectTranscript
 from caiman_asr_train.utils.user_tokens_lite import get_all_user_tokens
 
 
@@ -23,13 +24,16 @@ def build_dataloader_util(
     max_transcript_len: int = 450,
     normalize: bool = True,
     min_duration: float = 0.05,
+    use_transcript: SelectTranscript = SelectTranscript(),
 ) -> DaliDataLoader:
     """
     Build dali dataloader helper function for testing.
     """
     cfg = config.load(mini_config_fp)
     cfg["input_train"]["audio_dataset"]["max_transcript_len"] = max_transcript_len
-    user_symbols = list(get_all_user_tokens(cfg).values())
+    cfg["input_train"]["audio_dataset"]["append_EOI"] = False
+    cfg["input_val"]["audio_dataset"]["append_EOI"] = False
+    user_symbols_dict, user_symbols = get_all_user_tokens(cfg)
     dataset_kw, features_kw, _, _ = config.input(cfg, pipeline_type)
 
     if deterministic_ex_noise:
@@ -38,7 +42,11 @@ def build_dataloader_util(
         dataset_kw["speed_perturbation"] = None
 
     dali_yaml_config = build_dali_yaml_config(
-        config_data=dataset_kw, config_features=features_kw, user_symbols=user_symbols
+        config_data=dataset_kw,
+        config_features=features_kw,
+        user_symbols=user_symbols,
+        user_symbols_dict=user_symbols_dict,
+        select_transcripts=use_transcript,
     )
     pipeline_type_enum = (
         PipelineType.TRAIN if pipeline_type == "train" else PipelineType.VAL

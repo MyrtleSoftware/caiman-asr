@@ -49,6 +49,7 @@ from caiman_asr_train.train_utils.distributed import (
 )
 from caiman_asr_train.utils.iter import lmap
 from caiman_asr_train.utils.math import ceil_div
+from caiman_asr_train.utils.select_transcripts import SelectTranscript
 
 
 class DaliDataLoader:
@@ -99,6 +100,8 @@ class DaliDataLoader:
         txt_dir: Optional[str] = None,
         no_logging: bool = False,
         mel_feat_normalizer: Optional[MelFeatNormalizer] = None,
+        conditional: bool = False,
+        pnc_prob: float = 0.25,
     ):
         self.batch_size = batch_size
         self.no_logging = no_logging
@@ -131,6 +134,8 @@ class DaliDataLoader:
             n_utterances_only=n_utterances_only,
             hugging_face_args=hugging_face_args,
             final_padding_secs=final_padding_secs,
+            conditional=conditional,
+            pnc_prob=pnc_prob,
         )
         self.iter_state = None
 
@@ -156,6 +161,8 @@ class DaliDataLoader:
         final_padding_secs: float,
         tar_files: Union[str, List[str], None] = None,
         mel_feat_normalizer: Optional[MelFeatNormalizer] = None,
+        conditional: bool = False,
+        pnc_prob: float = 0.25,
     ):
         """
         Returns data iterator. Data underneath this operator is preprocessed within Dali
@@ -163,8 +170,11 @@ class DaliDataLoader:
         max_duration = dali_yaml_config.max_duration
         min_duration = dali_yaml_config.min_duration
         max_transcript_len = dali_yaml_config.max_transcript_len
+        use_transcript = dali_yaml_config.select_transcripts
         predicate = set_predicate(
-            max_duration, max_transcript_len, min_duration=min_duration
+            max_duration,
+            max_transcript_len,
+            min_duration=min_duration,
         )
 
         if self.data_source is DataSource.JSON:
@@ -179,6 +189,7 @@ class DaliDataLoader:
                 predicate=predicate,
                 n_utterances_only=n_utterances_only,
                 seed=seed,
+                use_transcript=use_transcript,
             )
 
             self.sampler.make_file_list(manifests, json_names, manifest_ratios)
@@ -252,6 +263,9 @@ class DaliDataLoader:
             normalize_config=dali_yaml_config.normalize_config,
             data_source=self.data_source,
             output_files=output_files,
+            conditional=conditional,
+            pnc_prob=pnc_prob,
+            audio_align=dali_yaml_config.append_n_EOI,
         )
 
     @scoped_time_once("Parsing and filtering jsons")
@@ -265,13 +279,16 @@ class DaliDataLoader:
         predicate,
         n_utterances_only: Optional[int],
         seed,
+        use_transcript: SelectTranscript,
     ) -> Tuple[Manifest, List[Manifest], Dict[int, str]]:
         output_files: List[Dict] = []
         transcripts: List[Dict] = []
 
         if self.val_from_dir and pipeline_type == "val":
             json_names = generate_json_names_from_dirs(
-                dataset_path, self.audio_dir, self.txt_dir
+                dataset_path,
+                self.audio_dir,
+                self.txt_dir,
             )
 
         for name in json_names:
@@ -279,6 +296,7 @@ class DaliDataLoader:
                 name if name[0] == "/" else os.path.join(dataset_path, name),
                 0,  # Will do relabeling manually after filtering
                 predicate=predicate,
+                use_transcript=use_transcript,
             )
 
             output_files.append(of)
@@ -344,7 +362,6 @@ class DaliDataLoader:
         return ceil_div(utts_per_gpu, by=self.batch_size)
 
     def _islice(self):
-
         if self.iter_state is None:
             self.iter_state = iter(self._dali_data_iterator)
 
@@ -363,7 +380,6 @@ class DaliDataLoader:
             yield batch
 
     def __iter__(self):
-
         if self.sampler is None:
             return self._dali_data_iterator
 

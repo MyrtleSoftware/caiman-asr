@@ -57,6 +57,13 @@ def make_parser():
     )
 
     parser.add_argument(
+        "--transcript_field",
+        type=str,
+        default="transcript",
+        help="The field in the manifest to add EOS to.",
+    )
+
+    parser.add_argument(
         "--no_cuda", action="store_true", help="Use the CPU to segment the transcripts"
     )
 
@@ -84,7 +91,7 @@ def main(args):
         print(f"Processing {ifile}")
 
         out = add_eos_to_manifest_avoid_empty(
-            manifest, args.eos_token, not args.no_cuda
+            manifest, args.eos_token, not args.no_cuda, args.transcript_field
         )
         print(f"Writing {ofile}")
 

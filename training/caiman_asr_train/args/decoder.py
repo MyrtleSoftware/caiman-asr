@@ -1,4 +1,4 @@
-from argparse import ArgumentParser
+from argparse import ArgumentParser, BooleanOptionalAction
 
 from beartype import beartype
 
@@ -111,10 +111,33 @@ def add_decoder_args(parser: ArgumentParser) -> None:
 def add_keyword_args(parser: ArgumentParser) -> None:
     kw = parser.add_argument_group("keyword boosting setup")
     kw.add_argument(
-        "--keyword_boost_path",
+        "--keywords_path",
         default=None,
         type=str,
-        help="Path to keywords for boosting (.json)",
+        help="Path to keywords (.json)",
+    )
+    kw.add_argument(
+        "--boost_keywords",
+        action="store_true",
+        default=False,
+        help="Boost keywords during decoding.",
+    )
+    kw.add_argument(
+        "--keyword_boost_c0",
+        default=0.3,
+        type=float,
+        help="Start-of-keyword boost (depth 1).",
+    )
+    kw.add_argument(
+        "--keyword_boost_beta",
+        default=0.9,
+        type=float,
+        help="Extra front-loading from depth 2; later steps taper via log(depth).",
+    )
+    kw.add_argument(
+        "--keyword_boost_context_score",
+        type=float,
+        help="Global bias strength.",
     )
 
 
@@ -129,7 +152,12 @@ def add_ngram_args(parser: ArgumentParser) -> None:
     )
     ngram.add_argument(
         "--skip_ngram",
-        default=False,
-        action="store_true",
-        help="Disable n-gram shallow fusion with beam search decoding.",
+        action=BooleanOptionalAction,
+        help="Enable/Disable n-gram shallow fusion.",
+    )
+    ngram.add_argument(
+        "--top_k",
+        default=5,
+        type=int,
+        help="Number of tokens (k) to consider for ngram biasing (Greedy decode only)",
     )

@@ -70,6 +70,7 @@ def state_resets_merge_segments(
     enc_time_reduction: int,
     sr_segment_frames: int,
     sr_overlap_frames: int,
+    detokenize,
 ) -> Tuple[List[List[int]], List[List[Timestamp]], Optional[List[List[float]]]]:
     """Return prediction tokens and timestamps for all segments concatenated.
 
@@ -105,9 +106,7 @@ def state_resets_merge_segments(
         pred,
         timestamps,
         probs,
-        enc_time_reduction,
-        sr_overlap_frames,
-        lookahead=3,
+        detokenize=detokenize,
     )
     # combine segments into single list
     pred = combine_predictions(pred)
@@ -229,8 +228,8 @@ def get_state_resets_feats(
         feats.shape[1] == 1
     ), f"feats with size {feats.size()} are batched, set --val_batch_size=1"
 
-    # if size of feats (= seq_len) < segment frames do not apply state resets
-    if feats.shape[0] < sr_segment_frames:
+    # if size of feats (= seq_len) <= segment frames do not apply state resets
+    if feats.shape[0] <= sr_segment_frames:
         return feats, feat_lens
 
     # get the number of segments and the padding that needs to be added
@@ -255,14 +254,26 @@ def get_state_resets_feats(
         new_feats = padded_feats
 
     # get correct batching for decoder that will do the state resets
-    new_feats, new_feat_lens = reshape_feats(new_feats, n_segments)
+    new_feats, new_feat_lens = reshape_feats(
+        new_feats,
+        feat_lens,
+        n_segments=n_segments,
+        sr_segment_frames=sr_segment_frames,
+        sr_overlap_frames=sr_overlap_frames,
+    )
+
+    # TODO: try state resets with token (in a new branch?)
 
     return new_feats, new_feat_lens
 
 
 @beartype
 def reshape_feats(
-    feats: torch.Tensor, n_segments: int
+    feats: torch.Tensor,
+    feat_lens: torch.Tensor,
+    n_segments: int,
+    sr_segment_frames: int,
+    sr_overlap_frames: int,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Reshape feats tensor - stack in the batch dimension
 
@@ -290,14 +301,20 @@ def reshape_feats(
     """
     # get correct batching for decoder that will do the state resets
 
+    assert (B := feats.shape[1]) == 1
+
     feats = feats.transpose(0, 1)
     feats = feats.reshape(n_segments, -1, feats.shape[2])
     new_feats = feats.transpose(0, 1)
 
-    new_feat_lens = (
-        torch.ones(new_feats.shape[1], dtype=torch.int32, device=new_feats.device)
-        * new_feats.shape[0]
-    )
+    assert (B := new_feats.shape[1]) > 1
+
+    # The length of the last segment may be less than the
+    # segment length, so we need to adjust the feat_lens
+    idx = torch.arange(B, dtype=feat_lens.dtype, device=feats.device)
+    sr_unique_frames = sr_segment_frames - sr_overlap_frames
+    top = torch.full_like(idx, fill_value=sr_segment_frames)
+    new_feat_lens = torch.minimum(feat_lens[0] - idx * sr_unique_frames, top)
 
     return new_feats, new_feat_lens
 

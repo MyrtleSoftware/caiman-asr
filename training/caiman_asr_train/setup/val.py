@@ -71,6 +71,10 @@ class BaseValSetup(Setup):
             print_once("Please note that sampling is off during evaluation.")
         tokenizer_kw["sampling"] = 0.0
 
+        if tokenizer_kw["label_smoothing_kwargs"] is not None:
+            print_once("Please note that label smoothing is off during evaluation.")
+        tokenizer_kw["label_smoothing_kwargs"] = None
+
         # Initialize Tokenizer w/ tokenizer_kw from checkpoint or from base*.yaml file
         tokenizer = Tokenizer(**tokenizer_kw)
 

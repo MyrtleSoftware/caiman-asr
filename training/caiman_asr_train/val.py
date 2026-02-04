@@ -69,6 +69,7 @@ def validate(
         error_rate=val_objects.error_rate,
     )
     wer = results[error_rate_abbrev(val_objects.error_rate)]
+
     flush_log()
     if not args.val_from_dir:
         if args.read_from_tar:
@@ -88,13 +89,23 @@ def validate(
         print_once(
             f"\n{error_rate_long(val_objects.error_rate)}: "
             f'{wer*100.0:5.3f}% on "{val_files_str}"\n'
+            f"Punctuation Error Rate: {results['per']*100.0:5.3f}%\n"
         )
+
     else:
         print_once(
             f"\n{error_rate_long(val_objects.error_rate)}: "
             f"{wer*100.0:5.3f}% on {args.val_audio_dir=} and "
             f"{args.val_txt_dir=}\n"
+            f"Punctuation Error Rate: {results['per']*100.0:5.3f}%\n"
         )
+
+    if "keyword_metrics" in results:
+        print_once(f"b-WER: {results['keyword_metrics']['b_wer']*100.0:5.3f}%")
+        print_once(f"u-WER: {results['keyword_metrics']['u_wer']*100.0:5.3f}%")
+        print_once(f"Precision: {results['keyword_metrics']['precision']*100.0:5.3f}%")
+        print_once(f"Recall: {results['keyword_metrics']['recall']*100.0:5.3f}%")
+        print_once(f"F1: {results['keyword_metrics']['f1']*100.0:5.3f}%")
 
     if return_dataloader:
         results["dataloader"] = val_loader

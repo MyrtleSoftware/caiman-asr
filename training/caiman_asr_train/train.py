@@ -26,7 +26,7 @@ from caiman_asr_train.args.shared import check_shared_args
 from caiman_asr_train.args.train import train_arg_parser, verify_train_args
 from caiman_asr_train.data.dali.mel_normalization import MelFeatNormalizer
 from caiman_asr_train.data.dali.noise import NoiseSchedule
-from caiman_asr_train.evaluate.core import calculate_wer, evaluate
+from caiman_asr_train.evaluate.core import calculate_per, calculate_wer, evaluate
 from caiman_asr_train.evaluate.error_rates import error_rate_abbrev
 from caiman_asr_train.log.logging_layers import get_logging_entries
 from caiman_asr_train.log.profiling import (
@@ -209,6 +209,8 @@ def main(args):
 
         before_dataloading = time.time()
 
+        append_EOI = cfg["input_train"]["audio_dataset"].get("append_EOI", False)
+
         for batch in train_loader:
             dataloading_total += time.time() - before_dataloading
 
@@ -226,7 +228,7 @@ def main(args):
                 dp_scheduler.step(step, hints={"wer": best_wer})
                 star_scheduler.step(step, hints={"wer": best_wer})
 
-            audio, audio_lens, txt, txt_lens, _, utt_files = batch
+            audio, audio_lens, txt, txt_lens, _, utt_files, prefix_lens = batch
             # audio is (batch, meldim, max_len)
             # audio_lens is (batch,)
 
@@ -240,12 +242,25 @@ def main(args):
                 audio_lens = audio_lens.cuda()
                 txt = txt.cuda()
                 txt_lens = txt_lens.cuda()
+                prefix_lens = prefix_lens.cuda()
 
             before_feat_proc = time.time()
 
             # now do spec augment / frame stacking
             # feats is (seq_len, batch, input_dim)
-            feats, feat_lens = train_feat_proc([audio, audio_lens])
+            feats, feat_lens, _, _ = train_feat_proc(
+                [audio, audio_lens, step, args.training_steps]
+            )
+
+            if append_EOI and 0 < (p := args.eoi_drop_fraction) < 1:
+                # Remove some  of the eoi frames to prevent the model depending on them
+                drop_eoi = torch.rand_like(feat_lens, dtype=torch.float32) < p
+                feat_lens = torch.where(
+                    drop_eoi,
+                    feat_lens - cfg["rnnt"]["enc_stack_time_factor"],
+                    feat_lens,
+                )
+
             all_feat_lens += feat_lens
 
             feat_proc_total += time.time() - before_feat_proc
@@ -260,6 +275,7 @@ def main(args):
                 feat_lens=feat_lens,
                 txt=txt,
                 txt_lens=txt_lens,
+                prefix_lens=prefix_lens,
                 scaler=scaler,
                 rnnt_state=state,
                 loss_mods=LossModifiers(
@@ -315,7 +331,7 @@ def main(args):
                         args.prediction_frequency is None
                         or step % args.prediction_frequency == 0
                     ):
-                        preds, _, _ = split_batched_finals(
+                        preds, _, _, _ = split_batched_finals(
                             decoder.decode(feats, feat_lens)
                         )
 
@@ -327,11 +343,22 @@ def main(args):
                             standardize_wer=train_standardize_wer,
                             error_rate=train_objects.error_rate,
                         )
+                        per = calculate_per(
+                            preds,
+                            txt,
+                            txt_lens,
+                            tokenizer.detokenize,
+                            punctuation_marks=args.punctuation_marks,
+                            punctuation_normalization=args.punctuation_normalization,
+                        )
                         print_once(f"  Decoded:   {pred_utt[:90]}")
                         print_once(f"  Reference: {ref[:90]}")
                         wer = {abbrev: 100 * wer}
+                        per = {"per": 100 * per}
+
                     else:
                         wer = {}
+                        per = {}
 
                     if noise_schedule is not None:
                         noise = {
@@ -375,6 +402,7 @@ def main(args):
                         {
                             "loss": sum(losses),
                             **wer,  # optional entry
+                            **per,
                             "noise/gradient": noise_level,
                             "throughput-audio-samples-per-sec": step_utts / step_time,
                             "throughput-audio-secs-per-sec": step_frames.item()
@@ -405,10 +433,11 @@ def main(args):
                 # evaluating on validation set
                 if (
                     step == 1
+                    and not args.skip_first_val_eval
                     or step % args.val_frequency == 0
                     or step == args.training_steps
                 ):
-                    wer = evaluate(
+                    evaluate_results = evaluate(
                         epoch,
                         step,
                         val_loader,
@@ -423,7 +452,8 @@ def main(args):
                         calculate_loss=not args.skip_val_loss,
                         using_cpu=False,
                         error_rate=train_objects.error_rate,
-                    )[abbrev]
+                    )
+                    wer = evaluate_results[abbrev]
 
                     if args.die_if_wer_bad and wer > 0.99 and step >= 10000:
                         wer_is_bad = True

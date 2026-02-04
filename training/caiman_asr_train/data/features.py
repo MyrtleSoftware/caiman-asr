@@ -14,6 +14,7 @@
 
 import torch
 import torch.nn as nn
+from beartype import beartype
 
 
 class BaseFeatures(nn.Module):
@@ -23,12 +24,12 @@ class BaseFeatures(nn.Module):
         super(BaseFeatures, self).__init__()
 
     @torch.no_grad()
-    def calculate_features(self, audio, audio_lens):
-        return audio, audio_lens
+    def calculate_features(self, audio, audio_lens, step, training_steps):
+        return audio, audio_lens, step, training_steps
 
     def __call__(self, x):
-        audio, audio_lens = x
-        return self.calculate_features(audio, audio_lens)
+        audio, audio_lens, step, training_steps = x
+        return self.calculate_features(audio, audio_lens, step, training_steps)
 
 
 class SpecAugment(BaseFeatures):
@@ -40,79 +41,192 @@ class SpecAugment(BaseFeatures):
 
     Args:
         freq_masks (int): number of masks for frequency bands
-        min_freq (int): minimum number of frequencies in a single mask
-        max_freq (int or float): maximum number of frequencies in a single mask
+        max_freq (int): maximum number of frequencies in a single mask
         time_masks (int or float): number of masks or adaptive percentage
-        min_time (int): minimum number of masked time steps per mask; applies
-            only if max is non-adaptive
         max_time (int or float): maximum number of masked time steps per mask,
             value 0 < 1 then denotes adaptive percentage
-        noise_magnitude (float): mask with N(0, noise_magnitude * std(sample))
-            noise instead of zeros to stabilize training
+        ratio_spec_aug_on (float): ratio of training steps when SpecAugment is
+            applied, 1.0 means always, 0.0 means never
+        eoi_frames (int): The number of eoi mel-frames to ignore
     """
 
+    FREQ_AXIS = 1  # Frequency axis in the spectrogram tensor
+    TIME_AXIS = 2  # Time axis in the spectrogram tensor
+
+    @beartype
     def __init__(
         self,
-        freq_masks=0,
-        min_freq=0,
-        max_freq=10,
-        time_masks=0,
-        min_time=0,
-        max_time=10,
-        noise_magnitude=0,
+        eoi_frames: int,
+        freq_masks: int = 0,
+        max_freq: int = 10,
+        time_masks: int = 0,
+        max_time: int | float = 10,
+        ratio_spec_aug_on: float = 1.0,
     ):
         super(SpecAugment, self).__init__()
-        assert 0 <= min_freq <= max_freq
-        assert 0 <= min_time <= max_time
 
         self.freq_masks = freq_masks
-        self.min_freq = min_freq
-        self.max_freq = max_freq
+        self.freq_width = max_freq
 
         self.time_masks = time_masks
-        self.min_time = min_time
-        self.max_time = max_time
+        self.time_width = max_time
 
-        self.noise_magnitude = noise_magnitude
+        self.ratio_spec_aug_on = ratio_spec_aug_on
+        assert (
+            0.0 <= ratio_spec_aug_on <= 1.0
+        ), "ratio_spec_aug_on must be in [0.0, 1.0]"
+
+        self.eoi_frames = eoi_frames
+
+    @beartype
+    def spec_augment_off(self, step, training_steps) -> bool:
+        """Check if SpecAugment should be applied.
+
+        Args:
+        ----
+        step: current training step
+        training_steps: total number of training steps
+
+        Returns:
+        -------
+        bool: True if SpecAugment should not be applied based on the current step
+        """
+        if training_steps <= 0:
+            # No training steps defined, SpecAugment is not applied
+            return True
+        if training_steps > 0 and step / training_steps > self.ratio_spec_aug_on:
+            # SpecAugment is not applied, ratio_spec_aug_on is exceeded
+            return True
+        return False
 
     @torch.no_grad()
-    def calculate_features(self, x, x_lens):
-        sh = x.shape
-        mask = torch.zeros(x.shape, dtype=torch.bool, device=x.device)
+    @beartype
+    def calculate_features(self, x, x_lens, step=0, training_steps=0):
+        if self.spec_augment_off(step, training_steps):
+            # SpecAugment is not applied, spec augment is off
+            return x, x_lens, step, training_steps
 
-        for idx in range(sh[0]):
-            for _ in range(self.freq_masks):
-                w = torch.randint(self.min_freq, self.max_freq + 1, size=(1,)).item()
-                f0 = torch.randint(0, max(1, sh[1] - w + 1), size=(1,))
-                mask[idx, f0 : f0 + w] = 1
+        B, H, _ = x.shape
 
-            # Adaptive time masking
-            time_masks = self.time_masks
-            if 0 < time_masks < 1.0:
-                time_masks = int(round(x_lens[idx].item() * time_masks))
+        if self.eoi_frames > 0:
+            # Cache EOI for later
+            eoi = x[0, :, x_lens[0] - self.eoi_frames : x_lens[0]].clone()
+            eoi = eoi[None, :, :].expand(B, -1, -1)
 
-            max_time = self.max_time
-            if 0 < max_time < 1.0:
-                max_time = int(round(x_lens[idx].item() * max_time))
+        # time masks
+        x = self._apply_masks(
+            x=x,
+            num_masks=self.time_masks,
+            x_lens=x_lens,
+            width=self.time_width,
+            axis=self.TIME_AXIS,
+        )
+        # freq masks
+        x = self._apply_masks(
+            x=x,
+            num_masks=self.freq_masks,
+            x_lens=x_lens,
+            width=self.freq_width,
+            axis=self.FREQ_AXIS,
+        )
 
-            for _ in range(time_masks):
-                w = torch.randint(self.min_time, max_time + 1, size=(1,)).item()
-                t0 = torch.randint(0, max(1, sh[2] - w + 1), size=(1,))
-                mask[idx, :, t0 : t0 + w] = 1
+        if self.eoi_frames > 0:
+            # Repair any modified EOI frames
+            at = torch.arange(self.eoi_frames, device=x.device)
+            at = at[None, None, :].expand(B, H, -1)
+            at = at + x_lens[:, None, None] - self.eoi_frames
+            x.scatter_(dim=2, index=at, src=eoi)
 
-        if self.noise_magnitude > 0:
-            mean = torch.zeros(x.size(0), x.size(1), 1, device=x.device)
-            std = torch.zeros(x.size(0), x.size(1), 1, device=x.device)
-            for idx in range(sh[0]):
-                mean[idx, :, 0] = x[idx, :, : x_lens[idx]].mean(dim=1)
-                std[idx, :, 0] = x[idx, :, : x_lens[idx]].std(dim=1)
+        return x, x_lens, step, training_steps
 
-            std *= self.noise_magnitude
-            noise = (mean + torch.randn_like(x) * std).masked_fill(~mask, 0)
+    @beartype
+    def _apply_masks(
+        self,
+        x: torch.Tensor,
+        num_masks: int,
+        x_lens: torch.Tensor,
+        width: int | float,
+        axis: int,
+    ) -> torch.Tensor:
+        """
+        This function applies SpecAugment masks to the input tensor `x` along
+        the specified axis. The masks are independently generated for each
+        batch item and applied in parallel.
+
+        For full details see original implementation:
+
+        https://github.com/NVIDIA/NeMo/blob/main/nemo/collections/asr/parts/submodules/spectr_augment.py
+
+        Args:
+            x: (Batch, Freq, Time) tensor of spectrograms
+            x_lens: (Batch,) tensor of lengths of the spectrograms
+            num_masks: Number of masks to apply.
+            axis: Axis along which to apply the masks, either FREQ_AXIS or TIME_AXIS.
+            width: Maximum width of a mask either a number/fraction of time-steps if
+                axis is TIME_AXIS, or number of frequency bands if axis is FREQ_AXIS.
+        """
+
+        assert axis in (
+            self.FREQ_AXIS,
+            self.TIME_AXIS,
+        ), f"Axis can be ({self.FREQ_AXIS}) or ({self.TIME_AXIS}). Received: {axis=}"
+
+        assert not (
+            isinstance(width, float) and axis == self.FREQ_AXIS
+        ), "Float width supported only with time axis."
+
+        batch_size = x.shape[0]
+        axis_length = x.shape[axis]
+
+        # If width is float then it is transformed into a tensor
+        if axis == self.TIME_AXIS and isinstance(width, float):
+            width = torch.clamp(width * x_lens, max=axis_length).unsqueeze(1)
+
+        # Generate [0-1) random numbers and then scale the tensors.
+        # Use float32 dtype for begin/end mask markers before they are quantized to long.
+        mask_width = (
+            torch.rand(
+                (batch_size, num_masks),
+                device=x.device,
+                dtype=torch.float32,
+            )
+            * width
+        )
+        mask_width = mask_width.long()
+        mask_start = torch.rand(
+            (batch_size, num_masks), device=x.device, dtype=torch.float32
+        )
+
+        if axis == self.TIME_AXIS:
+            # length can only be used for the time axis
+            mask_start = mask_start * (x_lens.unsqueeze(1) - mask_width)
         else:
-            noise = 0
+            mask_start = mask_start * (axis_length - mask_width)
 
-        return x.masked_fill(mask, 0) + noise, x_lens
+        mask_start = mask_start.long()
+        mask_end = mask_start + mask_width
+
+        # Create mask values using vectorized indexing
+        indices = torch.arange(axis_length, device=x.device)
+        # Create a mask_tensor with all the indices.
+        # The mask_tensor shape is (batch_size, num_masks, axis_length).
+        mask_tensor = (indices >= mask_start.unsqueeze(-1)) & (
+            indices < mask_end.unsqueeze(-1)
+        )
+
+        # Reduce masks to one mask
+        mask_tensor = mask_tensor.any(dim=1)
+
+        # Create a final mask that aligns with the full tensor
+        mask = torch.zeros_like(x, dtype=torch.bool)
+        if axis == self.TIME_AXIS:
+            mask_ranges = mask_tensor[:, None, :]
+        else:  # axis == self.FREQ_AXIS
+            mask_ranges = mask_tensor[:, :, None]
+        mask[:, :, :] = mask_ranges
+
+        # Apply the mask value
+        return x.masked_fill(mask=mask, value=0.0)
 
 
 def stack_subsample_frames(x, x_lens, stacking=1, subsampling=1):
@@ -147,14 +261,14 @@ class FrameSplicing(BaseFeatures):
         self.frame_stacking = frame_stacking
         self.frame_subsampling = frame_subsampling
 
-    def calculate_features(self, x, x_lens):
+    def calculate_features(self, x, x_lens, step=0, training_steps=0):
         # frame splicing if required
         if self.frame_stacking > 1 or self.frame_subsampling > 1:
             x, x_lens = stack_subsample_frames(
                 x, x_lens, self.frame_stacking, self.frame_subsampling
             )
 
-        return x, x_lens
+        return x, x_lens, step, training_steps
 
 
 class PermuteAudio(nn.Module):

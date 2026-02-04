@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import kenlm
 import numpy as np
 from beartype import beartype
-from beartype.typing import Tuple
+from beartype.typing import List, Tuple
 
 
 @beartype
@@ -19,6 +19,14 @@ class KenLmModel:
 
     def __init__(self, model_path: str):
         self.model = kenlm.Model(model_path)
+
+    def _init_state(self) -> kenlm.State:
+        init_state = kenlm.State()
+        self.model.BeginSentenceWrite(init_state)
+        return init_state
+
+    def get_batch_initial_states(self, batch_size: int) -> List[kenlm.State]:
+        return [self._init_state() for _ in range(batch_size)]
 
     def score_ngram(
         self, ngram: str, current_lm_state: kenlm.State

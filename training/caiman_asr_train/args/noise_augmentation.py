@@ -15,6 +15,10 @@ class NoiseAugmentationArgs:
     use_noise_audio_folder: bool
     prob_background_noise: float
     prob_babble_noise: float
+    prob_microphone_aug: float
+    microphone_dataset: Optional[str]
+    prob_room_aug: float
+    room_dataset: Optional[str]
 
 
 @beartype
@@ -80,4 +84,30 @@ def add_noise_augmentation_args(parser: ArgumentParser) -> None:
         action="store_true",
         help="Use Hugging Face's AudioFolder format to read a noise dataset. "
         "Set this when reading a local noise dataset",
+    )
+
+    # Microphone augmentation
+    noise.add_argument(
+        "--prob_microphone_aug",
+        default=0.0,
+        type=float,
+        help="Probability of applying microphone augmentation",
+    )
+    noise.add_argument(
+        "--microphone_dataset",
+        type=str,
+        help="Path to the noise dataset for microphone augmentation",
+    )
+
+    # Room augmentation
+    noise.add_argument(
+        "--prob_room_aug",
+        default=0.0,
+        type=float,
+        help="Probability of applying room augmentation",
+    )
+    noise.add_argument(
+        "--room_dataset",
+        type=str,
+        help="Path to the noise dataset for room augmentation",
     )

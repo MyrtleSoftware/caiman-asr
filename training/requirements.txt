@@ -1,3 +1,4 @@
+audiomentations==0.39.0
 beartype==0.15.0
 cerberus==1.3.7
 coverage==7.4.0
@@ -7,7 +8,9 @@ filetype==1.2.0
 https://github.com/NVIDIA/dllogger/archive/26a0f8f1958de2c0c460925ff6102a4d2486d6cc.zip
 inflect==4.1.0
 jaxtyping==0.2.25
-kenlm==0.2.0
+jiwer==4.0.0
+kenlm==0.3.0
+levenshtein==0.27.1
 levenshtein_rs==0.1.7
 librosa==0.8.0
 more-itertools==10.2.0

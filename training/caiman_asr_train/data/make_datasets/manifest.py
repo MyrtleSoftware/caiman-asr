@@ -132,6 +132,7 @@ def prepare_manifest(
     num_jobs: int = 1,
     data_dir: Union[str, Path, None] = None,
     use_relative_path: bool = False,
+    desc: str | None = None,
 ) -> List[Dict]:
     """
     Takes in `data` and creates a manifest in a parallel fashion. The `data_dir`
@@ -183,7 +184,14 @@ def prepare_manifest(
     except TypeError:
         data_len = None
     with multiprocessing.Pool(num_jobs) as pool:
-        dataset = list(tqdm(pool.imap(process_utterance_, data), total=data_len))
+        dataset = list(
+            tqdm(
+                pool.imap(process_utterance_, data),
+                total=data_len,
+                leave=False,
+                desc=desc,
+            )
+        )
     dataset = sorted(dataset, key=lambda x: x["files"][0]["fname"])
     dataset = list(filter(all_fields_exist, dataset))
 
