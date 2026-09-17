@@ -29,17 +29,23 @@ def val_arg_parser() -> ArgumentParser:
     )
 
     optim = parser.add_argument_group("optimization setup")
-    optim.add_argument(
-        "--val_batch_size", default=1024, type=int, help="Evaluation time batch size"
+
+    mutex = optim.add_mutually_exclusive_group()
+    mutex.add_argument("--val_batch_size", type=int, help="Evaluation time batch size")
+    mutex.add_argument(
+        "--val_batch_duration",
+        type=float,
+        help="Eval time batch duration",
+        default=None,
     )
 
     io = parser.add_argument_group("feature and checkpointing setup")
     io.add_argument(
-        "--dali_val_device",
+        "--loader_val_device",
         type=str,
         choices=["cpu", "gpu"],
-        default="cpu",
-        help="Use DALI pipeline for fast data processing",
+        default="gpu",
+        help="Set the validation data loader device.",
     )
     io.add_argument(
         "--ckpt",
@@ -51,40 +57,9 @@ def val_arg_parser() -> ArgumentParser:
     )
     io.add_argument(
         "--model_config",
-        default="/workspace/training/configs/testing-1023sp_run.yaml",
         type=str,
         help="Path of the model configuration file",
-    )
-    io.add_argument(
-        "--val_manifests",
-        type=str,
-        required=False,
-        default=["/datasets/LibriSpeech/librispeech-dev-clean-flac.json"],
-        nargs="+",
-        help="Paths of the evaluation datasets manifest files. "
-        "Ignored if --read_from_tar=True",
-    )
-    io.add_argument(
-        "--read_from_tar",
-        action="store_true",
-        default=False,
-        help="Read data from tar files instead of json manifest files",
-    )
-    io.add_argument(
-        "--val_tar_files",
-        type=str,
-        required=False,
-        default=None,
-        nargs="+",
-        help="Paths of the evaluation dataset tar files. "
-        "Ignored if --read_from_tar=False.",
-    )
-    io.add_argument(
-        "--dataset_dir",
-        "--data_dir",
-        type=str,
-        help="Root dir of dataset",
-        default="/datasets/LibriSpeech",
+        required=True,
     )
     io.add_argument(
         "--output_dir",
@@ -135,6 +110,19 @@ def val_arg_parser() -> ArgumentParser:
         help="""Run validation on the CPU. It supports additional functionality
         """,
     )
+    io.add_argument(
+        "--uuid",
+        type=str,
+        default="0",
+        help="Unique ID, propagated into validation results.",
+    )
+    io.add_argument(
+        "--feature_dump_dir",
+        type=str,
+        default=None,
+        help="Directory to dump the features to",
+    )
+
     add_shared_args(parser)
     return parser
 
@@ -150,3 +138,6 @@ def check_val_arguments(args: Namespace) -> None:
 
     if args.num_gpus > 1:
         assert not args.cpu, "Cannot use valCPU with multiple processes"
+
+    if args.val_batch_duration is None and args.val_batch_size is None:
+        args.val_batch_duration = 14_400.0

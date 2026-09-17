@@ -98,29 +98,33 @@ class GradNoiseScheduler:
         """
         return step >= self.start_step
 
-    def add_grad_noise(self, model, step: int, world_size: int):
+    def add_grad_noise(self, model, step: int, world_size: int, scale: float = 1.0):
         """
         Update the gradients with noise sampled from a gaussian distribution according
         to the step.
+
+        ``scale`` is the current AMP loss scale: the .grad buffers hold scaled
+        gradients at this point, so the noise is multiplied by it to give an
+        effective (unscaled) std of ``self.std(step)``.
         """
 
         if not self.switch_on(step):
             return model, 0
 
         model_encoder = unwrap_ddp(model).encoder
-        noise = self.std(step)
+        std = self.std(step)
         for _, param in model_encoder.named_parameters():
-            if param.requires_grad:
+            if param.requires_grad and param.grad is not None:
                 noise = torch.normal(
                     mean=0.0,
-                    std=noise,
+                    std=std,
                     size=param.size(),
                     device=param.device,
                     dtype=param.dtype,
                     generator=self.rng_grad_noise,
                 )
                 # each GPU adds noise to the tensors grads, but it is only needed once
-                noise.data.div(world_size)
-                param.grad.data.add_(noise)
+                noise.data.div_(world_size)
+                param.grad.data.add_(noise * scale)
 
-        return model, noise
+        return model, std

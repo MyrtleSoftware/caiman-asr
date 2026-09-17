@@ -29,7 +29,7 @@ def is_file_same(path1: str | Path, path2: str | Path) -> bool:
 
 
 def test_same_on_manifest(test_data_dir):
-    original_path = str(test_data_dir / "peoples-speech-short.json")
+    original_path = str(test_data_dir / "dummy.json")
 
     reference_path = Path("/tmp") / f"{uuid4()}.json"
     reference_manifest = reference_read_json(original_path)

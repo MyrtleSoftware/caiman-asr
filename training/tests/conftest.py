@@ -29,17 +29,17 @@ def test_data_dir() -> Path:
 @pytest.fixture(scope="session")
 def config_fp() -> str:
     # Test using the testing config
-    return str(Path(__file__).parent.parent / "configs/testing-1023sp_run.yaml")
+    return str(Path(__file__).parent.parent / "configs/testing-1023sp.yaml")
 
 
 @pytest.fixture()
-def tokenizer_kw(config_fp, test_data_dir):
-    return load_tokenizer_kw(config_fp, test_data_dir)
+def tokenizer_kw(tmp_path, config_fp, test_data_dir):
+    return load_tokenizer_kw(tmp_path, config_fp, test_data_dir)
 
 
 @pytest.fixture()
-def val_tokenizer_kw(config_fp, test_data_dir):
-    kw = load_tokenizer_kw(config_fp, test_data_dir)
+def val_tokenizer_kw(tmp_path, config_fp, test_data_dir):
+    kw = load_tokenizer_kw(tmp_path, config_fp, test_data_dir)
     kw["sampling"] = 0.0
     kw["label_smoothing_kwargs"] = None
     return kw
@@ -73,11 +73,26 @@ def mini_config_fp_factory(tmp_path, mel_stats_dir, ngram_subdir, test_data_dir)
     'mini' model configuration has 1.5k parameters to speed up testing.
     """
 
+    def _update_langs(cfg_path):
+        with open(cfg_path, "r") as f:
+            cfg = yaml.safe_load(f)
+
+        # Update the LANGS key
+        cfg["langs"] = ["en"]
+
+        # save the config to a temporary file
+        mini_cfg_path = str(tmp_path / "mini_config.yaml")
+        with open(mini_cfg_path, "w") as f:
+            yaml.dump(cfg, f)
+
+        return mini_cfg_path
+
     def _create_mini_config_fp(_config_fp):
-        cfg = config.load(_config_fp)
+        mini_cfg_fp = _update_langs(_config_fp)
+        cfg = config.load(mini_cfg_fp)
         rnnt_config = config.rnnt(cfg)
         # replace the relevant fields to match
-        rnnt_config["in_feats"] = 5
+        rnnt_config["in_feats"] = 240
         rnnt_config["enc_n_hid"] = 8
         rnnt_config["enc_pre_rnn_layers"] = 1
         rnnt_config["enc_post_rnn_layers"] = 1
@@ -88,12 +103,14 @@ def mini_config_fp_factory(tmp_path, mel_stats_dir, ngram_subdir, test_data_dir)
 
         cfg["rnnt"] = rnnt_config
 
+        # as mini_model_factory reloads the model config
+        # which will reset the labels, drop labels here
+        cfg["langs"] = ["en"]
+        del cfg["tokenizer"]["labels"]
+
         # The test expect specific token outputs so we keep the
         # legacy settings fos now
         cfg["tokenizer"]["sentpiece_model"] = str(test_data_dir / "librispeech29.model")
-        cfg["tokenizer"]["labels"] = [x for x in "abcdefghijklmnopqrstuvwxyz' "]
-        cfg["input_val"]["audio_dataset"]["normalize_transcripts"] = "lowercase"
-        cfg["input_train"]["audio_dataset"]["normalize_transcripts"] = "lowercase"
 
         cfg["input_val"]["filterbank_features"]["stats_path"] = mel_stats_dir
         cfg["input_train"]["filterbank_features"]["stats_path"] = mel_stats_dir
@@ -101,11 +118,10 @@ def mini_config_fp_factory(tmp_path, mel_stats_dir, ngram_subdir, test_data_dir)
         cfg["ngram"]["ngram_path"] = ngram_subdir
 
         # save the config to a temporary file
-        named_tmp_file = str(tmp_path / "mini_config.yaml")
-        with open(named_tmp_file, "w") as f:
+        with open(mini_cfg_fp, "w") as f:
             yaml.dump(cfg, f)
 
-        return named_tmp_file
+        return mini_cfg_fp
 
     return _create_mini_config_fp
 
@@ -128,8 +144,14 @@ def mini_model_factory(
             set_seed(seed=seed)
         mini_config_fp = mini_config_fp_factory(_config_fp)
         cfg = config.load(mini_config_fp)
-        rnnt_config = config.rnnt(cfg)
-        model = RNNT(n_classes=saved_tokenizer_num_labels + 1, **rnnt_config)
+        rnnt = config.rnnt(cfg)
+
+        if rnnt["conditional_encoder"] and rnnt["prefix_token_map"] is None:
+            # Mock the pnc/nopnc behaviour, this is required because the
+            # yaml config doesn't specify the prefix_token_map
+            rnnt["prefix_token_map"] = {i: i for i in range(2)}
+
+        model = RNNT(n_classes=saved_tokenizer_num_labels + 1, **rnnt)
         return model, mini_config_fp
 
     return _create_model
@@ -155,18 +177,18 @@ def optimizer_factory() -> Callable[[Union[RNNT, DDP]], FusedLAMB]:
 
 
 @pytest.fixture(scope="session")
-def dataload_args(test_data_dir) -> Namespace:
-    return gen_dataload_args(test_data_dir)
+def dataload_args(test_data_dir, tmp_path_factory) -> Namespace:
+    return gen_dataload_args(test_data_dir, tmp_path_factory.mktemp("config"))
 
 
 @pytest.fixture(scope="session")
 def melmeans(test_data_dir) -> torch.Tensor:
-    return torch.load(test_data_dir / "melmeans.pt")
+    return torch.load(test_data_dir / "melmeans.pt", weights_only=False)
 
 
 @pytest.fixture(scope="session")
 def melvars(test_data_dir) -> torch.Tensor:
-    return torch.load(test_data_dir / "melvars.pt")
+    return torch.load(test_data_dir / "melvars.pt", weights_only=False)
 
 
 @pytest.fixture(scope="session")
@@ -177,3 +199,41 @@ def ngram_subdir(test_data_dir):
 @pytest.fixture(scope="session")
 def ngram_path(test_data_dir) -> str:
     return str(test_data_dir / "ngram/ngram.binary")
+
+
+# The autotuner prunes each backend's feasible set to the tree-ranker's top-K, but that K
+# still far exceeds the handful of configs CI can afford (and must hold even when the
+# feasible set is smaller than K). This fixture caps each backend to a few launchable tiles
+# for any test that drives real kernel selection (autotune select_*, or a TileLangLSTM
+# forward); the full grid stays covered by test_config_generators_yield_feasible_configs.
+_MAX_TEST_CONFIGS = 4
+
+
+@pytest.fixture()
+def cap_autotune_configs(monkeypatch):
+    """
+    Cap every TileLang LSTM backend's feasible-config list (see ``_MAX_TEST_CONFIGS``)
+    so each ``select_*`` call compiles/benches < 5 configs per backend instead of the
+    full grid, and clear the ``@cache``'d select/tune memos around the test so the cap
+    takes effect (an uncapped cache entry would mask it) and never leaks out.
+
+    Imports are local so collecting non-TileLang tests never pulls in tilelang.
+    """
+    import dataclasses
+
+    from caiman_asr_train.tilelstm.autotune import tuners
+    from caiman_asr_train.tilelstm.autotune.select import select_fastest
+
+    def _cap(bk):
+        def capped(*a, **k):
+            return bk.make_configs(*a, **k)[:_MAX_TEST_CONFIGS]
+
+        return dataclasses.replace(bk, make_configs=capped)
+
+    for k in list(tuners._BACKENDS):
+        monkeypatch.setitem(tuners._BACKENDS, k, _cap(tuners._BACKENDS[k]))
+    select_fastest.cache_clear()
+    tuners.tune.cache_clear()
+    yield
+    select_fastest.cache_clear()
+    tuners.tune.cache_clear()

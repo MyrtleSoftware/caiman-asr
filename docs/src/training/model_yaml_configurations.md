@@ -32,8 +32,9 @@ The configs referenced above are not intended to be edited directly. Instead, th
 - `sentpiece_model: /datasets/sentencepieces/SENTENCEPIECE.model`
 - `stats_path: /datasets/stats/STATS_SUBDIR`
 - `max_duration: MAX_DURATION`
+- `max_transcript_len: MAX_TOKENS`
 - `ngram_path: /datasets/ngrams/NGRAM_SUBDIR`
 
 Populating these fields can be performed by the `training/scripts/create_config_set_env.sh` script.
 
-For example usage, see the following documentation: [Prepare LibriSpeech in the `JSON` format](json_format.md#librispeech_json).
+For example usage, see the following documentation: [Prepare LibriSpeech in the `JSONL` format](jsonl_format.md#librispeech_json).

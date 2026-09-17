@@ -2,7 +2,7 @@
 
 import pytest
 
-from caiman_asr_train.data.text.preprocess import mask_user_symbols
+from caiman_asr_train.data.text.symbols_mask import mask_user_symbols
 
 
 @pytest.mark.parametrize(

@@ -14,3 +14,39 @@ To freeze the encoder weights during training change the `enc_freeze` option in 
 ```yaml
 enc_freeze: true
 ```
+
+## Fine-tuning a multilingual model on a subset of languages
+
+If you trained a multilingual model with, say, `langs: [en, fr, de]` (see
+[Training on multiple languages](changing_the_character_set.md#training-on-multiple-languages)),
+you can resume its training on only some of those languages, for example
+just French, by adding `ft_langs` to the model config:
+
+```yaml
+langs: [en, fr, de]
+ft_langs: [fr]
+```
+
+`ft_langs` is optional and, when present, selects which of the manifest's
+languages are loaded as training data, in place of `langs`. Crucially,
+`langs` itself is left untouched, so the sentencepiece tokenizer, ngram
+model, and mel stats are unaffected and stay identical to the original
+model - only the training data changes.
+
+Arguments you should tune in order to resume the train successfully:
+
+```bash
+--ft_langs <ft-langs>  # list of languages to fine-tune on
+--checkpoint <path>  # path to the checkpoint file
+--training_steps <steps>  # number of training steps to run
+```
+
+```admonish
+Make sure that you do not change the hyperparameters that you used for training
+the multilingual model, otherwise the creation of new artifacts may be triggered
+and the training may be inaccurate. Such hyperparameters include the --multingual
+set to true, and the same --dataset_name.
+```
+
+`ft_langs` has no effect on validation, which continues to use whatever
+`--val_manifests`/`--val_standardizer_lang` are passed on the command line.

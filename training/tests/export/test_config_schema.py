@@ -3,7 +3,7 @@ import unittest
 import pytest
 from pydantic import ValidationError
 
-from caiman_asr_train.export.config_schema import (
+from caiman_asr_train.core.export_schema import (
     FilterbankFeaturesSchema,
     FrameSplicingSchema,
     InputValSchema,
@@ -25,14 +25,12 @@ class TestConfigSchema(unittest.TestCase):
                 "audio_dataset": {
                     "max_duration": 20.0,
                     "max_transcript_len": 450,
-                    "normalize_transcripts": False,
                     "sample_rate": 16000,
                     "speed_perturbation": {
                         "max_rate": 1.15,
                         "min_rate": 0.85,
                         "p": 1.0,
                     },
-                    "trim_silence": True,
                 },
                 "filterbank_features": {
                     "dither": 1e-05,
@@ -54,9 +52,7 @@ class TestConfigSchema(unittest.TestCase):
             },
             "input_val": {
                 "audio_dataset": {
-                    "normalize_transcripts": False,
                     "sample_rate": 16000,
-                    "trim_silence": False,
                 },
                 "filterbank_features": {
                     "dither": 1e-05,
@@ -93,6 +89,7 @@ class TestConfigSchema(unittest.TestCase):
                 "pred_n_hid": 768,
                 "pred_rnn_layers": 2,
                 "pred_rw_dropout": 0.0,
+                "conditional_encoder": False,
                 "quantize": False,
             },
             "tokenizer": {

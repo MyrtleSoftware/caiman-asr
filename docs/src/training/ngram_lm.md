@@ -8,7 +8,7 @@ See the [Validation with an N-gram](#validation) section for more details.
 
 ## Build an N-gram Language Model
 
-When adapting the preprocessing steps detailed [here](./json_format.md) for your own dataset, you should have generated an n-gram language model trained on your transcripts.
+When adapting the preprocessing steps detailed [here](./jsonl_format.md) for your own dataset, you should have generated an n-gram language model trained on your transcripts.
 To generate an n-gram from a different dataset, see the following steps.
 
 ### Preparing Data
@@ -19,12 +19,6 @@ To gather the transcripts from json manifest files, run the following command in
 
 ```bash
 python caiman_asr_train/lm/prep_kenlm_data.py --data_dir /path/to/dataset/ --manifests manifest1.json manifest2.json --output_path /path/to/transcripts.txt --model_config configs/config.yaml
-```
-
-To instead gather the transcripts from data in the WebDataset format, run the following command:
-
-```bash
-python caiman_asr_train/lm/prep_kenlm_data.py --data_dir /path/to/dataset/ --read_from_tar --tar_files file1.tar file2.tar --output_path /path/to/transcripts.txt --model_config configs/config.yaml
 ```
 
 ```admonish
@@ -46,6 +40,7 @@ For example, to generate a 4-gram, set `[NGRAM_ORDER]` to 4 as follows:
 ```
 
 The script will produce an ARPA file, which is a human-readable version of the language model, and a binary file, which allows for faster loading and is the recommended format. Binary files are the only usable format when generating [hardware checkpoints](./export_inference_checkpoint.md), though providing an n-gram is optional.
+By default, the ngram will be pruned of singleton/singular n-grams of order 3 and above.
 
 ## Validation with an N-gram <a name="validation"></a>
 

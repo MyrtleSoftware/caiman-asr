@@ -4,6 +4,7 @@ from beartype import beartype
 from beartype.typing import Dict, List
 from ctm import CTM
 
+from caiman_asr_train.data.text.allowed_charset import get_allowed_charset
 from caiman_asr_train.data.text.normalizers import lowercase_normalize as norm
 from caiman_asr_train.evaluate.error_rates import ErrorRate
 from caiman_asr_train.evaluate.metrics import word_error_rate
@@ -11,7 +12,7 @@ from caiman_asr_train.latency.measure_latency_lite import compute_latency_metric
 
 
 @beartype
-def calculate_wer(ref_ctm: CTM, hyp_ctm: CTM) -> Dict:
+def calculate_wer(ref_ctm: CTM, hyp_ctm: CTM, lang_code: str) -> Dict:
     """
     This function calculates the WER between two CTM object. It is calculated as
     the sum of addition, deletions, and substitutions of words in the hypotheses
@@ -42,12 +43,15 @@ def calculate_wer(ref_ctm: CTM, hyp_ctm: CTM) -> Dict:
     refs = [refs[k] for k in keys]
     hyps = [hyps[k] for k in keys]
 
-    wer, scores, words = word_error_rate(
+    wer_details = word_error_rate(
         hypotheses=hyps,
         references=refs,
         error_rate=ErrorRate.WORD,
-        standardize=True,
+        lang_code=lang_code,
     )
+    wer = wer_details.wer
+    scores = wer_details.scores
+    words = wer_details.words
 
     print(f"wer: {wer:.3%}, errors: {scores}, words: {words}")
 
@@ -58,6 +62,7 @@ def calculate_wer(ref_ctm: CTM, hyp_ctm: CTM) -> Dict:
 def calculate_latency(
     ref_ctm: CTM,
     hyp_ctm: CTM,
+    lang_code: str,
     include_subs: bool = False,
     percentiles: List[int] = [90, 99],
 ) -> tuple[dict, dict]:
@@ -79,10 +84,13 @@ def calculate_latency(
     ValueError: if the number of references is greater than the number of hypotheses
     """
 
-    latencies, _, utt_stats = _align_transcripts(ref_ctm, hyp_ctm, include_subs)
+    latencies, _, utt_stats = _align_transcripts(
+        ref_ctm, hyp_ctm, lang_code, include_subs
+    )
     # Use frame-width zero because we are measuring UPL not EL
     latency_metrics = compute_latency_metrics(
         latencies=latencies,
+        fw_latency=[],
         sil_latency=[],
         eos_latency=[],
         frame_width=0.0,
@@ -94,12 +102,9 @@ def calculate_latency(
     return latency_metrics, utt_stats
 
 
-BASIC_CHAR_SET = list(" abcdefghijklmnopqrstuvwxyz'")
-
-
 @beartype
 def _align_transcripts(
-    ref_ctm: CTM, hyp_ctm: CTM, include_subs: bool = False
+    ref_ctm: CTM, hyp_ctm: CTM, lang_code: str, include_subs: bool = False
 ) -> tuple[list, list, dict]:
     """
     Aligns the words from ground truth and predicted transcripts and calculates the
@@ -115,14 +120,15 @@ def _align_transcripts(
     done_utts, done_words = 0, 0
     latencies, end_times = [], []
 
+    charset = get_allowed_charset([lang_code], lowercase_only=True)
     # Process each utterance separately
     for fname, ref_tstamp in ref_tstamps.items():
         if fname not in hyp_tstamps:
             continue
         hyp_tstamp = hyp_tstamps[fname]
 
-        ref_words = [norm(t[0], BASIC_CHAR_SET) for t in ref_tstamp]
-        hyp_words = [norm(t[0], BASIC_CHAR_SET) for t in hyp_tstamp]
+        ref_words = [norm(t[0], charset, lang_code) for t in ref_tstamp]
+        hyp_words = [norm(t[0], charset, lang_code) for t in hyp_tstamp]
 
         # Initialize the SequenceMatcher for each file
         matcher = difflib.SequenceMatcher(None, ref_words, hyp_words, autojunk=False)

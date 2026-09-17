@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 from argparse import ArgumentParser, Namespace
-from pathlib import Path
 
+import torch
+import yaml
 from beartype import beartype
-from beartype.typing import Optional
 
 from caiman_asr_train.args.decoder import add_decoder_args
 from caiman_asr_train.args.eos import add_eos_shared_args
-from caiman_asr_train.args.hugging_face import add_basic_hugging_face_args
 from caiman_asr_train.args.mel_feat_norm import (
     add_mel_feat_norm_args,
     check_mel_feat_norm_args,
 )
-from caiman_asr_train.train_utils.distributed import print_once
+from caiman_asr_train.autotune.support import (
+    MIN_TORCH_FOR_TILELANG,
+    tilelang_supported,
+)
+from caiman_asr_train.utils.user_tokens_lite import get_all_user_tokens
 
 
 @beartype
@@ -32,23 +35,30 @@ def add_shared_args(parser: ArgumentParser) -> None:
         help="Validation audio will be padded at the end with this much silence",
     )
     parser.add_argument(
-        "--prob_val_narrowband",
-        type=float,
-        default=0.0,
-        help="Probability that a batch of validation audio gets downsampled to 8kHz"
-        " and then upsampled to original sample rate",
+        "--val_manifests",
+        type=str,
+        required=True,
+        nargs="+",
+        help="Paths of the evaluation datasets manifest files",
+    )
+    parser.add_argument(
+        "--val_dataset_dir",
+        "--val_data_dir",
+        type=str,
+        help="Root dir of validation dataset",
+        required=True,
+    )
+    parser.add_argument(
+        "--val_standardizer_lang",
+        type=str,
+        required=True,
+        help="ISO code of the language of the transcripts to be standardized",
     )
     parser.add_argument(
         "--inspect_audio",
         action="store_true",
         help="""Save audios (after augmentations are applied) to /results/augmented_audios.
-        This will slow down DALI""",
-    )
-    parser.add_argument(
-        "--n_utterances_only",
-        default=None,
-        type=int,
-        help="Abridge the dataset to only this many utterances, selected randomly",
+        This will slow down the data loading process.""",
     )
     parser.add_argument(
         "--skip_init",
@@ -72,34 +82,9 @@ def add_shared_args(parser: ArgumentParser) -> None:
         "Note this default is for an 11GB GPU",
     )
     parser.add_argument(
-        "--val_from_dir",
-        action="store_true",
-        default=False,
-        help="Read data from directories",
-    )
-    parser.add_argument(
-        "--val_audio_dir",
-        type=str,
-        required=False,
-        default=None,
-        help="Path to the directory containing the audio files.",
-    )
-    parser.add_argument(
-        "--val_txt_dir",
-        type=str,
-        required=False,
-        default=None,
-        help="Path to the directory containing the transcripts of the audio files. "
-        "It can be the same as the audio directory.",
-    )
-    parser.add_argument(
-        "--dali_processes_per_cpu",
-        type=float,
-        default=1.0,
-        help="Number of DALI processes per CPU thread. This automatically adjusts for "
-        "multi-GPU training. The default of 1 is optimal for an 8xA100 (80 GB) server. "
-        "If you are running two different trains on the same machine, with the GPUs "
-        "partitioned between them, setting this to 0.5 may speed up DALI",
+        "--loader_workers_per_gpu",
+        type=int,
+        help="Number of torch dataloading workers per GPU",
     )
     parser.add_argument(
         "--profiler",
@@ -112,6 +97,11 @@ def add_shared_args(parser: ArgumentParser) -> None:
         action="store_true",
         default=False,
         help="Export timestamps per word to .ctm file and calculate emission latencies",
+    )
+    parser.add_argument(
+        "--calculate_per",
+        action="store_true",
+        help="Calculate the Punctuation Error Rate (PER) during evaluation",
     )
     parser.add_argument(
         "--latency_head_offset",
@@ -131,32 +121,29 @@ def add_shared_args(parser: ArgumentParser) -> None:
         default=False,
         help="Allow loading a checkpoint from an incomplete state dict",
     )
+    parser.add_argument(
+        "--transducer_backend",
+        type=str,
+        default="auto",
+        choices=["auto", "cuda", "tilelang", "triton"],
+        help="Backend for RNN-T Transducer Loss (default: %(default)s). "
+        "In `auto` mode, uses tilelang if the GPU and container support it, "
+        "otherwise falls back to triton.",
+    )
+    parser.add_argument(
+        "--joint_lattice_cap",
+        default=2**17,
+        type=int,
+        help="Cap on the lattice cells in one joint+loss split; tune this to balance "
+        "the VRAM usage / throughput in the joint and loss. "
+        "See docs/src/training/batch_size_hyperparameters.md",
+    )
     add_state_reset_args(parser)
     add_mel_feat_norm_args(parser)
-    add_basic_hugging_face_args(parser)
-    add_wer_analysis_args(parser)
     add_per_args(parser)
     add_decoder_args(parser)
     add_eos_shared_args(parser)
     add_prefix_args(parser)
-
-
-@beartype
-def add_wer_analysis_args(parser: ArgumentParser) -> None:
-    wer_args = parser.add_argument_group("WER analysis")
-    wer_args.add_argument(
-        "--breakdown_wer",
-        action="store_true",
-        help="""Print an analysis of how much casing and punctuation affect WER.
-        Most useful when the reference text contains casing and punctuation""",
-    )
-    default_punctuation = ",.?!;:-"
-    wer_args.add_argument(
-        "--breakdown_chars",
-        type=str,
-        default=default_punctuation,
-        help=f"Which characters to analyze. Default is '{default_punctuation}'",
-    )
 
 
 @beartype
@@ -205,48 +192,64 @@ def add_state_reset_args(parser: ArgumentParser) -> None:
 @beartype
 def add_prefix_args(parser: ArgumentParser) -> None:
     prefix_args = parser.add_argument_group("Prefix Configuration")
+
     prefix_args.add_argument(
-        "--prefix",
+        "--pnc_prefix",
         type=str,
         choices=["pnc", "nopnc"],
         default=None,
-        help="Prefix for inference/decoding. Choices: 'pnc' (<pnc>), 'nopnc' (<nopnc>). "
-        "If not specified, no prefix is used.",
+        help="Prefix for inference/decoding, including train-time validations."
+        "Choices: 'pnc' (<pnc>), 'nopnc' (<nopnc>). "
+        "If not specified, no case/punctuation prefix is used.",
+    )
+
+    prefix_args.add_argument(
+        "--val_lang_prefix",
+        type=str,
+        default=None,
+        help="Language prefix to be used during inference/decoding. "
+        "If not specified, no language prefix is used.",
     )
 
 
 @beartype
-def check_shared_args(args: Namespace) -> None:
+def check_transducer_args(args: Namespace) -> None:
+    if args.transducer_backend == "auto":
+        args.transducer_backend = "tilelang" if tilelang_supported() else "triton"
+
+    if args.transducer_backend == "tilelang":
+        assert tilelang_supported(), (
+            "--transducer_backend tilelang needs a CUDA GPU of compute capability "
+            ">= 8.0 (Ampere and newer) for cp.async, and torch >= "
+            f"{MIN_TORCH_FOR_TILELANG} for the device properties the autotuner "
+            f"filters configs on; this container ships torch "
+            f"{torch.__version__}. Use --transducer_backend triton."
+        )
+
+    if args.transducer_backend in ("triton", "tilelang"):
+        with open(args.model_config, "r") as f:
+            user_tokens, _ = get_all_user_tokens(yaml.safe_load(f))
+        assert "star" not in user_tokens, (
+            f"--transducer_backend {args.transducer_backend} does not implement the "
+            f"star penalty, but {args.model_config} declares a star user token. "
+            "Use --transducer_backend cuda."
+        )
+
+    # getattr: only the train parser has the delay-penalty args
+    if (
+        getattr(args, "dp_mu", 0.0) != 0.0
+        or getattr(args, "dp_clamp", None) is not None
+    ):
+        assert args.transducer_backend in ("triton", "tilelang"), (
+            "--dp_mu / --dp_clamp are only implemented by the triton and tilelang "
+            f"transducer backends, got {args.transducer_backend!r}"
+        )
+
+
+@beartype
+def check_shared_args(args: Namespace, *, check_transducer: bool = True) -> None:
     if args.fuzzy_topk_logits and args.decoder == "greedy":
         raise ValueError("--fuzzy_topk_logits is not supported with greedy decoding")
-    if args.val_from_dir:
-        assert validation_directories_provided(
-            audio_dir=args.val_audio_dir, txt_dir=args.val_txt_dir
-        ), (
-            f"Argument {args.val_from_dir=} is set, {args.val_audio_dir=} "
-            f"and {args.val_txt_dir=} must be provided"
-        )
-        check_directories_are_valid(
-            args.val_audio_dir, args.val_txt_dir, args.dataset_dir
-        )
-        print_once(
-            f"Running validation from directories {args.val_audio_dir=} "
-            f"and {args.val_txt_dir=}. The {args.val_manifests=} argument will be ignored."
-        )
-
-    if args.read_from_tar or args.use_hugging_face:
-        assert (
-            args.n_utterances_only is None
-        ), "n_utterances_only is not supported when reading from tar files or hugging face"
-    else:
-        assert (
-            args.val_manifests is not None
-        ), f"Must provide {args.val_manifests=} if not reading from tar files"
-        "or not reading audio and transcripts from directories"
-
-    if args.calculate_emission_latency:
-        val_multiple = len(args.val_manifests) > 1
-        check_latency_args(args, val_multiple)
 
     if args.eos_is_terminal:
         assert args.eos_decoding == "predict", (
@@ -269,78 +272,7 @@ def check_shared_args(args: Namespace) -> None:
             args.keywords_path is not None
         ), "Must provide --keywords_path when --boost_keywords is set"
 
+    if check_transducer:
+        check_transducer_args(args)
+
     check_mel_feat_norm_args(args)
-
-
-@beartype
-def validation_directories_provided(
-    audio_dir: Optional[str], txt_dir: Optional[str]
-) -> bool:
-    return audio_dir is not None and txt_dir is not None
-
-
-@beartype
-def check_directories_are_valid(audio_dir: str, txt_dir: str, dataset_dir) -> None:
-    """
-    Check that the provided directories exist, and contain the same file names.
-
-    Parameters
-    ----------
-    audio_dir
-        directory containing audio files
-    txt_dir
-        directory containing text files
-    dataset_dir
-        directory containing audio_dir and txt_dir
-
-    Returns
-    -------
-    None
-
-    Raises
-    ------
-    ValueError:
-        If either of the directories do not exist, or if they do not contain the same
-        file names
-    """
-    data_path = Path(dataset_dir)
-    audio_abs_path = data_path.joinpath(audio_dir)
-    txt_abs_path = data_path.joinpath(txt_dir)
-
-    # check directories exist
-    if not audio_abs_path.is_dir():
-        raise ValueError(f"{audio_dir=} is not a directory")
-    if not txt_abs_path.is_dir():
-        raise ValueError(f"{txt_dir=} is not a directory")
-
-    # check directories contain the same file names
-    audio_files = set(
-        f.stem
-        for f in audio_abs_path.glob("**/*")
-        if f.is_file() and f.suffix in [".wav", ".flac"]
-    )
-    txt_files = set(
-        f.stem
-        for f in txt_abs_path.glob("**/*")
-        if f.is_file() and f.suffix in [".txt"]
-    )
-    if audio_files != txt_files:
-        raise ValueError(
-            f"Audio and txt directories do not contain the same files. "
-            f"Provided directories are: {audio_dir=}, txt files: {txt_dir=}"
-        )
-
-
-@beartype
-def check_latency_args(args: Namespace, val_multiple: bool = False):
-    """
-    Validates arguments for emission latency.
-    """
-    assert (
-        not args.use_hugging_face
-    ), "Emission latency and Hugging Face datasets are incompatible"
-
-    if val_multiple:
-        assert (
-            not args.read_from_tar
-        ), "TAR files are not supported with the val_multiple script."

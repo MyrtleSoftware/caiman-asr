@@ -10,7 +10,7 @@ if not torch.cuda.is_available():
 
 from rnnt_ext.custom_lstm.lstm import CustomLSTM
 
-scaler = torch.cuda.amp.GradScaler()
+scaler = torch.amp.GradScaler("cuda")
 
 cross = torch.nn.CrossEntropyLoss()
 

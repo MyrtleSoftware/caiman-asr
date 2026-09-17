@@ -12,7 +12,7 @@ from beartype import beartype
 from beartype.typing import Optional, Tuple
 
 from caiman_asr_train.args.decoder import add_ngram_args
-from caiman_asr_train.export.config_schema import RNNTInferenceConfigSchema
+from caiman_asr_train.core.export_schema import RNNTInferenceConfigSchema
 from caiman_asr_train.export.model_schema import check_model_schema, return_schemas
 from caiman_asr_train.lm.kenlm_ngram import find_ngram_path
 from caiman_asr_train.rnnt import config
@@ -48,12 +48,12 @@ def parse_arguments() -> Namespace:
 
 def load_checkpoint(fpath):
     """Load training checkpoint."""
-    return torch.load(fpath, map_location="cpu")
+    return torch.load(fpath, map_location="cpu", weights_only=False)
 
 
 def load_stats_from_disk(fpath_means, fpath_vars):
-    return torch.load(fpath_means, map_location="cpu"), torch.load(
-        fpath_vars, map_location="cpu"
+    return torch.load(fpath_means, map_location="cpu", weights_only=False), torch.load(
+        fpath_vars, map_location="cpu", weights_only=False
     )
 
 
@@ -91,8 +91,12 @@ def read_sentencepiece_model(fname):
 
 def read_ngram_lm(
     args: Namespace, cfg: dict
-) -> Tuple[Optional[bytes], Optional[float]]:
-    """Read the binary n-gram file as bytes if n-gram is not skipped."""
+) -> Tuple[Optional[torch.Tensor], Optional[float]]:
+    """Read the binary n-gram file as a uint8 tensor if n-gram is not skipped.
+
+    Stored as a tensor (not bytes) so it can be mmap-loaded -- see
+    `caiman_asr_train.core.load_hw.Ngram`.
+    """
     if not args.skip_ngram:
         ngram_cfg = cfg["ngram"]
         ngram_path = args.override_ngram_path or find_ngram_file(
@@ -105,7 +109,8 @@ def read_ngram_lm(
             "file from an ARPA file."
         )
         with open(ngram_path, "rb") as f:
-            return (f.read(), ngram_cfg["scale_factor"])
+            binary = torch.frombuffer(bytearray(f.read()), dtype=torch.uint8)
+        return (binary, ngram_cfg["scale_factor"])
     return (None, None)
 
 
@@ -160,9 +165,12 @@ def create_hardware_ckpt(args) -> dict:
             "binary": ngram_lm,  # optional binary KenLM ngram
             "scale_factor": ngram_sf,
         },
-        "version": "1.16.0",  # add the semantic version number of the hardware checkpoint
+        "version": "1.17.0",  # add the semantic version number of the hardware checkpoint
         "rnnt_config": inference_config,  # copy in inference config
     }
+
+    if "raw_prefix_token_map" in traincp:
+        hardcp["raw_prefix_token_map"] = traincp["raw_prefix_token_map"]
 
     return hardcp
 
@@ -175,7 +183,11 @@ def save_hardware_ckpt(hardcp, output_ckpt):
 def main(args: Namespace) -> None:
     hardcp = create_hardware_ckpt(args)
     schemas = return_schemas()
-    check_model_schema(hardcp["state_dict"], schemas)
+    check_model_schema(
+        hardcp["state_dict"],
+        schemas,
+        hardcp["rnnt_config"]["rnnt"]["conditional_encoder"],
+    )
     save_hardware_ckpt(hardcp, args.output_ckpt)
 
 

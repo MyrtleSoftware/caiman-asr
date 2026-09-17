@@ -31,12 +31,19 @@ Cleaners can be selected by passing a comma-delimited list of cleaner names as t
 
 import re
 
+from beartype import beartype
+from beartype.typing import Optional
 from text_unidecode import unidecode
 
+from caiman_asr_train.data.text.allowed_charset import iso_unidecode
 from caiman_asr_train.data.text.ito.numbers import normalize_numbers
 
 # Regular expression matching whitespace:
 _whitespace_re = re.compile(r"\s+")
+
+# Regular expression for angle quotes/chevron:
+_angle_quotes_re = re.compile(r"[«»]")
+_strip_angle_quote_tokens_re = re.compile(r"«[^»]*»")
 
 # List of (regular expression, replacement) pairs for abbreviations:
 _abbreviations = [
@@ -82,6 +89,14 @@ def convert_to_ascii(text):
     return unidecode(text)
 
 
+def strip_tokens_in_angle_quotes(text):
+    return re.sub(_strip_angle_quote_tokens_re, " ", text)
+
+
+def strip_angle_quotes(text):
+    return re.sub(_angle_quotes_re, " ", text)
+
+
 def expand_punctuation(text, charset):
     """
     Expands pronounceable punctuation characters if they are not in the charset.
@@ -113,6 +128,8 @@ def expand_punctuation(text, charset):
 
 def english_cleaners(text, charset, table=None):
     """Pipeline for English text, including number and abbreviation expansion."""
+    text = strip_tokens_in_angle_quotes(text)
+    text = strip_angle_quotes(text)
     text = convert_to_ascii(text)
     text = lowercase(text)
     text = normalize_numbers(text, charset)
@@ -120,5 +137,19 @@ def english_cleaners(text, charset, table=None):
     if table is not None:
         text = text.translate(table)
     text = expand_punctuation(text, charset)
+    text = collapse_whitespace(text)
+    return text
+
+
+@beartype
+def other_cleaners(
+    text: str, charset: list[str], table: Optional[dict[int, int]] = None
+) -> str:
+    """Pipeline for text in languages other than English"""
+    text = strip_angle_quotes(text)
+    text = iso_unidecode(text, charset=charset)
+    text = lowercase(text)
+    if table is not None:
+        text = text.translate(table)
     text = collapse_whitespace(text)
     return text

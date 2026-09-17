@@ -7,6 +7,7 @@ from beartype import beartype
 from beartype.typing import Dict, List, Type
 from psutil import cpu_count
 
+from caiman_asr_train.core.batches import BatchFirst
 from caiman_asr_train.rnnt.decoder import RNNTDecoder
 from caiman_asr_train.rnnt.response import FrameResponses
 from caiman_asr_train.utils.math import ceil_div
@@ -22,7 +23,20 @@ def get_num_procs(args, world_size: int) -> int:
     if args.beam_decoder_procs_per_gpu < 1:
         # Clamp to 8 because empirical testing showed that
         # exceeding this did not improve performance.
-        max_cpu_per_gpu = min(max(1, cpu_count(logical=False) // world_size), 8)
+
+        cores = cpu_count(logical=False)
+
+        if cores is None:
+            raise ValueError("Unable to determine number of CPU cores")
+
+        max_cpu_per_gpu = min(max(1, cores // world_size), 8)
+
+        if args.val_batch_size is None:
+            raise ValueError(
+                "Unable to estimate decoder procs per GPU, please "
+                "specify --val_batch_size or directly set "
+                "--beam_decoder_procs_per_gpu"
+            )
 
         max_useful_procs = ceil_div(
             args.val_batch_size, by=args.beam_min_decode_batch_size_per_proc
@@ -60,6 +74,7 @@ class ParallelDecoder(RNNTDecoder):
             eos_strategy=kwargs["eos_strategy"],
             blank_idx=kwargs["blank_idx"],
             max_inputs_per_batch=kwargs["max_inputs_per_batch"],
+            prefix_token_ids=kwargs["prefix_token_ids"],
         )
 
         self.min_batch = min_batch
@@ -83,10 +98,8 @@ class ParallelDecoder(RNNTDecoder):
 
     @torch.no_grad()
     @beartype
-    def _inner_decode(
-        self, encs: torch.Tensor, enc_lens: torch.Tensor
-    ) -> List[Dict[int, FrameResponses]]:
-        B, _, _ = encs.shape
+    def _inner_decode(self, encs: BatchFirst) -> List[Dict[int, FrameResponses]]:
+        B, _, _ = encs.data.shape
 
         # Over-chunk as heterogeneous utterance lengths can
         # lead to uneven work distribution
@@ -96,13 +109,13 @@ class ParallelDecoder(RNNTDecoder):
         if utts_per_chunk < self.min_batch:
             num_chunks = max(1, B // self.min_batch)
 
-        ch_encs = torch.chunk(encs, num_chunks)
-        ch_lens = torch.chunk(enc_lens, num_chunks)
+        ch_encs = torch.chunk(encs.data, num_chunks)
+        ch_lens = torch.chunk(encs.lens, num_chunks)
 
         assert len(ch_encs) == len(ch_lens)
 
         for i, enc, enc_len in zip(count(), ch_encs, ch_lens):
-            self.todo.put((i, (enc, enc_len)))
+            self.todo.put((i, (BatchFirst(enc, enc_len),)))
 
         chunked_outs = dict(self.result.get() for _ in range(num_chunks))
 

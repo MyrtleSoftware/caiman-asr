@@ -2,7 +2,7 @@ import pytest
 import torch
 from apex.contrib.transducer import TransducerJoint
 
-from caiman_asr_train.rnnt.loss import get_packing_meta_data
+from caiman_asr_train.core.batches import BatchFirst, TimeFirst
 from caiman_asr_train.rnnt.model import RNNT
 
 
@@ -45,7 +45,7 @@ def test_joint_apex_equivalent(batch_size, time_dim, apex_joint):
     if not torch.cuda.is_available():
         pytest.skip("Cuda not available so can't run this test")
     f, f_lens, g, g_lens = f.cuda(), f_lens.cuda(), g.cuda(), g_lens.cuda()
-    h_broadcast = RNNT.torch_transducer_joint(f, g, f_lens, g_lens)
+    h_broadcast = RNNT.torch_transducer_joint(f, g)
     h_apex = apex_joint(f, g, f_lens, g_lens)
 
     assert h_broadcast.size() == h_apex.size()
@@ -118,7 +118,7 @@ def simulated_concatenation(
     txt_second_part,
     txt_lens_first_part,
     txt_lens_second_part,
-    model,
+    model: RNNT,
     n_classes,
     joint_n_hid,
     device,
@@ -132,13 +132,7 @@ def simulated_concatenation(
       to the second part using the saved state
     """
     # Setup
-    audio_seq_len = max(feat_lens)
     txt_seq_len = max(txt_lens)
-    meta_data = get_packing_meta_data(
-        feat_lens=feat_lens,
-        txt_lens=txt_lens,
-        enc_time_reduction=model.enc_stack_time_factor,
-    )
     if device == "cuda":
         model.cuda()
 
@@ -147,22 +141,30 @@ def simulated_concatenation(
     assert torch.equal(txt_lens, txt_lens_first_part + txt_lens_second_part)
 
     # Check that the model is deterministic
-    log_probs, log_prob_lens, _ = model(
-        feats, feat_lens, txt, txt_lens, batch_offset=meta_data["batch_offset"]
-    )
-    log_probs_duplicate, log_prob_lens_duplicate, _ = model(
-        feats, feat_lens, txt, txt_lens, batch_offset=meta_data["batch_offset"]
-    )
-    assert torch.equal(log_probs, log_probs_duplicate)
-    assert torch.equal(log_prob_lens, log_prob_lens_duplicate)
 
-    # Check that the hyperparameters are consistent
-    assert log_probs.shape == (
-        batch_size,
-        audio_seq_len // 2,
-        txt_seq_len + 1,
-        n_classes,
+    fwd_a = model(
+        feats=TimeFirst(feats, feat_lens),
+        tokens=BatchFirst(txt, txt_lens).T,
+        prefix=None,
+        enc_state=None,
+        pred_state=model.sos_for(batch_size),
     )
+
+    fwd_b = model(
+        feats=TimeFirst(feats, feat_lens),
+        tokens=BatchFirst(txt, txt_lens).T,
+        prefix=None,
+        enc_state=None,
+        pred_state=model.sos_for(batch_size),
+    )
+
+    assert torch.equal(fwd_a.packed_logits, fwd_b.packed_logits)
+
+    def calc(fs, tx):
+        return sum((t // 2) * (u + 1) for t, u in zip(fs, tx))
+
+    # Check that the hyperparameters are consistent, outputs are packed
+    assert fwd_a.packed_logits.shape == (calc(feat_lens, txt_lens), n_classes)
 
     # Check that there are the same number of utterances in the first part and
     # the second part
@@ -170,75 +172,49 @@ def simulated_concatenation(
     assert txt_lens_first_part.shape == txt_lens_second_part.shape == (batch_size,)
 
     # Apply model to the first part to get logprobs
-    log_probs_first_part, _, state = model(
-        feats_first_part,
-        feat_lens_first_part,
-        txt_first_part,
-        txt_lens_first_part,
-        batch_offset=meta_data["batch_offset"],
+    fwd1 = model(
+        feats=TimeFirst(feats_first_part, feat_lens_first_part),
+        tokens=BatchFirst(txt_first_part, txt_lens_first_part).T,
+        prefix=None,
+        enc_state=None,
+        pred_state=model.sos_for(batch_size),
     )
+
+    assert fwd1.state is not None
 
     # Apply model to the second part to get logprobs
     # Note that the state from the first part is passed in
-    log_probs_second_part, _, _ = model(
-        feats_second_part,
-        feat_lens_second_part,
-        txt_second_part,
-        txt_lens_second_part,
-        batch_offset=meta_data["batch_offset"],
-        enc_state=state.enc_state,
-        pred_net_state=state.pred_net_state,
+    fwd2 = model(
+        feats=TimeFirst(feats_second_part, feat_lens_second_part),
+        tokens=BatchFirst(txt_second_part, txt_lens_second_part).T,
+        prefix=None,
+        enc_state=fwd1.state.enc,
+        pred_state=fwd1.state.pred,
     )
 
     # Check the shape of the outputs
-    assert log_probs_first_part.shape == (
-        batch_size,
-        feats_first_part.shape[0] // 2,
-        txt_first_part.shape[1] + 1,
+    assert fwd1.packed_logits.shape == (
+        calc(feat_lens_first_part, txt_lens_first_part),
         n_classes,
     )
-    assert log_probs_second_part.shape == (
-        batch_size,
-        feats_second_part.shape[0] // 2,
-        txt_second_part.shape[1] + 1,
+    assert fwd2.packed_logits.shape == (
+        calc(feat_lens_second_part, txt_lens_second_part),
         n_classes,
     )
+
+    print(fwd1.packed_logits.shape, feat_lens_first_part, txt_lens_first_part)
+    print(fwd2.packed_logits.shape, feat_lens_second_part, txt_lens_second_part)
 
     # Need the intermediate activations (sometimes easier to debug than the logprobs)
 
-    # For the whole sequence
-    (f, _), (g, _), _ = model.enc_pred(
-        feats,
-        feat_lens,
-        txt,
-        txt_lens,
-    )
+    f = fwd_a.f.data
+    g = fwd_b.g.data
 
-    # For the first part
-    (
-        (f_first_part, x_lens_first_part),
-        (g_first_part, g_lens_first_part),
-        state1,
-    ) = model.enc_pred(
-        feats_first_part,
-        feat_lens_first_part,
-        txt_first_part,
-        txt_lens_first_part,
-    )
+    f_first_part, x_lens_first_part = fwd1.f.as_tuple()
+    g_first_part, g_lens_first_part = fwd1.g.as_tuple()
 
-    # For the second part
-    (
-        (f_second_part, x_lens_second_part),
-        (g_second_part, g_lens_second_part),
-        _,
-    ) = model.enc_pred(
-        feats_second_part,
-        feat_lens_second_part,
-        txt_second_part,
-        txt_lens_second_part,
-        enc_state=state1.enc_state,
-        pred_net_state=state1.pred_net_state,
-    )
+    f_second_part, x_lens_second_part = fwd2.f.as_tuple()
+    g_second_part, g_lens_second_part = fwd2.g.as_tuple()
 
     txt_seq_len_first_part = max(txt_lens_first_part)
     txt_seq_len_second_part = max(txt_lens_second_part)
@@ -277,38 +253,18 @@ def simulated_concatenation(
             g_second_part[i, 0:txt_len2, :],
             atol=1e-3,
         ), f"Precision error in element {i} of batch"
-        # Check that the first parts of the logprobs match
-        assert torch.allclose(
-            log_probs[i, 0:aud_len1, 0:txt_len1, :],
-            log_probs_first_part[i, 0:aud_len1, 0:txt_len1, :],
-            atol=1e-3,
-        ), f"Precision error in element {i} of batch"
-        # And that the second parts of the logprobs match
-        assert torch.allclose(
-            log_probs[
-                i,
-                aud_len1 : aud_len1 + aud_len2,
-                txt_len1 - 1 : txt_len1 + txt_len2 - 1,
-                :,
-            ],
-            log_probs_second_part[i, 0:aud_len2, 0:txt_len2, :],
-            atol=1e-3,
-        ), f"Precision error in element {i} of batch"
 
 
 @pytest.mark.parametrize("batch_size", [1, 2, 3])
 @pytest.mark.parametrize("audio_seq_len", [40, 76])
 @pytest.mark.parametrize("txt_seq_len", [10, 28])
-@pytest.mark.parametrize("use_legacy", [True, False])
 def test_no_padding(
     model_factory,
-    legacy_model_factory,
     input_dim_fixture,
     n_classes_fixture,
     batch_size,
     audio_seq_len,
     txt_seq_len,
-    use_legacy,
     joint_n_hid_fixture,
 ):
     """Set up inputs for the simulated concatenation test.
@@ -319,10 +275,12 @@ def test_no_padding(
     # Note that the txt_seq_len must be divisible by 2
     assert txt_seq_len % 2 == 0
 
-    device = "cpu" if use_legacy else "cuda"
+    device = "cuda"
     feats = torch.randn(audio_seq_len, batch_size, input_dim_fixture, device=device)
     # No padding:
-    feat_lens = torch.tensor([audio_seq_len] * batch_size, device=device)
+    feat_lens = torch.tensor(
+        [audio_seq_len] * batch_size, device=device, dtype=torch.int
+    )
     txt = torch.randint(
         0,
         n_classes_fixture - 1,
@@ -334,10 +292,12 @@ def test_no_padding(
     feats_first_half = feats[0 : audio_seq_len // 2, :, :]
     feats_second_half = feats[audio_seq_len // 2 :, :, :]
     feat_lens_first_half = torch.tensor(
-        [audio_seq_len // 2] * batch_size, device=device
+        [audio_seq_len // 2] * batch_size, device=device, dtype=torch.int
     )
     feat_lens_second_half = torch.tensor(
-        [audio_seq_len - audio_seq_len // 2] * batch_size, device=device
+        [audio_seq_len - audio_seq_len // 2] * batch_size,
+        device=device,
+        dtype=torch.int,
     )
     txt_first_half = txt[:, 0 : txt_seq_len // 2]
     txt_second_half = txt[:, txt_seq_len // 2 :]
@@ -347,10 +307,9 @@ def test_no_padding(
     txt_lens_second_half = torch.tensor(
         [txt_seq_len - txt_seq_len // 2] * batch_size, device=device, dtype=torch.int
     )
-    if use_legacy:
-        model = legacy_model_factory()
-    else:
-        model = model_factory()
+
+    model = model_factory()
+
     simulated_concatenation(
         batch_size,
         feats,
@@ -372,28 +331,26 @@ def test_no_padding(
     )
 
 
-@pytest.mark.parametrize("use_legacy", [True, False])
 def test_padding(
     model_factory,
-    legacy_model_factory,
     input_dim_fixture,
     n_classes_fixture,
-    use_legacy,
     joint_n_hid_fixture,
 ):
     """Set up inputs for the simulated concatenation test.
     Do the padding in the same way as during training."""
-    device = "cpu" if use_legacy else "cuda"
-    if use_legacy:
-        model = legacy_model_factory()
-    else:
-        model = model_factory()
+    device = "cuda"
+    model = model_factory()
     batch_size = 6
     # To make the precision tests work, it seems that all of feat_lens_first_part
     # must be divisible by 2, and the max of all_feat_lens must be divisible by 2.
     # Likely the reason is the StackTime---maybe an odd-length sequence gets cut off
-    feat_lens_first_part = torch.tensor([158, 314, 264, 358, 982, 322])
-    feat_lens_second_part = torch.tensor([265, 846, 338, 326, 952, 289])
+    feat_lens_first_part = torch.tensor(
+        [158, 314, 264, 358, 982, 322], device=device, dtype=torch.int
+    )
+    feat_lens_second_part = torch.tensor(
+        [264, 846, 338, 326, 952, 288], device=device, dtype=torch.int
+    )
 
     for x in feat_lens_first_part:
         assert x % 2 == 0
@@ -447,8 +404,12 @@ def test_padding(
         input_dim_fixture,
     )
 
-    txt_lens_first_part = torch.tensor([27, 17, 28, 18, 28, 47])
-    txt_lens_second_part = torch.tensor([91, 45, 23, 53, 61, 28])
+    txt_lens_first_part = torch.tensor(
+        [27, 17, 28, 18, 28, 47], device=device, dtype=torch.int
+    )
+    txt_lens_second_part = torch.tensor(
+        [91, 45, 23, 53, 61, 28], device=device, dtype=torch.int
+    )
 
     txt_list_first_part = generate_unpadded_text(
         txt_lens_first_part, n_classes_fixture, device
@@ -489,6 +450,8 @@ def test_padding(
     assert max_txt_len_second_part == 91
     assert padded_second_part_txt.shape == (batch_size, max_txt_len_second_part)
 
+    print(padded_all_txt.dtype)
+
     simulated_concatenation(
         batch_size,
         padded_all_feats,
@@ -527,7 +490,9 @@ def generate_padded_text(txt_lens, unpad_txt, device):
     """Given list of unpadded text, returns a padded tensor containing the whole batch"""
     max_txt_len = max(txt_lens).item()
     padded_txt_list = [
-        torch.cat((t, torch.zeros(max_txt_len - t.shape[0], device=device)))
+        torch.cat(
+            (t, torch.zeros(max_txt_len - t.shape[0], device=device, dtype=torch.int))
+        )
         for t in unpad_txt
     ]
     padded_txt = torch.stack(padded_txt_list, dim=0)

@@ -151,7 +151,7 @@ class TransducerLoss(torch.nn.Module):
 
 class TransducerLossFunc(torch.autograd.Function):
     @staticmethod
-    @torch.cuda.amp.custom_fwd
+    @torch.amp.custom_fwd(device_type="cuda")
     def forward(
         ctx,
         x,
@@ -226,7 +226,7 @@ class TransducerLossFunc(torch.autograd.Function):
         return loss
 
     @staticmethod
-    @torch.cuda.amp.custom_bwd
+    @torch.amp.custom_bwd(device_type="cuda")
     def backward(ctx, loss_grad):
         x, denom, alpha, beta, f_len, y_len, label, batch_offset = ctx.saved_tensors
 

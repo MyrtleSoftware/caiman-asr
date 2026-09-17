@@ -1,37 +1,40 @@
-#!/usr/bin/env python3
-# Use forced alignment to obtain timestamps from audio data
-# https://pytorch.org/audio/master/tutorials/ctc_forced_alignment_api_tutorial.html
-
-import argparse
+import logging
+import math
 import os
+import re
 import string
-import tarfile
-from argparse import Namespace
+from argparse import ArgumentParser, Namespace
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 import torch
 import torchaudio
-import torchaudio.functional as F
 from beartype import beartype
-from beartype.typing import Generator, List, Tuple, Union
+from beartype.typing import Dict, List, Optional, Tuple
+from lhotse import CutSet, SupervisionSegment
+from lhotse.cut import Cut
+from lhotse.supervision import AlignmentItem
+from torchaudio import functional as F
 from torchaudio.functional import TokenSpan
 from torchaudio.transforms import Resample
-from tqdm import tqdm
 
-from caiman_asr_train.data.text.normalizers import remove_user_symbols
-from caiman_asr_train.data.text.preprocess import norm_and_tokenize
-from caiman_asr_train.latency.ctm import get_abs_manifest_paths, get_abs_tar_paths
-from caiman_asr_train.setup.text_normalization import (
-    NormalizeConfig,
-    get_normalize_level,
+from caiman_asr_train.data.text.allowed_charset import (
+    get_allowed_charset,
+    iso_unidecode,
 )
+from caiman_asr_train.latency.ctm import get_abs_manifest_paths
 from caiman_asr_train.train_utils.distributed import print_once
-from caiman_asr_train.utils.fast_json import fast_read_json
+from caiman_asr_train.utils.iter import flat
+
+# disable nemo's internal logging (OneLogger and Telemetry) that
+# won't be suppressed any other way
+logging.disable(logging.CRITICAL)
+import nemo.collections.asr as nemo_asr  # noqa
 
 
 def parse_args() -> Namespace:
-    parser = argparse.ArgumentParser("Perform forced alignment and write CTM files.")
+    parser = ArgumentParser("Perform forced alignment and write CTM files.")
     parser.add_argument(
         "--dataset_dir", required=True, type=str, help="Root dir of dataset"
     )
@@ -45,23 +48,26 @@ def parse_args() -> Namespace:
         "Ignored if --read_from_tar=True",
     )
     parser.add_argument(
-        "--read_from_tar",
-        action="store_true",
-        default=False,
-        help="Read data from tar files instead of json manifest files",
-    )
-    parser.add_argument(
-        "--tar_files",
-        type=str,
-        required=False,
-        default=None,
-        nargs="+",
-        help="Paths of the dataset tar files." "Ignored if --read_from_tar=False.",
-    )
-    parser.add_argument(
         "--output_dir",
         type=str,
-        help="Optional directory to output .ctm files. Defaults to --dataset_dir.",
+        required=True,
+        help=(
+            "Optional directory to output .ctm files. "
+            "Use --overwrite to use existing directory",
+        ),
+    )
+    parser.add_argument(
+        "--lang_code",
+        type=str,
+        help="ISO lang code of the transcripts to be aligned",
+    )
+    parser.add_argument(
+        "--model_name", type=str, help="Nemo model to use for alignment"
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing output files",
     )
     parser.add_argument(
         "--cpu", action="store_true", default=False, help="Use CPU instead of GPU."
@@ -79,89 +85,85 @@ def parse_args() -> Namespace:
 
 @beartype
 @dataclass
-class AlignmentData:
-    waveform: torch.Tensor
-    transcript: List[str]
-    audio_filepath: str
+class AlignmentModel:
+    model: nemo_asr.models.ASRModel
+    blank_id: int
+    unk_id: int
+    stride: float
+    sample_rate: int
+    unsupported_punc: str
+    device: str
 
 
 @beartype
-def align(
-    emission: torch.Tensor, tokens: List[int], device: str
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Align model emissions and ground truth tokens."""
-    targets = torch.tensor([tokens], dtype=torch.int32, device=device)
-    alignments, scores = F.forced_align(emission, targets, blank=0)
+def _load_model(model_name: str, device: str) -> AlignmentModel:
+    try:
+        model = nemo_asr.models.ASRModel.from_pretrained(model_name)
+    except Exception as e:
+        raise ValueError(f"Cannot load model {model_name}: {e}")
 
-    # remove batch dimension
-    alignments, scores = (alignments[0], scores[0])
-    # convert back to probability
-    scores = scores.exp()
-    return alignments, scores
-
-
-@beartype
-def unflatten(token_list: List[TokenSpan], lengths: List[int]) -> List[List[TokenSpan]]:
-    """Obtain word level alignments."""
-    assert len(token_list) == sum(lengths)
-    i = 0
-    result = []
-
-    for length in lengths:
-        result.append(token_list[i : i + length])
-        i += length
-
-    return result
+    model.to(device).eval()
+    model.cur_decoder = "ctc"
+    blank_id = model.ctc_decoder.num_classes_with_blank - 1
+    unk_id = model.ctc_decoder.vocabulary.index("<unk>")
+    stride = model.cfg.encoder.subsampling_factor * model.cfg.preprocessor.window_stride
+    sample_rate = model.cfg.preprocessor.sample_rate
+    unsupported_punc = "".join(
+        [punc for punc in string.punctuation if punc not in model.tokenizer.vocab]
+    )
+    return AlignmentModel(
+        model=model,
+        blank_id=blank_id,
+        unk_id=unk_id,
+        stride=stride,
+        sample_rate=sample_rate,
+        unsupported_punc=unsupported_punc,
+        device=device,
+    )
 
 
 @beartype
-def _score(spans: List[TokenSpan]) -> float:
-    return sum(s.score * len(s) for s in spans) / sum(len(s) for s in spans)
+def _clean_unsupported_chars(
+    text: str, charset: List[str], unsupported_punc: str
+) -> str:
+    text = iso_unidecode(text, charset)
+    text = re.sub(rf"[{re.escape(unsupported_punc)}]", " ", text)
+    return text.strip()
 
 
 @beartype
-def write_ctm(
-    output_file: str,
-    filename: str,
-    spans: List[List[TokenSpan]],
-    ratio: float,
-    transcript: List[str],
-    sample_rate: int,
-) -> None:
-    """
-    Process forced alignment timestamps and write to ctm file.
+def _word_to_ids(
+    text: str, tokenizer, charset: List[str], unsupported_punc: str
+) -> List[Dict[str, str]]:
+    word_to_id_map = []
 
-    Arguments:
-        ratio: total_num_input_samples / total_num_model_output_samples
-    """
-    with open(output_file, "a") as f:
-        for i, span in enumerate(spans):
-            start = int(ratio * span[0].start) / sample_rate
-            end = int(ratio * span[-1].end) / sample_rate
-            duration = end - start
-            score = _score(span)
-            f.write(
-                f"{filename} 1 {start:.3f} {duration:.3f} {transcript[i]} {score:.2f}\n"
+    for word in text.split():
+        clean_word = _clean_unsupported_chars(word, charset, unsupported_punc)
+        if clean_word:
+            ids = tokenizer.text_to_ids(clean_word)
+
+            word_to_id_map.append(
+                {"original_word": word, "token_ids": ids, "num_tokens": len(ids)}
             )
 
+    return word_to_id_map
+
 
 @beartype
-def load_audio(
-    speech_file: Union[str, tarfile.ExFileObject, Path], bundle_sample_rate: int
-) -> torch.Tensor:
+def _load_audio(audio_file: str, model_sample_rate: int) -> torch.Tensor:
     """Loads an audio file into a waveform and resamples if necessary."""
-    waveform, sample_rate = torchaudio.load(speech_file)
+    waveform, sample_rate = torchaudio.load(audio_file)
 
     # Check if audio is stereo (2 channels)
     if waveform.shape[0] == 2:
         # Keep only the first channel (left channel)
         waveform = waveform[0].unsqueeze(0)
 
-    if sample_rate != bundle_sample_rate:
+    if sample_rate != model_sample_rate:
         print_once(
-            f"WARNING: Resampling audio from {sample_rate} to {bundle_sample_rate}"
+            f"WARNING: Resampling audio from {sample_rate} to {model_sample_rate}"
         )
-        resample = Resample(sample_rate, bundle_sample_rate)
+        resample = Resample(sample_rate, model_sample_rate)
         # bundle sample rate is 16k
         waveform = resample(waveform)
 
@@ -169,266 +171,224 @@ def load_audio(
 
 
 @beartype
-def process_tar_file(
-    tar_path: str, bundle_sample_rate: int, device: str
-) -> Generator[AlignmentData]:
-    """
-    Processes and prepares audio & transcript pairs from tar file for alignment processing.
+class ForcedAligner:
+    def __init__(
+        self,
+        lang_code: str,
+        segment_length: int,
+        device: str,
+        model_name: Optional[str] = None,
+    ):
+        self.lang_code = lang_code
 
-    Args:
-        tar_path (str): The path to the tar file containing audio and transcript files.
-        bundle_sample_rate (int): The sample rate expected by the model for audio
-            processing.
-        device (str): CUDA or CPU.
+        if model_name is None:
+            model_name = f"nvidia/stt_{lang_code}_fastconformer_hybrid_large_pc"
+        self.aligner = _load_model(model_name, device)
+        self.normalization_charset = get_allowed_charset([self.lang_code])
+        self.segment_length = segment_length * 60
 
-    Returns:
-        Generator[AlignmentData]: A generator of AlignmentData objects, containing
-        waveform tensor, transcript, and path to audio.
-    """
-    with tarfile.open(tar_path, "r") as tar:
-        members = tar.getmembers()
-        audio_files = [m for m in members if m.name.endswith((".flac", ".wav"))]
+    def align(
+        self, audio_path: str, transcript: str
+    ) -> Tuple[torch.Tensor, torch.Tensor, List[Dict[str, str]]]:
+        """Align audios with their ground truth transcripts"""
 
-        for audio_member in audio_files:
-            # Extract the corresponding transcript file
-            transcript_member_name = audio_member.name.rsplit(".", 1)[0] + ".txt"
-            transcript_member = tar.getmember(transcript_member_name)
+        aligned_tokens = torch.Tensor([])
+        alignment_scores = torch.Tensor([])
+        with torch.no_grad():
+            audio_wav = _load_audio(audio_path, self.aligner.sample_rate)
+            segment_length = self.segment_length * self.aligner.sample_rate
+            num_samples = audio_wav.shape[1]
+            outputs = []
+            start = 0
 
-            with tar.extractfile(audio_member) as speech_file, tar.extractfile(
-                transcript_member
-            ) as transcript_file:
-                transcript = transcript_file.read().decode().strip().split()
-                waveform = load_audio(speech_file, bundle_sample_rate).to(device)
-                yield AlignmentData(waveform, transcript, audio_member.name)
+            while start < num_samples:
+                end = min(start + segment_length, num_samples)
+                # Pass each waveform segment to model
+                segment = audio_wav[:, start:end]
+                hypotheses = self.aligner.model.transcribe(
+                    segment.squeeze(0),
+                    return_hypotheses=True,
+                    verbose=False,
+                )
+                _log_probs = (
+                    hypotheses[0].y_sequence.unsqueeze(0).to(self.aligner.device)
+                )
+                outputs.append(_log_probs)
+                start = end
+
+            # Concatenate model outputs for each segment
+            log_probs = torch.cat(outputs, dim=1)
+
+            word_to_ids_map = _word_to_ids(
+                transcript,
+                self.aligner.model.tokenizer,
+                self.normalization_charset,
+                self.aligner.unsupported_punc,
+            )
+            target_ids = flat(word_map["token_ids"] for word_map in word_to_ids_map)
+            target_ids_tensor = torch.tensor([target_ids]).to(self.aligner.device)
+            try:
+                aligned_tokens, alignment_scores = F.forced_align(
+                    log_probs,
+                    target_ids_tensor,
+                    blank=self.aligner.blank_id,
+                )
+            except Exception as e:
+                print(f"WARNING: Alignment failed for Transcript={transcript}: {e}")
+
+            return aligned_tokens, alignment_scores, word_to_ids_map
+
+    def process_alignment(
+        self,
+        aligned_tokens: torch.Tensor,
+        alignment_scores: torch.Tensor,
+        word_to_ids_map: List[Dict[str, str]],
+    ) -> List[AlignmentItem]:
+        token_spans = F.merge_tokens(aligned_tokens[0], alignment_scores[0])
+        token_spans = list(
+            filter(
+                lambda token_span: token_span.token != self.aligner.blank_id,
+                token_spans,
+            )
+        )
+
+        words = []
+        if token_spans:
+            offset = 0
+            stride = self.aligner.stride
+            for word_map in word_to_ids_map:
+                lens = word_map["num_tokens"]
+                if lens == 1 and word_map["token_ids"][0] == self.aligner.unk_id:
+                    continue
+
+                word_span = token_spans[offset : offset + lens]
+                start = round(word_span[0].start * stride, 3)
+                end = word_span[-1].end * stride
+                score = round(_score(word_span), 2)
+
+                words.append(
+                    AlignmentItem(
+                        symbol=word_map["original_word"],
+                        start=start,
+                        duration=round(end - start, 3),
+                        score=score,
+                    )
+                )
+                offset += lens
+
+        return words
 
 
 @beartype
-def count_files_in_tar(tar_path: str) -> int:
-    """
-    Counts the number of audio files in a tar file.
-
-    Args:
-    tar_path (str): The path to the tar file.
-
-    Returns:
-    int: The number of audio files in the tar file.
-    """
-    audio_extensions = {".flac", ".wav"}
-    audio_count = 0
-
-    with tarfile.open(tar_path, "r") as tar:
-        for member in tar.getmembers():
-            if any(member.name.endswith(ext) for ext in audio_extensions):
-                audio_count += 1
-
-    return audio_count
-
-
-@beartype
-def process_manifest_file(
-    manifest_path: str, data_dir: str, bundle_sample_rate: int, device: str
-) -> Generator[AlignmentData]:
-    """
-    Loads audio data from files given in manifest and prepares for alignment processing.
-
-    Args:
-        manifest_path (str): The path to the dataset manifest file.
-        data_dir (str): The directory where audio files referenced in the manifest are
-            stored.
-        bundle_sample_rate (int): The sample rate expected by the model.
-        device (str): CUDA or CPU.
-
-    Returns:
-        Generator[AlignmentData]: A generator of AlignmentData objects, containing
-        waveform tensor, transcript, and path to audio.
-    """
-    data = fast_read_json(manifest_path)
-
-    for sample in data:
-        transcript = sample["transcript"].split()  # Words
-        speech_file = sample["files"][0]["fname"]
-        speech_filepath = os.path.join(data_dir, speech_file)
-        waveform = load_audio(speech_filepath, bundle_sample_rate).to(device)
-        yield AlignmentData(waveform, transcript, speech_file)
-
-
-@beartype
-def count_files_in_manifest(manifest_path: str) -> int:
-    """
-    Counts the number of files listed in a manifest file.
-
-    Args:
-    manifest_path (str): The path to the manifest file.
-
-    Returns:
-    int: The number of files listed in the manifest.
-    """
-
-    return len(fast_read_json(manifest_path))
-
-
-@beartype
-def get_output_filepath(data_filepath: str, output_dir: str) -> str:
-    """Creates output CTM filename based on the data file's base name.
+def get_output_filepath(
+    data_filepath: str, output_dir: str, overwrite: bool = False
+) -> str:
+    """Creates output filename based on the data file's base name.
 
     Ensures file doesn't already exist in the output directory.
     """
-    # CTM filename shares same base name as manifest/tar file
-    base_name = Path(data_filepath).stem
-    output_file = os.path.join(output_dir, f"{base_name}.ctm")
+
+    base_name = Path(data_filepath).name
+    output_file = os.path.join(output_dir, base_name)
 
     # Check if the file already exists
-    if os.path.exists(output_file):
-        raise FileExistsError(f"The file {output_file} already exists.")
+    if os.path.exists(output_file) and not overwrite:
+        raise FileExistsError(
+            f"The file {output_file} already exists." "Use --overwrite to overwrite"
+        )
 
     return output_file
 
 
 @beartype
-def split_and_process_waveform(
-    waveform: torch.Tensor,
-    model: torchaudio.pipelines._wav2vec2.utils._Wav2Vec2Model,
-    segment_length: int,
-) -> torch.Tensor:
-    """
-    Splits the waveform into segments and processes each segment individually.
-
-    Args:
-    waveform (Tensor): The input waveform tensor.
-    model: The wav2vec model.
-    segment_length (int): Segment length in minutes.
-
-    Returns:
-    Concatenated tensor of model outputs.
-    """
-    segment_length *= 16000 * 60  # convert to num samples
-    num_samples = waveform.shape[1]
-    outputs = []
-    start = 0
-
-    with torch.inference_mode():
-        while start < num_samples:
-            end = min(start + segment_length, num_samples)
-            # Pass each waveform segment to model
-            segment = waveform[:, start:end]
-            emission, _ = model(segment)
-            outputs.append(emission)
-            start = end
-    # Concatenate model outputs for each segment
-
-    return torch.cat(outputs, dim=1)
+def _contains_digits(text: str) -> bool:
+    if re.findall(r"[0-9]", text):
+        return True
+    return False
 
 
 @beartype
-def normalise(
-    transcript: List[str],
-    normalize_config: NormalizeConfig,
-    charset: List[str],
+def _align(
+    audio_path: str, transcript: str, forced_aligner: ForcedAligner
+) -> List[AlignmentItem]:
+    # Don't generate alignments if transcripts contain digits
+    if _contains_digits(transcript) or len(transcript.split()) < 3:
+        return []
+
+    alignments, alignment_scores, word_to_ids_map = forced_aligner.align(
+        audio_path, transcript
+    )
+
+    if alignments.nelement() == 0:
+        return []
+
+    word_alignments = forced_aligner.process_alignment(
+        alignments, alignment_scores, word_to_ids_map
+    )
+
+    return word_alignments
+
+
+@beartype
+def _process_supervision(
+    sup: SupervisionSegment, audio_path: str, forced_aligner: ForcedAligner
+) -> SupervisionSegment:
+    sup = sup.with_alignment(
+        kind="word",
+        alignment=_align(
+            audio_path=audio_path, transcript=sup.text, forced_aligner=forced_aligner
+        ),
+    )
+    return sup
+
+
+@beartype
+def _process_cut(cut: Cut, forced_aligner: ForcedAligner, data_dir: str) -> Cut:
+    audio_path = f"{data_dir}/{cut.recording.sources[0].source}"
+    cut = cut.map_supervisions(
+        partial(
+            _process_supervision, audio_path=audio_path, forced_aligner=forced_aligner
+        )
+    )
+    return cut
+
+
+@beartype
+def _score(spans: List[TokenSpan]) -> float:
+    return math.exp(sum(s.score * len(s) for s in spans) / sum(len(s) for s in spans))
+
+
+@beartype
+def process_manifest_file(
+    manifest_path: str, output_file: str, data_dir: str, forced_aligner: ForcedAligner
 ):
     """
-    Normalizes and tokenizes the transcript.
-
-    Also removes user symbols from the transcript as the wav2vec2 model
-    will not be able to recognize them.
-
-    Parameters:
-    ----------
-    transcript: The list of words in the transcript.
-    normalize_config: The normalization configuration.
-    charset: The list of allowed characters.
-
-
-    Returns:
-    List[str]: The normalized and tokenized transcript.
-    """
-
-    raw_transcript = " ".join(transcript)
-    raw_transcript = remove_user_symbols(raw_transcript, normalize_config.user_symbols)
-    raw_transcript = norm_and_tokenize(raw_transcript, normalize_config, None, charset)
-    raw_transcript = raw_transcript.split()
-
-    return raw_transcript
-
-
-@beartype
-def perform_forced_alignment(
-    data_generator: Generator[AlignmentData],
-    num_samples: int,
-    model: torchaudio.pipelines._wav2vec2.utils._Wav2Vec2Model,
-    tokenizer: dict,
-    output_file: str,
-    bundle_sample_rate: int,
-    device: str,
-    normalize_config: NormalizeConfig,
-    charset: List[str],
-    segment_length: int = 5,
-) -> None:
-    """
-    Performs forced alignment using a specified model, and writes CTM output.
+    Prepares manifests for alignment and saves the generated alignments to file
 
     Args:
-        data_generator (Generator[AlignmentData]): A generator containing waveforms,
-            transcripts, and audio filepaths.
-        num_samples (int): Number of samples in data_generator.
-        model (torchaudio.pipelines._wav2vec2.utils._Wav2Vec2Model): The model used for
-            obtaining emissions.
-        tokenizer (dict): A dictionary for tokenizing the transcript.
-        output_file (str): The filepath where the CTM output will be written.
-        bundle_sample_rate (int): The sample rate expected by the model.
-        device (str): CUDA or CPU.
-        normalize_config (NormalizeConfig): The normalization configuration.
-        charset (List[str]): The list of allowed characters.
-        segment_length (int): The length of audio segments in minutes.
+        manifest_path (str): The path to the dataset manifest file.
+        output_file (str): The path to the output manifest file with alignments
+        data_dir (str): The directory where audio files referenced in the manifest are
+            stored.
+        forced_aligner (ForcedAligner): The model to be used for forced alignment
     """
 
-    pbar = tqdm(total=num_samples)
-    # Iterate over utterances
-    for sample in data_generator:
-        # Obtain model emissions
-        emission = split_and_process_waveform(sample.waveform, model, segment_length)
+    print(f"Aligning manifest: {Path(manifest_path).name}")
 
-        normalized_transcript = normalise(sample.transcript, normalize_config, charset)
+    cutset = CutSet.from_jsonl(manifest_path)
 
-        tokenized_transcript = [
-            tokenizer[c] for word in normalized_transcript for c in word
-        ]
+    # NB: we deliberately do NOT resample the cutset here. `align()` loads the audio
+    # straight from disk via `_load_audio`, which resamples to the model's rate
+    # internally, so the alignment is unaffected by the cut's recording metadata.
+    # Resampling the cutset would rewrite the recording sample_rate/num_samples/
+    # duration (and add a Resample transform) in the emitted manifest, leaving the
+    # output differing from the input in more than just the added alignments.
 
-        try:
-            aligned_tokens, alignment_scores = align(
-                emission, tokenized_transcript, device=device
-            )
-        except Exception as err:
-            msg = [
-                "WARNING: align failed:",
-                f"\t{normalized_transcript=}",
-                f"\t{sample.transcript=}",
-                f"\t{err=}",
-            ]
-            print("\n".join(msg))
+    cutset = cutset.map(
+        partial(_process_cut, forced_aligner=forced_aligner, data_dir=data_dir)
+    )
 
-            continue
-
-        # remove repeated and blank tokens
-        token_spans = F.merge_tokens(aligned_tokens, alignment_scores)
-        word_spans = unflatten(
-            token_spans, [len(word) for word in normalized_transcript]
-        )
-
-        num_frames = emission.size(1)
-        ratio = sample.waveform.size(1) / num_frames
-
-        write_ctm(
-            output_file,
-            sample.audio_filepath,
-            word_spans,
-            ratio,
-            normalized_transcript,
-            sample_rate=bundle_sample_rate,
-        )
-        del emission, sample
-        torch.cuda.empty_cache()
-        pbar.update(1)
-    pbar.close()
+    CutSet(cutset).to_file(output_file)
 
 
 def main(args: Namespace):
@@ -436,75 +396,34 @@ def main(args: Namespace):
         device = "cpu"
     else:
         device = "cuda"
-    # Load Wave2Vec model
-    bundle = torchaudio.pipelines.MMS_FA
-    model = bundle.get_model(with_star=False).to(device)
-    tokenizer = bundle.get_dict(star=None)
 
-    data_dir = args.dataset_dir
-    # By default, export CTM files to dataset directory
+    if Path(args.output_dir).exists() and not args.overwrite:
+        raise FileExistsError(
+            f"Output directory {args.output_dir} already exists."
+            "Use --overwrite to overwrite existing files"
+        )
+    assert (
+        args.output_dir != args.dataset_dir
+    ), "Output directory cannot be the same as the dataset directory"
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
-    if args.output_dir:
-        os.makedirs(args.output_dir, exist_ok=True)
-        output_dir = args.output_dir
-    else:
-        output_dir = data_dir
-
-    normalize_config = NormalizeConfig(
-        normalize_level=get_normalize_level("lowercase"),
-        replacements=[],
-        remove_tags=True,
-        user_symbols=[],
-        user_symbols_dict={},
-        standardize_text=False,
-        preserve_case=False,
-        preserve_punctuation=False,
+    assert (args.lang_code is None) ^ (
+        args.model_name is None
+    ), "Only one of lang_code or model_name can be provided"
+    forced_aligner = ForcedAligner(
+        lang_code=args.lang_code,
+        segment_length=args.segment_len,
+        model_name=args.model_name,
+        device=device,
     )
 
-    allowed_chars = [" ", "'"] + list(string.ascii_lowercase)
+    manifests = get_abs_manifest_paths(args.dataset_dir, args.manifests)
 
-    if args.read_from_tar:
-        tar_paths = get_abs_tar_paths(data_dir, args.tar_files)
-
-        for tar_path in tar_paths:
-            output_file = get_output_filepath(tar_path, output_dir)
-            data_generator = process_tar_file(
-                tar_path, bundle.sample_rate, device=device
-            )
-            num_samples = count_files_in_tar(tar_path)
-            perform_forced_alignment(
-                data_generator,
-                num_samples,
-                model,
-                tokenizer,
-                output_file,
-                bundle.sample_rate,
-                device=device,
-                segment_length=args.segment_len,
-                charset=allowed_chars,
-                normalize_config=normalize_config,
-            )
-    else:
-        manifests = get_abs_manifest_paths(data_dir, args.manifests)
-
-        for manifest in manifests:
-            output_file = get_output_filepath(manifest, output_dir)
-            data_generator = process_manifest_file(
-                manifest, data_dir, bundle.sample_rate, device=device
-            )
-            num_samples = count_files_in_manifest(manifest)
-            perform_forced_alignment(
-                data_generator,
-                num_samples,
-                model,
-                tokenizer,
-                output_file,
-                bundle.sample_rate,
-                device=device,
-                segment_length=args.segment_len,
-                charset=allowed_chars,
-                normalize_config=normalize_config,
-            )
+    for manifest in manifests:
+        output_file = get_output_filepath(
+            manifest, args.output_dir, overwrite=args.overwrite
+        )
+        process_manifest_file(manifest, output_file, args.dataset_dir, forced_aligner)
 
 
 if __name__ == "__main__":

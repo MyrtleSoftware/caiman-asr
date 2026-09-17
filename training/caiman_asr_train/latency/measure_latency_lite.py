@@ -9,6 +9,7 @@ from beartype.typing import Dict, List
 @beartype
 def compute_latency_metrics(
     latencies: List[float],
+    fw_latency: List[float],
     sil_latency: List[float],
     eos_latency: List[float],
     frame_width: float,
@@ -23,6 +24,11 @@ def compute_latency_metrics(
 
     latency_metrics = {}
     latency_num = len(latencies)
+
+    if fw_latency:
+        latency_metrics["mean-FW-latency"] = mean(fw_latency)
+        latency_metrics["median-FW-latency"] = median(fw_latency)
+        latency_metrics["stdev-FW-latency"] = pstdev(fw_latency)
 
     if sil_latency:
         latency_metrics["mean-SIL-latency"] = mean(sil_latency)

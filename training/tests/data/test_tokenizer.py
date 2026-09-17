@@ -27,11 +27,13 @@ class testTokenizer(unittest.TestCase):
 
 
 def test_tokenizer_unk(tokenizer):
-    assert "" == tokenizer.sentpiece.decode(0)
+    # sentencepiece (>=0.2.2) decodes the unk id (0) as " ⁇ ", both as a scalar
+    # and inside a list. Older 0.2.1 inconsistently returned "" for the scalar
+    # form, which is why Tokenizer.detokenize special-cases inds == 0.
+    assert " ⁇ " == tokenizer.sentpiece.decode(0)
     assert "c" == tokenizer.sentpiece.decode(15)
     assert "a" == tokenizer.sentpiece.decode(5)
     assert "t" == tokenizer.sentpiece.decode(4)
-    # 0 detokenizes differently when part of a list
     assert " ⁇ cat" == tokenizer.sentpiece.decode([0, 15, 5, 4])
     assert " ⁇ " == tokenizer.sentpiece.decode([0])
 

@@ -1,108 +1,56 @@
 #!/usr/bin/env python3
 
-from argparse import Namespace
-
 import torch
-from beartype.typing import Optional, Tuple
+from beartype import beartype
+from beartype.typing import Optional
 
-from caiman_asr_train.rnnt.loss import (
-    IDENTITY_LOSS_MODIFIERS,
-    ApexTransducerLoss,
-    LossModifiers,
-    get_packing_meta_data,
-)
+from caiman_asr_train.core.batches import TimeFirst
+from caiman_asr_train.rnnt.joint_loss import JointLoss
+from caiman_asr_train.rnnt.loss import LossModifiers
 from caiman_asr_train.rnnt.model import RNNT
-from caiman_asr_train.rnnt.state import RNNTState
-from caiman_asr_train.train_utils.distributed import unwrap_ddp
-
-
-def model_loss_forward(
-    model: RNNT,
-    loss_fn: ApexTransducerLoss,
-    feats: torch.Tensor,
-    feat_lens: torch.Tensor,
-    txt: torch.Tensor,
-    txt_lens: torch.Tensor,
-    rnnt_state: Optional[RNNTState],
-    loss_mods: LossModifiers,
-) -> Tuple[torch.Tensor, Optional[RNNTState]]:
-    """
-    Run model and get loss
-    """
-    # calc parameters used for the APEX transducer loss and joint implementations
-    meta_data = get_packing_meta_data(
-        feat_lens=feat_lens,
-        txt_lens=txt_lens,
-        enc_time_reduction=unwrap_ddp(model).enc_stack_time_factor,
-    )
-    logits, logits_lens, new_rnnt_state = model(
-        feats,
-        feat_lens,
-        txt,
-        txt_lens,
-        batch_offset=meta_data["batch_offset"],
-        enc_state=rnnt_state.enc_state if rnnt_state else None,
-        pred_net_state=rnnt_state.pred_net_state if rnnt_state else None,
-    )
-
-    loss = loss_fn(
-        logits,
-        logits_lens,
-        txt,
-        txt_lens,
-        meta_data["batch_offset"],
-        meta_data["max_f_len"],
-        loss_mods=loss_mods,
-    )
-
-    del logits, logits_lens
-
-    return loss, new_rnnt_state
-
-
-def model_loss_forward_train(
-    model: RNNT,
-    loss_fn: ApexTransducerLoss,
-    args: Namespace,
-    feats: torch.Tensor,
-    feat_lens: torch.Tensor,
-    txt: torch.Tensor,
-    txt_lens: torch.Tensor,
-    rnnt_state: Optional[RNNTState],
-    loss_mods: LossModifiers,
-) -> Tuple[torch.Tensor, Optional[RNNTState]]:
-    """ """
-    loss, new_rnnt_state = model_loss_forward(
-        model=model,
-        loss_fn=loss_fn,
-        feats=feats,
-        feat_lens=feat_lens,
-        txt=txt,
-        txt_lens=txt_lens,
-        rnnt_state=rnnt_state,
-        loss_mods=loss_mods,
-    )
-    loss /= args.grad_accumulation_batches
-    return loss, new_rnnt_state
+from caiman_asr_train.train_utils.batch_splitting import get_bsplit
 
 
 @torch.no_grad()
-def model_loss_forward_val(
+@beartype
+def val_loss(
     model: RNNT,
-    loss_fn: ApexTransducerLoss,
-    feats: torch.Tensor,
-    feat_lens: torch.Tensor,
-    txt: torch.Tensor,
-    txt_lens: torch.Tensor,
-):
-    loss, _ = model_loss_forward(
-        model,
-        loss_fn,
-        feats,
-        feat_lens,
-        txt,
-        txt_lens,
-        rnnt_state=None,
-        loss_mods=IDENTITY_LOSS_MODIFIERS,
-    )
-    return loss
+    joint_loss: JointLoss,
+    feats: TimeFirst,
+    tokens: TimeFirst,
+    loss_mods: LossModifiers,
+    prefix: Optional[TimeFirst],
+    joint_lattice_cap: Optional[int] = None,
+) -> torch.Tensor:
+    """
+    Validation loss: the forward half of ``train_step``.
+    """
+    enc_prefix = prefix if model.config.prefix_token_map is not None else None
+
+    f, _ = model.encode(state=None, prefix=enc_prefix, feats=feats)
+    g, _ = model.predict(state=model.sos_for(feats), prefix=prefix, tokens=tokens)
+
+    f_b, g_b, t_b = f.T, g.T, tokens.T
+
+    if joint_lattice_cap is None:
+        return joint_loss(f_b, g_b, t_b, loss_mods)
+
+    cells = [fl * gl for fl, gl in zip(f_b.lens.tolist(), g_b.lens.tolist())]
+    bsplit = get_bsplit(cells, joint_lattice_cap)
+
+    if len(bsplit) == 1:
+        return joint_loss(f_b, g_b, t_b, loss_mods)
+
+    batch_size = len(cells)
+    total = torch.zeros((), dtype=torch.float32, device=f_b.data.device)
+
+    for lo, hi in bsplit:
+        part = joint_loss(
+            f_b.sub_batch(lo, hi),
+            g_b.sub_batch(lo, hi),
+            t_b.sub_batch(lo, hi),
+            loss_mods,
+        )
+        total += part.float() * ((hi - lo) / batch_size)
+
+    return total

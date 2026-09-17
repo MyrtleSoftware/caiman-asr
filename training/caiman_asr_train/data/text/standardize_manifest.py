@@ -2,141 +2,48 @@
 
 import argparse
 import multiprocessing as mp
-import sys
 from functools import partial
+from glob import glob
 from pathlib import Path
 
 import yaml
 from beartype import beartype
-from beartype.typing import Optional
+from beartype.typing import Generator, List, Optional
+from lhotse import CutSet, SupervisionSegment
 from tqdm import tqdm
 
 from caiman_asr_train.data.text.normalizers import standardize_text
-from caiman_asr_train.data.text.preprocess import (
+from caiman_asr_train.data.text.symbols_mask import (
     generate_symbols_mask,
     mask_user_symbols,
     unmask_user_symbols,
 )
-from caiman_asr_train.utils.fast_json import fast_read_json, fast_write_json
+from caiman_asr_train.data.utils import validate_args
+from caiman_asr_train.lhotse.warn import lhotse_warn
 from caiman_asr_train.utils.user_tokens_lite import get_all_user_tokens
 
-
-def process_entry(
-    entry: dict,
-    transcript_fields: list[str],
-    preserve_case: bool = False,
-    preserve_punctuation: bool = False,
-    expand_contractions: bool = True,
-    symbols_mask: Optional[dict[str, str]] = None,
-):
-    """Process a single manifest entry by standardizing its transcripts."""
-    for field in transcript_fields:
-        if field in entry:
-            transcript = mask_user_symbols(entry[field], symbols_mask)
-            transcript = standardize_text(
-                transcript,
-                preserve_case=preserve_case,
-                preserve_punctuation=preserve_punctuation,
-                expand_contractions=expand_contractions,
-            )
-            transcript = unmask_user_symbols(transcript, symbols_mask)
-            entry[f"{field}-standardized"] = transcript
-    return entry
+MIN_SEGS_PER_PROCESS = 50
 
 
-@beartype
-def standardize_manifest_transcripts(
-    manifest: list[dict],
-    transcript_fields: list[str],
-    num_workers: Optional[int] = None,
-    preserve_case: bool = False,
-    preserve_punctuation: bool = False,
-    expand_contractions: bool = True,
-    symbols_mask: Optional[dict[str, str]] = None,
-    min_entries_per_process: int = 50,
-) -> list[dict]:
-    """
-    Load a manifest, standardize specified transcript fields,
-    and add standardized transcripts as new fields.
-
-    Parameters
-    ----------
-    manifest
-        List of dictionaries, each representing a manifest entry.
-    transcript_fields
-        List of transcript field names to standardize
-    num_workers
-        Number of worker processes to use for parallel processing.
-        If None, uses CPU count.
-    preserve_case
-        Whether to preserve the original case of the text
-    preserve_punctuation
-        Whether to preserve the original punctuation of the text
-    symbols_mask
-        Dictionary mapping random strings to symbols that should be preserved
-    min_entries_per_process
-        Minimum number of entries per process to use multiprocessing
-
-    Returns
-    -------
-    list[dict]
-        The manifest with standardized transcripts added
-    """
-    if num_workers is None:
-        num_workers = mp.cpu_count()
-
-    entries_num = len(manifest)
-    print(f"Standardizing {entries_num} entries")
-
-    process_func = partial(
-        process_entry,
-        transcript_fields=transcript_fields,
-        preserve_case=preserve_case,
-        preserve_punctuation=preserve_punctuation,
-        expand_contractions=expand_contractions,
-        symbols_mask=symbols_mask,
-    )
-
-    # Skip multiprocessing for small datasets or single CPU
-    if min_entries_per_process * num_workers >= entries_num or num_workers < 2:
-        print("Using single-processing (dataset too small or only one CPU)")
-        results = []
-        for entry in tqdm(manifest, total=entries_num):
-            results.append(process_func(entry))
-    else:
-        print(f"Using {num_workers} processes")
-        with mp.Pool(processes=num_workers) as pool:
-            results = list(
-                tqdm(
-                    pool.imap(
-                        process_func,
-                        manifest,
-                        chunksize=max(10, entries_num // (num_workers * 10)),
-                    ),
-                    total=entries_num,
-                )
-            )
-
-    return results
-
-
-def main():
+def parse_args():
     parser = argparse.ArgumentParser(
-        description="Standardize transcripts in manifest files"
+        description="Standardize transcripts in lhotse shar manifest files"
     )
+
     parser.add_argument(
         "--manifests",
         type=str,
         nargs="+",
         required=True,
-        help="Absolute paths to manifest JSON files",
+        help="Paths to the lhotse Shar manifests",
     )
     parser.add_argument(
-        "--transcript-fields",
+        "--output-dirs",
         type=str,
         nargs="+",
-        default=["transcript"],
-        help="Names of transcript fields to standardize (default: ['transcript'])",
+        required=True,
+        help="Directory to save standardized manifests "
+        "(default: <manifest_parent_dir>/standardized)",
     )
     parser.add_argument(
         "--preserve-case",
@@ -149,31 +56,14 @@ def main():
         help="Preserve the original punctuation of the text",
     )
     parser.add_argument(
-        "--no-expand-contractions",
-        action="store_false",
-        default=True,
-        help="Do not expand contractions (e.g. 'don't' -> 'do not')",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=str,
-        default=None,
-        help="Directory to save standardized manifests "
-        "(default: same directory as each input)",
-    )
-    parser.add_argument(
-        "--output-filenames",
-        type=str,
-        nargs="+",
-        default=None,
-        help="Filenames to save standardized manifests "
-        "(default: same as input plus '_standardized'). "
-        "Must have same length as --manifests if provided.",
+        "--expand-contractions",
+        action="store_true",
+        help="Expand contractions (e.g. 'don't' -> 'do not')",
     )
     parser.add_argument(
         "--model-config",
         type=str,
-        default="/workspace/training/configs/testing-1023sp_run.yaml",
+        required=True,
         help="Path to model config file",
     )
     parser.add_argument(
@@ -187,92 +77,215 @@ def main():
         action="store_true",
         help="Overwrite existing output files",
     )
-
+    parser.add_argument(
+        "--transcript-fields",
+        type=str,
+        nargs="+",
+        help="Names of transcript fields to standardize (default: text)",
+    )
+    parser.add_argument(
+        "--lang_code",
+        type=str,
+        required=True,
+        help="ISO code of the language of the transcripts to be standardized",
+    )
     args = parser.parse_args()
 
-    manifest_paths = [Path(manifest) for manifest in args.manifests]
+    return args
 
-    missing_files = [path for path in manifest_paths if not path.exists()]
-    if missing_files:
-        print("The following manifest files do not exist:")
-        for path in missing_files:
-            print(f"  {path}")
-        sys.exit(1)
 
-    num_jsons = len(manifest_paths)
-    if args.output_filenames:
-        assert len(args.output_filenames) == num_jsons, (
-            f"Number of output filenames ({len(args.output_filenames)}) "
-            f"must match number of manifest files ({num_jsons})"
-        )
-
-    if args.output_dir:
-        output_dir = Path(args.output_dir)
-        output_dir.mkdir(exist_ok=True, parents=True)
-    else:
-        output_dir = None
-
-    output_paths = []
-    for i, manifest_path in enumerate(manifest_paths):
-        if output_dir is not None:
-            current_output_dir = output_dir
-        else:
-            current_output_dir = manifest_path.parent
-
-        if args.output_filenames:
-            output_path = current_output_dir / args.output_filenames[i]
-        else:
-            output_path = (
-                current_output_dir
-                / f"{manifest_path.stem}_standardized{manifest_path.suffix}"
-            )
-
-        output_paths.append(output_path)
-
-    if not args.overwrite:
-        existing_files = [path for path in output_paths if path.exists()]
-        if existing_files:
-            print("The following output files already exist:")
-            for path in existing_files:
-                print(f"  {path}")
-            print(
-                "Use --overwrite to overwrite, or specify different --output-filenames."
-            )
-            sys.exit(1)
-
-    with open(args.model_config, "r") as f:
+def get_user_symbols_mask(model_config: str) -> Optional[dict[str, str]]:
+    """
+    Generate mask for user symbols in model_config
+    """
+    with open(model_config, "r", encoding="utf-8") as f:
         model_config = yaml.safe_load(f)
 
     _, user_symbols = get_all_user_tokens(model_config)
     symbols_mask = generate_symbols_mask(user_symbols)
 
-    print(f"Processing {num_jsons} manifest file(s)")
+    return symbols_mask
 
-    for i, (manifest_path, output_path) in enumerate(zip(manifest_paths, output_paths)):
-        print(
-            (
-                f"\n--- Processing manifest {i+1}/{num_jsons}: "
-                f"{manifest_path.name} ---"
+
+@beartype
+class SharManifestIter:
+    """
+    Iterator for all cuts of a Lhotse Shar Manifest
+    """
+
+    def __init__(self, manifest: str):
+        self.manifest = sorted(glob(f"{manifest}/*.jsonl.gz"))
+
+    def __iter__(self) -> Generator[str]:
+        for cut_path in self.manifest:
+            yield cut_path
+
+    def __len__(self) -> int:
+        return len(self.manifest)
+
+
+@beartype
+class LhotseManifestStandardizer:
+    """
+    Standardizer for Lhotse Shar Manifests
+    """
+
+    def __init__(
+        self,
+        model_config: str,
+        num_workers: Optional[int] = None,
+        preserve_case: bool = False,
+        preserve_punctuation: bool = False,
+        expand_contractions: bool = False,
+        overwrite: bool = False,
+        standardized_suffix: str = "standardized",
+        lang_code: str = "en",
+    ):
+        self.preserve_case = preserve_case
+        self.preserve_punctuation = preserve_punctuation
+        self.expand_contractions = expand_contractions
+        self.standardized_suffix = standardized_suffix
+        self.overwrite = overwrite
+        self.lang_code = lang_code
+
+        self.symbols_mask = get_user_symbols_mask(model_config)
+
+        self.num_workers = num_workers
+        if self.num_workers is None:
+            self.num_workers = mp.cpu_count()
+        self.min_segs_per_process = MIN_SEGS_PER_PROCESS
+
+    def _process_text(self, transcript: str) -> str:
+        transcript = mask_user_symbols(transcript, self.symbols_mask)
+        transcript = standardize_text(
+            transcript,
+            preserve_case=self.preserve_case,
+            preserve_punctuation=self.preserve_punctuation,
+            expand_contractions=self.expand_contractions,
+            lang_code=self.lang_code,
+        )
+        transcript = unmask_user_symbols(transcript, self.symbols_mask)
+
+        return transcript
+
+    def process_supervision(
+        self, sup: SupervisionSegment, transcript_fields: Optional[List[str]] = None
+    ) -> SupervisionSegment:
+        """
+        Standardize each of the transcripts (either indicated by transcript_fields
+        or default "text") in each supervision segment and save them to a custom
+        {transcript_field}-standardized field. For example:
+
+        sup = SupervisionSegment(
+            id='sup-id', recording_id='rec-id', start=0, duration=30.0, channel=0,
+            text='Dr. Smith visited the cafe.',
+            language=None, speaker=None, gender=None, alignment=None)
+
+        will be standardized (with default options) as:
+
+        sup = SupervisionSegment(
+            id='sup-id', recording_id='rec-id', start=0, duration=30.0, channel=0,
+            text='Dr. Smith visited the cafe.',
+            custom={'transcript-standardized': 'doctor smith visited the cafe'}
+            language=None, speaker=None, gender=None, alignment=None)
+
+        """
+        if transcript_fields:
+            for transcript_field in transcript_fields:
+                if sup.has_custom(transcript_field):
+                    transcript = self._process_text(sup.custom[transcript_field])
+                    sup = sup.with_custom(
+                        f"{transcript_field}-{self.standardized_suffix}", transcript
+                    )
+                else:
+                    lhotse_warn(
+                        f"{transcript_field} not found in SupervisionSegment. Skipping."
+                    )
+        else:
+            transcript = self._process_text(sup.text)
+            sup = sup.with_custom(f"transcript-{self.standardized_suffix}", transcript)
+
+        return sup
+
+    def process_cutset(
+        self,
+        cutset_path: str,
+        output_dir: str,
+        transcript_fields: Optional[List[str]] = None,
+    ):
+        """
+        Standardize each supversion for each cutset and save to output directory
+        """
+        output_cutset_path = str(Path(output_dir) / Path(cutset_path).name)
+
+        cutset = CutSet.from_jsonl(cutset_path)
+        cutset = cutset.map_supervisions(
+            partial(self.process_supervision, transcript_fields=transcript_fields)
+        )
+        cutset.to_file(output_cutset_path)
+
+    def standardize(
+        self,
+        manifest: SharManifestIter,
+        output_dir: str,
+        transcript_fields: Optional[List[str]] = None,
+    ):
+        """
+        Standardize cutsets for a shar manifest in parallel
+        """
+
+        print(f"Using {self.num_workers} processes")
+        with mp.Pool(processes=self.num_workers) as pool, tqdm(
+            total=len(manifest)
+        ) as pbar:
+            for _ in pool.imap(
+                partial(
+                    self.process_cutset,
+                    output_dir=output_dir,
+                    transcript_field=transcript_fields,
+                ),
+                manifest,
+            ):
+                pbar.update()
+                pbar.refresh()
+
+
+@beartype
+def standardize_manifests(args: argparse.Namespace):
+    """
+    Standardize all input manifests
+    """
+
+    lhotse_standardizer = LhotseManifestStandardizer(
+        preserve_case=args.preserve_case,
+        preserve_punctuation=args.preserve_punctuation,
+        expand_contractions=args.expand_contractions,
+        overwrite=args.overwrite,
+        model_config=args.model_config,
+        num_workers=args.num_workers,
+        lang_code=args.lang_code,
+    )
+
+    for manifest, output_dir in zip(args.manifests, args.output_dirs):
+        if Path(output_dir).exists() and not args.overwrite:
+            raise FileExistsError(
+                f"Output_dir {output_dir} already exists. "
+                "Use --overwrite to overwrite the existing files."
             )
+
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        print(f"Processing: {manifest}")
+        lhotse_standardizer.standardize(
+            SharManifestIter(manifest), output_dir, args.transcript_fields
         )
 
-        manifest = fast_read_json(manifest_path)
 
-        standardized_manifest = standardize_manifest_transcripts(
-            manifest,
-            transcript_fields=args.transcript_fields,
-            num_workers=args.num_workers,
-            preserve_case=args.preserve_case,
-            preserve_punctuation=args.preserve_punctuation,
-            expand_contractions=args.no_expand_contractions,
-            symbols_mask=symbols_mask,
-        )
-
-        print(f"Saving standardized manifest to {output_path}")
-        fast_write_json(standardized_manifest, output_path)
-
-    print(f"\nCompleted processing all {num_jsons} manifest files!")
+@beartype
+def main(args: argparse.Namespace):
+    validate_args(args)
+    standardize_manifests(args)
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    main(args)

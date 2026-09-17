@@ -2,10 +2,13 @@
 
 : ${DATASET_NAME_LOWER_CASE:="librispeech"}
 : ${MAX_DURATION_SECS:=16.7}
+: ${MAX_TOKENS:=500}
 : ${SPM_SIZE:=8703}
 : ${CONFIG_NAME:=base-8703sp}
 : ${CONFIG_DIR:=configs}
 : ${WORDS:=words}
+: ${LANGS:="en"}
+: ${ON_MISSING:="raise_error"}
 
 SPM_NAME=$DATASET_NAME_LOWER_CASE$SPM_SIZE
 CONFIG=${CONFIG_DIR}/${CONFIG_NAME}.yaml
@@ -24,7 +27,11 @@ cat $CONFIG |
 	sed s/SENTENCEPIECE/$SPM_NAME/g |
 	sed s/STATS_SUBDIR/$STATS_SUBDIR/g |
 	sed s/MAX_DURATION/$MAX_DURATION_SECS/g |
+	sed s/MAX_TOKENS/$MAX_TOKENS/g |
 	sed s/WORDS/$WORDS/g |
+	sed s/LANGS/$LANGS/g |
+	sed "s|ON_MISSING|$ON_MISSING|" |
+	sed "s|\[TRANSCRIPTS\]||" |
 	sed s/NGRAM_SUBDIR/$SPM_NAME/g >$RUN_CONFIG
 
 echo "Setting env variables:"

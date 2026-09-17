@@ -1,227 +1,394 @@
 #!/usr/bin/env python3
 
 import pytest
+import yaml
+from beartype.typing import Dict, Optional
+from lhotse import CutSet, MonoCut, SupervisionSegment
 
-from caiman_asr_train.data.text.preprocess import generate_symbols_mask
 from caiman_asr_train.data.text.standardize_manifest import (
-    standardize_manifest_transcripts,
+    LhotseManifestStandardizer,
 )
 
 
 @pytest.fixture
-def mock_manifest():
-    """Create a mock manifest with various transcript fields."""
-    return [
-        {
-            "transcript": "Hello, this is a Test.",
-            "model_output": "Hello, this is a Test too!",
-            "special": "Another Test with <EOS> token.",
-        },
-        {
-            "transcript": "Dr. Smith visited the cafe.",
-            "model_output": "Professor Jones went to university.",
-            "special": "Mr. <EOS> Johnson works at <EOS> Company.",
-        },
-        {
-            "transcript": "ald. jones and ald Smith joined Lt. col Hanson.",
-            "special": "ald. jones and Ald Smith joined Lt. Col Hanson. <star> <EOS>",
-        },
-        {
-            "special": (
-                "hmmm? Capitalise the next word. ummm.. hi. <EOS> "
-                "And ummm what about this? Hmm. Yes that's, umm. <EOS> <star> "
-                "No. Um, um, well. <EOS>"
-            )
-        },
-        {"special": "MHMM <EOS> Hi. umm. I am a dr. Hmm. Ummm! <EOS> Mmmhmm <star>"},
-    ]
+def make_inputs(tmp_path, tmp_path_factory):
+    def _make_inputs(text: str, custom: Optional[Dict[str, str]] = None):
+        sup = SupervisionSegment(
+            id="sup1",
+            recording_id="rec1",
+            start=0.0,
+            duration=1.0,
+            text=text,
+        )
+        if custom:
+            for key in custom:
+                sup = sup.with_custom(key, custom[key])
+        cut = MonoCut(id="cut1", start=0, duration=1.0, channel=0, supervisions=[sup])
+
+        path = tmp_path / f"{cut.id}.jsonl"
+        CutSet.from_cuts([cut]).to_file(path)
+        output_dir = tmp_path_factory.mktemp("output")
+        out_path = output_dir / f"{cut.id}.jsonl"
+        return path, out_path
+
+    return _make_inputs
 
 
-def test_basic_standardization(mock_manifest):
-    """Test basic standardization with default settings."""
-    result = standardize_manifest_transcripts(
-        mock_manifest, transcript_fields=["transcript"], num_workers=1
-    )
+@pytest.fixture
+def model_config(tmp_path):
+    def _model_config(user_tokens: Dict[str, str] = {}):
+        config = {"user_tokens": user_tokens}
+        path = tmp_path / "test_model_config.yaml"
+        with open(path, "w") as tmp_f:
+            yaml.dump(config, tmp_f)
+        return str(path)
 
-    assert result[0]["transcript-standardized"] == "hello this is a test"
-    assert result[1]["transcript-standardized"] == "doctor smith visited the cafe"
-    assert (
-        result[2]["transcript-standardized"]
-        == "alderman jones and alderman smith joined lieutenant colonel hanson"
-    )
-    assert "transcript-standardized" not in result[3]
-
-
-def test_multiple_fields(mock_manifest):
-    """Test standardization of multiple transcript fields."""
-    result = standardize_manifest_transcripts(
-        mock_manifest, transcript_fields=["transcript", "model_output"], num_workers=1
-    )
-
-    assert result[0]["transcript-standardized"] == "hello this is a test"
-    assert result[0]["model_output-standardized"] == "hello this is a test too"
-    assert result[1]["transcript-standardized"] == "doctor smith visited the cafe"
-    assert (
-        result[1]["model_output-standardized"] == "professor jones went to university"
-    )
-    assert (
-        result[2]["transcript-standardized"]
-        == "alderman jones and alderman smith joined lieutenant colonel hanson"
-    )
-
-    assert "special-standardized" not in result[0]
-    assert "special-standardized" not in result[1]
-    assert "special-standardized" not in result[2]
-    assert "model_output-standardized" not in result[2]
-    assert "model_output-standardized" not in result[3]
+    return _model_config
 
 
 @pytest.mark.parametrize(
-    (
-        "preserve_case, preserve_punctuation, expected_transcript0, "
-        "expected_model_output0, expected_transcript1, expected_model_output1"
-    ),
+    "input_text, expected",
     [
+        ("Hello, this is a Test.", "hello this is a test"),
+        ("Dr. Smith visited the cafe.", "doctor smith visited the cafe"),
         (
-            True,
-            False,
-            "Hello this is a Test",
-            "Hello this is a Test too",
-            "Doctor Smith visited the cafe",
-            "Professor Jones went to university",
-        ),
-        (
-            False,
-            True,
-            "hello, this is a test.",
-            "hello, this is a test too!",
-            "doctor smith visited the cafe.",
-            "professor jones went to university.",
-        ),
-        (
-            True,
-            True,
-            "Hello, this is a Test.",
-            "Hello, this is a Test too!",
-            "Doctor Smith visited the cafe.",
-            "Professor Jones went to university.",
+            "ald. jones and ald Smith joined Lt. col Hanson.",
+            "alderman jones and alderman smith joined lieutenant colonel hanson",
         ),
     ],
 )
+def test_basic_standardization(input_text, expected, make_inputs, model_config):
+    path, out_path = make_inputs(input_text)
+
+    standardizer = LhotseManifestStandardizer(
+        model_config=model_config(),
+        num_workers=1,
+        lang_code="en",
+    )
+
+    standardizer.process_cutset(str(path), str(out_path.parent))
+
+    processed = CutSet.from_jsonl(str(out_path))
+    sup = next(iter(processed)).supervisions[0]
+    assert sup.custom["transcript-standardized"] == expected
+
+
+custom_transcripts = [
+    {
+        "transcript": "Hello, this is a Test.",
+        "model_output": "Hello, this is a Test too!",
+        "special": "Another Test with <EOS> token.",
+    },
+    {
+        "transcript": "Dr. Smith visited the cafe.",
+        "model_output": "Professor Jones went to university.",
+        "special": "Mr. <EOS> Johnson works at <EOS> Company.",
+    },
+    {
+        "transcript": "ald. jones and ald Smith joined Lt. col Hanson.",
+        "special": "ald. jones and Ald Smith joined Lt. Col Hanson. <star> <EOS>",
+    },
+]
+
+expected_outputs = [
+    {
+        "transcript-standardized": "hello this is a test",
+        "model_output-standardized": "hello this is a test too",
+    },
+    {
+        "transcript-standardized": "doctor smith visited the cafe",
+        "model_output-standardized": "professor jones went to university",
+    },
+    {
+        "transcript-standardized": "alderman jones and alderman smith "
+        "joined lieutenant colonel hanson"
+    },
+]
+
+
+test_inputs = zip(expected_outputs, custom_transcripts)
+
+
+@pytest.mark.parametrize("expected, custom", test_inputs)
+def test_multiple_fields(expected, custom, make_inputs, model_config):
+    """Test standardization of multiple transcript fields."""
+
+    path, out_path = make_inputs("Test", custom)
+
+    standardizer = LhotseManifestStandardizer(
+        model_config=model_config(),
+        num_workers=1,
+        lang_code="en",
+    )
+    transcript_fields = ["transcript", "model_output"]
+    standardizer.process_cutset(
+        str(path), str(out_path.parent), transcript_fields=transcript_fields
+    )
+
+    processed = CutSet.from_jsonl(str(out_path))
+    sup = next(iter(processed)).supervisions[0]
+
+    for transcript_field in transcript_fields:
+        standardized_field = f"{transcript_field}-standardized"
+        if standardized_field in expected:
+            assert sup.custom[standardized_field] == expected[standardized_field]
+
+    assert "special-standardized" not in sup.custom
+
+
+sentences = [
+    "Hello, this is a Test.",
+    "Hello, this is a Test too!",
+    "Dr. Smith visited the cafe.",
+    "Professor Jones went to university.",
+]
+
+options = [
+    (True, False),
+    (False, True),
+    (True, True),
+]
+
+
+@pytest.mark.parametrize("input_text", sentences)
+@pytest.mark.parametrize("preserve_case, preserve_punctuation", options)
 def test_preserve_options(
-    mock_manifest,
-    preserve_case,
-    preserve_punctuation,
-    expected_transcript0,
-    expected_model_output0,
-    expected_transcript1,
-    expected_model_output1,
+    input_text, preserve_case, preserve_punctuation, make_inputs, model_config
 ):
-    """Test case and punctuation preservation options."""
-    result = standardize_manifest_transcripts(
-        mock_manifest,
-        transcript_fields=["transcript", "model_output"],
+    def mock_standardize(text, preserve_case, preserve_punctuation):
+        t = text
+
+        # expansion
+        if "Dr." in t:
+            t = t.replace("Dr.", "Doctor")
+
+        # case handling
+        if not preserve_case:
+            t = t.lower()
+
+        # punctuation handling
+        if not preserve_punctuation:
+            t = "".join(c for c in t if c.isalnum() or c.isspace())
+
+        return t.strip()
+
+    path, out_path = make_inputs(input_text)
+
+    standardizer = LhotseManifestStandardizer(
+        model_config=model_config(),
         num_workers=1,
         preserve_case=preserve_case,
         preserve_punctuation=preserve_punctuation,
+        lang_code="en",
     )
 
-    assert result[0]["transcript-standardized"] == expected_transcript0
-    assert result[0]["model_output-standardized"] == expected_model_output0
-    assert result[1]["transcript-standardized"] == expected_transcript1
-    assert result[1]["model_output-standardized"] == expected_model_output1
+    standardizer.process_cutset(str(path), str(out_path.parent))
 
+    processed = CutSet.from_jsonl(str(out_path))
+    sup = next(iter(processed)).supervisions[0]
 
-def test_user_symbols_handling(mock_manifest):
-    """Test handling of user symbols with and without symbols_mask."""
-    # Without symbols_mask - <EOS> will be removed
-    result = standardize_manifest_transcripts(
-        mock_manifest, transcript_fields=["special"], num_workers=1
+    assert sup.custom["transcript-standardized"] == mock_standardize(
+        input_text, preserve_case, preserve_punctuation
     )
 
-    assert result[0]["special-standardized"] == "another test with token"
-    assert result[1]["special-standardized"] == "mister johnson works at company"
-    assert (
-        result[2]["special-standardized"]
-        == "alderman jones and alderman smith joined lieutenant colonel hanson"
-    )
-    assert result[3]["special-standardized"] == (
-        "capitalize the next word hi " "and what about this yes that is " "no well"
-    )
-    assert result[4]["special-standardized"] == "hi i am a doctor"
 
-    # With symbols_mask - <EOS> will be preserved
-    symbols_mask = generate_symbols_mask(["<EOS>"])
-    result = standardize_manifest_transcripts(
-        mock_manifest,
-        transcript_fields=["special"],
+@pytest.mark.parametrize(
+    "input_text, expected",
+    [
+        ("Another Test with <EOS> token.", "another test with token"),
+        (
+            "Mr. <EOS> Johnson works at <EOS> Company.",
+            "mister johnson works at company",
+        ),
+        (
+            "ald. jones and Ald Smith joined Lt. Col Hanson. <star> <EOS>",
+            "alderman jones and alderman smith joined lieutenant colonel hanson",
+        ),
+        (
+            (
+                "hmmm? Capitalise the next word. ummm.. hi. <EOS> "
+                "And ummm what about this? Hmm. Yes that's, umm. <EOS> <star> "
+                "No. Um, um, well. <EOS>"
+            ),
+            (
+                "capitalize the next word hi "
+                "and what about this yes that is "
+                "no well"
+            ),
+        ),
+        (
+            "MHMM <EOS> Hi. umm. I am a dr. Hmm. Ummm! <EOS> Mmmhmm <star>",
+            "hi i am a doctor",
+        ),
+    ],
+)
+def test_no_user_symbol(input_text, expected, make_inputs, model_config):
+    path, out_path = make_inputs(input_text)
+
+    standardizer = LhotseManifestStandardizer(
+        model_config=model_config(),
         num_workers=1,
-        symbols_mask=symbols_mask,
+        expand_contractions=True,
+        lang_code="en",
     )
 
-    assert result[0]["special-standardized"] == "another test with <EOS> token"
-    assert (
-        result[1]["special-standardized"]
-        == "mister <EOS> johnson works at <EOS> company"
-    )
-    assert (
-        result[2]["special-standardized"]
-        == "alderman jones and alderman smith joined lieutenant colonel hanson <EOS>"
-    )
-    assert result[3]["special-standardized"] == (
-        "capitalize the next word hi <EOS> "
-        "and what about this yes that is <EOS> "
-        "no well <EOS>"
-    )
-    assert result[4]["special-standardized"] == "<EOS> hi i am a doctor <EOS>"
+    standardizer.process_cutset(str(path), str(out_path.parent))
 
-    # + <star> token
-    symbols_mask = generate_symbols_mask(["<EOS>", "<star>"])
-    result = standardize_manifest_transcripts(
-        mock_manifest,
-        transcript_fields=["special"],
+    processed = CutSet.from_jsonl(str(out_path))
+    sup = next(iter(processed)).supervisions[0]
+
+    assert sup.custom["transcript-standardized"] == expected
+
+
+@pytest.mark.parametrize(
+    "input_text, expected",
+    [
+        ("Another Test with <EOS> token.", "another test with <EOS> token"),
+        (
+            "Mr. <EOS> Johnson works at <EOS> Company.",
+            "mister <EOS> johnson works at <EOS> company",
+        ),
+        (
+            "ald. jones and Ald Smith joined Lt. Col Hanson. <star> <EOS>",
+            "alderman jones and alderman smith joined lieutenant colonel hanson <EOS>",
+        ),
+        (
+            (
+                "hmmm? Capitalise the next word. ummm.. hi. <EOS> "
+                "And ummm what about this? Hmm. Yes that's, umm. <EOS> <star> "
+                "No. Um, um, well. <EOS>"
+            ),
+            (
+                "capitalize the next word hi <EOS> "
+                "and what about this yes that is <EOS> "
+                "no well <EOS>"
+            ),
+        ),
+        (
+            "MHMM <EOS> Hi. umm. I am a dr. Hmm. Ummm! <EOS> Mmmhmm <star>",
+            "<EOS> hi i am a doctor <EOS>",
+        ),
+    ],
+)
+def test_single_user_symbol(input_text, expected, make_inputs, model_config):
+    path, out_path = make_inputs(input_text)
+
+    standardizer = LhotseManifestStandardizer(
+        model_config=model_config({"eos": "<EOS>"}),
         num_workers=1,
-        symbols_mask=symbols_mask,
+        expand_contractions=True,
+        lang_code="en",
     )
 
-    assert result[0]["special-standardized"] == "another test with <EOS> token"
-    assert (
-        result[1]["special-standardized"]
-        == "mister <EOS> johnson works at <EOS> company"
-    )
-    assert (
-        result[2]["special-standardized"]
-        == "alderman jones and alderman smith joined lieutenant colonel hanson <star> <EOS>"
-    )
-    assert result[3]["special-standardized"] == (
-        "capitalize the next word hi <EOS> "
-        "and what about this yes that is <EOS> <star> "
-        "no well <EOS>"
-    )
-    assert result[4]["special-standardized"] == "<EOS> hi i am a doctor <EOS> <star>"
+    standardizer.process_cutset(str(path), str(out_path.parent))
 
-    # + preserve casing + punctuation
-    result = standardize_manifest_transcripts(
-        mock_manifest,
-        transcript_fields=["special"],
+    processed = CutSet.from_jsonl(str(out_path))
+    sup = next(iter(processed)).supervisions[0]
+
+    assert sup.custom["transcript-standardized"] == expected
+
+
+@pytest.mark.parametrize(
+    "input_text, expected",
+    [
+        ("Another Test with <EOS> token.", "another test with <EOS> token"),
+        (
+            "Mr. <EOS> Johnson works at <EOS> Company.",
+            "mister <EOS> johnson works at <EOS> company",
+        ),
+        (
+            ("ald. jones and Ald Smith" "joined Lt. Col Hanson. <star> <EOS>"),
+            (
+                "alderman jones and alderman smith"
+                "joined lieutenant colonel hanson <star> <EOS>"
+            ),
+        ),
+        (
+            (
+                "hmmm? Capitalise the next word. ummm.. hi. <EOS> "
+                "And ummm what about this? Hmm. Yes that's, umm. <EOS> <star> "
+                "No. Um, um, well. <EOS>"
+            ),
+            (
+                "capitalize the next word hi <EOS> "
+                "and what about this yes that is <EOS> <star> "
+                "no well <EOS>"
+            ),
+        ),
+        (
+            "MHMM <EOS> Hi. umm. I am a dr. Hmm. Ummm! <EOS> Mmmhmm <star>",
+            "<EOS> hi i am a doctor <EOS> <star>",
+        ),
+    ],
+)
+def test_multiple_user_symbols(input_text, expected, make_inputs, model_config):
+    path, out_path = make_inputs(input_text)
+
+    standardizer = LhotseManifestStandardizer(
+        model_config=model_config({"eos": "<EOS>", "star": "<star>"}),
+        num_workers=1,
+        expand_contractions=True,
+        lang_code="en",
+    )
+
+    standardizer.process_cutset(str(path), str(out_path.parent))
+
+    processed = CutSet.from_jsonl(str(out_path))
+    sup = next(iter(processed)).supervisions[0]
+
+    assert sup.custom["transcript-standardized"] == expected
+
+
+@pytest.mark.parametrize(
+    "input_text, expected",
+    [
+        ("Another Test with <EOS> token.", "Another Test with <EOS> token."),
+        (
+            "Mr. <EOS> Johnson works at <EOS> Company.",
+            "Mister <EOS> Johnson works at <EOS> Company.",
+        ),
+        (
+            ("ald. jones and Ald Smith" " joined Lt. Col Hanson. <star> <EOS>"),
+            (
+                "alderman jones and Alderman Smith"
+                " joined Lieutenant Colonel Hanson. <star> <EOS>"
+            ),
+        ),
+        (
+            (
+                "hmmm? Capitalise the next word. ummm.. hi. <EOS> "
+                "And ummm what about this? Hmm. Yes that's, umm. <EOS> <star> "
+                "No. Um, um, well. <EOS>"
+            ),
+            (
+                "Capitalize the next word. Hi. <EOS> "
+                "And what about this? Yes that is. <EOS> <star> "
+                "No. Well. <EOS>"
+            ),
+        ),
+        (
+            "MHMM <EOS> Hi. umm. I am a dr. Hmm. Ummm! <EOS> Mmmhmm <star>",
+            "<EOS> Hi. I am a doctor. <EOS> <star>",
+        ),
+    ],
+)
+def test_multiple_user_symbols_preserve_options(
+    input_text, expected, make_inputs, model_config
+):
+    path, out_path = make_inputs(input_text)
+
+    standardizer = LhotseManifestStandardizer(
+        model_config=model_config({"eos": "<EOS>", "star": "<star>"}),
         num_workers=1,
         preserve_case=True,
         preserve_punctuation=True,
-        symbols_mask=symbols_mask,
+        expand_contractions=True,
+        lang_code="en",
     )
 
-    assert result[0]["special-standardized"] == "Another Test with <EOS> token."
-    assert (
-        result[1]["special-standardized"]
-        == "Mister <EOS> Johnson works at <EOS> Company."
-    )
-    assert result[2]["special-standardized"] == (
-        "alderman jones and Alderman Smith joined "
-        "Lieutenant Colonel Hanson. <star> <EOS>"
-    )
-    assert result[3]["special-standardized"] == (
-        "Capitalize the next word. Hi. <EOS> "
-        "And what about this? Yes that is. <EOS> <star> "
-        "No. Well. <EOS>"
-    )
-    assert result[4]["special-standardized"] == "<EOS> Hi. I am a doctor. <EOS> <star>"
+    standardizer.process_cutset(str(path), str(out_path.parent))
+
+    processed = CutSet.from_jsonl(str(out_path))
+    sup = next(iter(processed)).supervisions[0]
+
+    assert sup.custom["transcript-standardized"] == expected

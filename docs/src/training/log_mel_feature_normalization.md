@@ -8,16 +8,13 @@ The script [`generate_mel_stats.py`](https://github.com/MyrtleSoftware/caiman-as
 and stores them in `/datasets/stats/<dataset_name+window_size>` as PyTorch tensors. For example usage see:
 
 - `scripts/make_json_artifacts.sh`
-- `scripts/preprocess_webdataset.sh`
 
 ## Training stability
 
 Empirically, it was found that normalizing the input activations with dataset global mean and variance makes the early stage of training unstable.
-As such, the default behaviour is to move between two modes of normalization on a schedule during training. This is handled by the `MelFeatNormalizer` class and explained in the docstring below:
+As such, the default behaviour is to move between two modes of normalization on a schedule during training.
 
-```
-{{#include ../../../training/caiman_asr_train/data/dali/mel_normalization.py:MelFeatNormalizer_in_mdbook}}
-```
+This is controlled by the arguments in `mel_feat_norm.py`.
 
 ## Validation
 

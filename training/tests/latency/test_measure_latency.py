@@ -10,4 +10,5 @@ def test_align_transcripts():
         None,
         head_offset=0.0,
         tail_offset=0.0,
+        lang_code="en",
     )

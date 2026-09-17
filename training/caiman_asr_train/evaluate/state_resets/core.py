@@ -387,7 +387,7 @@ def get_segmenting_info(
     to have the duration corresponding to the sr_segment_frames number, and
     this includes the audio features overlap by sr_overlap_frames. The padding
     is added so that when the audio features are split in n_segments segments
-    have the same dimension in order to make staking possible.
+    have the same dimension in order to make stacking possible.
 
     Parameters
     ----------

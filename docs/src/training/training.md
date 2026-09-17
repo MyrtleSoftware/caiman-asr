@@ -6,14 +6,14 @@
 
 This example demonstrates how to train a model on the LibriSpeech dataset using the `base` model configuration.
 This guide assumes that the user has followed the [installation guide](installation.md)
-and has prepared LibriSpeech according to the [data preparation guide](json_format.md#librispeech_json).
+and has prepared LibriSpeech according to the [data preparation guide](jsonl_format.md#librispeech_json).
 
 Selecting the batch size arguments is based on the machine specifications.
 More information on choosing them can be found [here](batch_size_hyperparameters.md).
 
 Recommendations for LibriSpeech training are:
 
-- a global batch size of 1024 for a 24GB GPU
+- a global batch duration of ~20k seconds for a 24GB GPU
 - use all `train-*` subsets and validate on `dev-clean`
 - 42000 steps is sufficient for 960hrs of train data
 - adjust number of GPUs using the `--num_gpus=<NUM_GPU>` argument
@@ -22,14 +22,13 @@ To launch training inside the container, using a single GPU, run the following c
 
 ```bash
 ./scripts/train.sh \
-  --data_dir=/datasets/LibriSpeech \
-  --train_manifests librispeech-train-clean-100-flac.json librispeech-train-clean-360-flac.json librispeech-train-other-500-flac.json \
-  --val_manifests librispeech-dev-clean-flac.json \
-  --model_config configs/base-8703sp_run.yaml \
+  --train_dataset_yaml ./configs/librispeech.yaml \
+  --val_manifests librispeech-dev-clean.cuts.jsonl.gz \
+  --val_dataset_dir /datasets/LibriSpeech \
+  --model_config ./configs/base-8703sp_run.yaml \
   --num_gpus 1 \
-  --global_batch_size 1024 \
-  --grad_accumulation_batches 16 \
-  --batch_split_factor 8 \
+  --batch_duration 1800 \
+  --grad_accumulation_batches 10 \
   --val_batch_size 1 \
   --training_steps 42000
 ```
@@ -42,11 +41,9 @@ and the config file is saved to `/results/[config file name]_[timestamp].yaml`.
 
 When training on your own data you will need to change the following args from their defaults to reflect your setup:
 
-- `--data_dir`
-- `--train_manifests`/`--train_tar_files`
-  - To specify multiple training manifests, use `--train_manifests` followed by space-delimited file names, like this: `--train_manifests first.json second.json third.json`.
-- `--val_manifests`/`--val_tar_files`/(`--val_audio_dir` + `--val_txt_dir`)
-- `--model_config=configs/base-8703sp_run.yaml` (or the `_run.yaml` config file created by your `scripts/preprocess_<your dataset>.sh` script)
+- `--train_dataset_yaml`
+- `--val_data_dir`
+- `--val_manifests`
 
 ```admonish
 The audio paths stored in manifests are **relative** with respect to `--data_dir`. For example,
@@ -77,30 +74,32 @@ For a complete set of arguments and their respective docstrings see
 and
 [`args/shared.py`](https://github.com/MyrtleSoftware/caiman-asr/blob/main/training/caiman_asr_train/args/shared.py).
 
-### Controlling the proportion of data from each manifest
+### Controlling the proportion of data from each manifest <a name="controlling-the-proportion-of-data-from-each-manifest"></a>
 
-If you would like to adapt the proportion of data that the model sees from each manifest per batch you can use the `--train_manifest_ratios` flag. For example:
+If you would like to adapt the proportion of data that the model sees from each
+manifest per batch you can adjust the weights in the train dataset yaml, for
+example:
 
-```
-./scripts/train.sh \
-  --train_manifests high_quality.json low_quality.json \
-  --train_manifest_ratios 1 1 \
-```
-
-would have 50% of utterances from `high_quality.json` and 50% from `low_quality.json` in each batch. This is useful if, for example, `low_quality.json` is much larger than `high_quality.json` and more efficient than truncating `low_quality.json` as the model would then not see all the data as it will with the `--train_manifest_ratios` flag.
-Alternatively, if you want to upweight `high_quality.json` by a factor of 2,
-you can use
-
-```
-./scripts/train.sh \
-  --train_manifests high_quality.json low_quality.json \
-  --relative_train_manifest_ratios 2 1 \
+```yaml
+format: multilingual-jsonl
+languages:
+  lang_code:
+    datasets:
+      - /datasets/demo/hi_quality.cuts.jsonl.gz:
+          weight: 1.0
+      - /datasets/demo/lo_quality.cuts.jsonl.gz:
+          weight: 1.0
 ```
 
-This is not the same as the `--train_manifest_ratios` flag,
-since `--relative_train_manifest_ratios` also takes the original length of the manifest into account.
+This would have 50% of utterances from `hi_quality` and 50% from `lo_quality` in
+each batch. This is useful if, for example, `lo_quality` is much larger than
+`hi_quality` and more efficient than truncating `lo_quality` as the model would
+then not see all the data.
 
-When manifest balancing is on we use the word epoch to mean: _the minimum time until any sample is seen again_. This parallels the definition used when manifest balancing is off but relaxes the condition that all the data must be seen.
+When manifest balancing is on we use the word epoch to mean: _the minimum time
+until any sample is seen again_. This parallels the definition used when
+manifest balancing is off but relaxes the condition that all the data must be
+seen.
 
 #### Canary-manifest balancing
 
@@ -137,43 +136,48 @@ r_s = \frac{p_s}{k_s}
 \end{align}
 $$
 
-Where \\(r_s\\) is the manifest ratio needed by `--train_manifest_ratios`. This
-is all computed automatically when the `--canary_exponent <alpha-value>` flag
-is passed at the CLI.
+Where \\(r_s\\) is the manifest ratio needed in the `weight` field of the
+dataset yaml. This is all computed automatically when the following is added to
+the yaml file for datasets of a language:
 
-__Note__: Canary manifest balancing is on by default with an exponent of 0.75
-unless `--canary_exponent` is set to a negative value to disable it, or any of
-`--train_manifest_ratios` and `--relative_train_manifest_ratios` are passed.
-
-### Dataset YAML Configuration
-
-Instead of specifying `--train_manifests` and `--relative_train_manifest_ratios` directly,
-you can use a YAML file to define the dataset list and corresponding relative weights.
-This method simplifies configuration and ensures clarity when using multiple datasets.
-
-- The YAML file specifies manifest files and their relative weights.
-- It does not use absolute ratios (--train_manifest_ratios),
-  only relative ratios (--relative_train_manifest_ratios).
-- If no weight is provided, it defaults to 1.0 - not Canary weighting.
-- It only works with manifest files, not tar files.
-
-An example YAML configuration for LibriSpeech can be found at [training/configs/librispeech.yaml](https://github.com/MyrtleSoftware/caiman-asr/tree/main/training/configs/librispeech.yaml).
-
-To use a YAML file, pass it with `--train_dataset_yaml`, e.g.
-
-```bash
-./scripts/train.sh \
-  --data_dir=/datasets/LibriSpeech \
-  --train_dataset_yaml configs/librispeech.yaml \
-  --val_manifests librispeech-dev-clean-flac.json \
-  --model_config configs/base-8703sp_run.yaml \
-  --num_gpus 1 \
-  --global_batch_size 1024 \
-  --training_steps 42000
+```yaml
+format: multilingual-shar
+languages:
+  lang_code:
+    canary:
+      alpha: 0.5
 ```
 
-`--train_dataset_yaml` cannot be used together with `--train_manifests`, `--train_manifest_ratios`, `--relative_train_manifest_ratios`, or `--canary_exponent`.
-If any of these options are provided alongside `--train_dataset_yaml`, an error will be raised.
+##### Multilingual manifest balancing
+
+When training multilingual models it is often desirable to balance both within
+and across languages. This can be achieved through hierarchical manifest
+balancing. For example, consider the following dataset yaml:
+
+```yaml
+format: multilingual-shar
+canary:
+  alpha: 0.5
+languages:
+  bg:
+    canary:
+      alpha: 0.75
+    datasets:
+      - /shar/dataset/a:
+      - /shar/dataset/b:
+  da:
+    canary:
+      alpha: 0.5
+    datasets:
+      - /shar/dataset/c:
+      - /shar/dataset/d:
+```
+
+This would balance within each language `bg` with `alpha=0.75` and `da` with
+`alpha=0.5` to produce two sets of two weights. Then it would manifest balance
+across the two languages `bg` and `da` (treating each as a single dataset) with
+`alpha=0.5` to produce another set of two weights. The final weight for each
+dataset is the product of the two weights.
 
 ### Data Augmentation for Difficult Target Data
 

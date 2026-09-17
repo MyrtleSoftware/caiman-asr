@@ -11,8 +11,15 @@ import torch.distributed as dist
 from beartype import beartype
 from beartype.typing import Optional
 
+from caiman_asr_train.export.hardware_ckpt import (
+    inference_only_config,
+)
 from caiman_asr_train.export.hardware_ckpt import main as make_hw_ckpt
-from caiman_asr_train.export.model_schema import get_schema, return_schemas
+from caiman_asr_train.export.model_schema import (
+    CheckpointNotSupportedError,
+    check_model_schema,
+    return_schemas,
+)
 from caiman_asr_train.train_utils.distributed import print_once, unwrap_ddp
 
 
@@ -35,10 +42,11 @@ class Checkpointer(object):
         model,
         ema_model,
         optimizer,
-        epoch,
-        step,
-        best_wer,
-        tokenizer_kw,
+        epoch: int,
+        step: int,
+        duration: float,
+        best_wer: float,
+        tokenizer_kw: dict,
         logmel_norm_weight: float,
         config_path: str,
         is_best: bool = False,
@@ -92,6 +100,7 @@ class Checkpointer(object):
         state = {
             "epoch": epoch,
             "step": step,
+            "duration": duration,
             "best_wer": best_wer,
             "state_dict": model_state_dict,
             "ema_state_dict": (
@@ -100,6 +109,7 @@ class Checkpointer(object):
             "optimizer": optimizer.state_dict() if optimizer is not None else None,
             "tokenizer_kw": tokenizer_kw,
             "logmel_norm_weight": logmel_norm_weight,
+            "raw_prefix_token_map": unwrap_ddp(model).config.prefix_token_map,
         }
 
         print_once(f"Saving {fpath}...")
@@ -120,7 +130,15 @@ class Checkpointer(object):
         config: str,
         model_state_dict: dict,
     ) -> None:
-        if get_schema(model_state_dict) not in return_schemas():
+        try:
+            rnnt_config = inference_only_config(config)
+            conditional_encoder = rnnt_config["rnnt"].get("conditional_encoder", False)
+            check_model_schema(
+                model_state_dict,
+                return_schemas(),
+                conditional_encoder,
+            )
+        except CheckpointNotSupportedError:
             print_once(
                 "Not saving hardware checkpoint as model is not supported on FPGA"
             )
@@ -148,7 +166,7 @@ class Checkpointer(object):
 
         if len(tracked) >= 1:
             try:
-                torch.load(tracked[-1], map_location="cpu")
+                torch.load(tracked[-1], map_location="cpu", weights_only=False)
                 return tracked[-1]
             except Exception:
                 print_once(f"Last checkpoint {tracked[-1]} appears corrupted.")
@@ -207,7 +225,7 @@ class Checkpointer(object):
         """Modified to support Test data evaluations which don't need optimizers/meta"""
 
         print_once(f"Loading model from {fpath}")
-        checkpoint = torch.load(fpath, map_location="cpu")
+        checkpoint = torch.load(fpath, map_location="cpu", weights_only=False)
 
         self._load(unwrap_ddp(model), checkpoint["state_dict"])
 
@@ -228,5 +246,6 @@ class Checkpointer(object):
             meta["start_epoch"] = checkpoint.get("epoch")
             meta["best_wer"] = checkpoint.get("best_wer", meta["best_wer"])
             meta["step"] = checkpoint.get("step", meta["step"])
+            meta["duration"] = checkpoint.get("duration", meta["duration"])
 
         return checkpoint.get("tokenizer_kw")

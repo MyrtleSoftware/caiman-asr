@@ -2,14 +2,24 @@
 
 export CUDA_VISIBLE_DEVICES=""
 
+cat /workspace/training/configs/testing-1023sp.yaml |
+	sed "s|\[TRANSCRIPTS\]||" |
+	sed "s|ON_MISSING|raise_error|" |
+	sed "s|LANGS|en|" |
+	sed "s/MAX_DURATION/20.0/" |
+	sed "s/MIN_TPS/0.0/" |
+	sed "s/MAX_TPS/inf/" |
+	sed "s/MAX_TOKENS/500/" \
+		>/tmp/conf.yaml
+
 python caiman_asr_train/data/generate_mel_stats.py \
 	--output_dir /tmp \
-	--model_config configs/testing-1023sp_run.yaml \
-	--dataset_dir tests/test_data \
-	--train_manifests peoples-speech-short.json \
-	--dali_train_device cpu \
-	--dump_mel_stats_batch_size 2 \
-	--canary_exponent -1
+	--model_config /tmp/conf.yaml \
+	--train_dataset_yaml tests/test_data/peoples-speech-short.yaml \
+	--loader_train_device cpu \
+	--val_manifests /tmp \
+	--val_dataset_dir /tmp \
+	--val_standardizer_lang en
 
 TEST_EXIT_CODE=$?
 

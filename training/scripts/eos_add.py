@@ -1,24 +1,22 @@
 #!/usr/bin/env python3
-import argparse
+from argparse import ArgumentParser, Namespace
+from functools import partial
+from glob import glob
 from pathlib import Path
 
-import orjson
+from beartype import beartype
+from beartype.typing import Dict, Optional
+from lhotse import CutSet, SupervisionSegment
+from tqdm import tqdm
 
-from caiman_asr_train.data.segment_manifest import add_eos_to_manifest_avoid_empty
+from caiman_asr_train.data.segment_manifest import ManifestSegmenter
 from caiman_asr_train.data.text.is_tag import is_tag
-from caiman_asr_train.utils.fast_json import fast_read_json
+from caiman_asr_train.data.utils import validate_args
 
 
-def make_parser():
-    parser = argparse.ArgumentParser(
+def parse_args():
+    parser = ArgumentParser(
         description="Utility to segment transcripts with an EOS token using an SAT model."
-    )
-
-    parser.add_argument(
-        "--data_dir",
-        type=str,
-        required=True,
-        help="Path to the directory containing the manifests.",
     )
 
     parser.add_argument(
@@ -26,27 +24,30 @@ def make_parser():
         type=str,
         nargs="+",
         required=True,
-        help="List of manifests to process.",
+        help="List of shar manifests to process.",
     )
-
     parser.add_argument(
-        "--output_dir",
-        type=str,
-        help="Where to save the modified transcripts.",
-        required=True,
-    )
-
-    parser.add_argument(
-        "--out_manifests",
+        "--output_dirs",
         type=str,
         nargs="+",
-        help="Optional list of output manifests to save the modified transcripts.",
+        required=True,
+        help="List of where to save the modified transcripts.",
     )
-
     parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Overwrite existing output files.",
+    )
+
+    parser.add_argument(
+        "--transcript_field",
+        type=str,
+        default=None,
+        help="List of fields in the manifests to add EOS to (default: text)",
+    )
+
+    parser.add_argument(
+        "--no_cuda", action="store_true", help="Use the CPU to segment the transcripts"
     )
 
     parser.add_argument(
@@ -56,60 +57,87 @@ def make_parser():
         help="The token to use as the end of segment marker.",
     )
 
-    parser.add_argument(
-        "--transcript_field",
-        type=str,
-        default="transcript",
-        help="The field in the manifest to add EOS to.",
-    )
-
-    parser.add_argument(
-        "--no_cuda", action="store_true", help="Use the CPU to segment the transcripts"
-    )
-
-    return parser
+    args = parser.parse_args()
+    return args
 
 
-def main(args):
-    for manifest, out_manifest in zip(args.manifests, args.out_manifests):
-        ifile = Path(args.data_dir) / manifest
-        ofile = Path(args.output_dir) / out_manifest
+@beartype
+def _transform_text(text: str, transforms: Dict[str, str]) -> str:
+    return transforms.get(text, text)
 
-        if ofile.exists() and not args.overwrite:
-            print(f"Skipping {ofile}, use --overwrite to overwrite.")
-            continue
 
-        # Check if the output directory exists
-        if not ofile.parent.exists():
-            print(f"Skipping {ofile}, the output directory does not exist.")
-            continue
+@beartype
+def _transform_supervision(
+    sup: SupervisionSegment,
+    transforms: Dict[str, str],
+    transcript_field: Optional[str] = None,
+) -> SupervisionSegment:
+    if transcript_field:
+        text = sup.custom[transcript_field]
+        sup = sup.with_custom(transcript_field, transforms[text])
+    else:
+        sup = sup.transform_text(partial(_transform_text, transforms=transforms))
+    return sup
 
-        print(f"Reading {ifile}")
 
-        manifest = fast_read_json(ifile)
+@beartype
+def _process_shar_manifest(
+    manifest: str,
+    output_dir: str,
+    segmenter: ManifestSegmenter,
+    transcript_field: Optional[str] = None,
+):
+    """Process all cuts within each shar manifest"""
 
-        print(f"Processing {ifile}")
+    for cut_path in tqdm(sorted(glob(f"{manifest}/*.jsonl.gz"))):
 
-        out = add_eos_to_manifest_avoid_empty(
-            manifest, args.eos_token, not args.no_cuda, args.transcript_field
+        cutset_id = Path(cut_path).name
+        cutset = CutSet.from_jsonl(cut_path)
+
+        output_cutset_path = str(Path(output_dir) / cutset_id)
+
+        transforms = segmenter.add_eos_to_cutset(
+            cutset_id, cutset, transcript_field=transcript_field
         )
-        print(f"Writing {ofile}")
+        cutset = cutset.map_supervisions(
+            partial(
+                _transform_supervision,
+                transforms=transforms,
+                transcript_field=transcript_field,
+            )
+        )
+        cutset.to_file(output_cutset_path)
 
-        with open(ofile, "wb") as f:
-            f.write(orjson.dumps(out, option=orjson.OPT_INDENT_2))
+
+@beartype
+def _eos_add(args: Namespace):
+    """Add EOS for all input Shar manifests"""
+
+    segmenter = ManifestSegmenter(eos_token=args.eos_token, use_cuda=not args.no_cuda)
+
+    for manifest, output_dir in zip(args.manifests, args.output_dirs):
+        if Path(output_dir).exists() and not args.overwrite:
+            raise FileExistsError(
+                f"Output_dir {output_dir} already exists. "
+                "Use --overwrite to overwrite the existing files."
+            )
+
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+        print(f"Adding EOS for: {manifest}")
+        _process_shar_manifest(manifest, output_dir, segmenter, args.transcript_field)
+
+
+@beartype
+def main(args: Namespace):
+
+    # Validate eos_token and inputs
+    assert is_tag(args.eos_token), "EOS token must be in form: '<[a-zA-Z]+>'"
+    validate_args(args)
+
+    _eos_add(args)
 
 
 if __name__ == "__main__":
-    parser = make_parser()
-    args = parser.parse_args()
-
-    assert is_tag(args.eos_token), "EOS token must be in form: '<[a-zA-Z]+>'"
-
-    args.manifests = [Path(m) for m in args.manifests]
-
-    if args.out_manifests is not None:
-        assert len(args.manifests) == len(args.out_manifests)
-    else:
-        args.out_manifests = [m.with_suffix(".eos.json") for m in args.manifests]
-
+    args = parse_args()
     main(args)

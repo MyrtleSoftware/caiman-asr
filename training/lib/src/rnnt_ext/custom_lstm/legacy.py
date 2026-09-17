@@ -109,11 +109,11 @@ class CustomLSTM(nn.Module):
         # accumulate layer final states in lists
         h_fl = []
         c_fl = []
-        if self.training:
-            # Element i of this list will be a tensor of all hidden states from layer i
-            all_h_fl = []
-            # Same, but for cell states
-            all_c_fl = []
+
+        # Element i of this list will be a tensor of all hidden states from layer i
+        all_h_fl = []
+        # Same, but for cell states
+        all_c_fl = []
 
         # apply the LSTM layer by layer
         output = None
@@ -149,10 +149,9 @@ class CustomLSTM(nn.Module):
             h_fl.append(h_f)
             c_fl.append(c_f)
 
-            if self.training:
-                # Accumulate all states from the layer
-                all_h_fl.append(all_h_f)
-                all_c_fl.append(all_c_f)
+            # Accumulate all states from the layer
+            all_h_fl.append(all_h_f)
+            all_c_fl.append(all_c_f)
 
         # compute the final state tensors
         h_f = torch.stack(h_fl, dim=0)  # (num_layers, batch, hidden_size)
@@ -160,19 +159,11 @@ class CustomLSTM(nn.Module):
         # return the final layer output sequence          (seq_len, batch, hidden_size)
         # and the final hidden and cell state tensors     (num_layers, batch, hidden_size)
 
-        if self.training:
-            # Turn list of tensors into just tensors
-            all_h_f = rearrange(
-                all_h_fl,
-                "num_layers seq_len batch hidden_size -> num_layers seq_len batch hidden_size",  # noqa: E501
-            )
-            all_c_f = rearrange(
-                all_c_fl,
-                "num_layers seq_len batch hidden_size -> num_layers seq_len batch hidden_size",  # noqa: E501
-            )
-            all_hidden = (all_h_f, all_c_f)
-        else:
-            all_hidden = None
+        # Turn list of tensors into just tensors
+        all_h_f = rearrange(all_h_fl, "L T B H -> L T B H")
+        all_c_f = rearrange(all_c_fl, "L T B H -> L T B H")
+
+        all_hidden = (all_h_f, all_c_f)
 
         return output, (h_f, c_f), all_hidden
 

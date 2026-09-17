@@ -22,61 +22,66 @@ trap cleanup EXIT
 # Make a config file that uses the testing model,
 # but with the saved mini sentencepiece model
 cat configs/testing-1023sp.yaml |
-	sed 's|TRANSCRIPTS|"transcript"|' |
-	sed "s|/datasets/sentencepieces/SENTENCEPIECE.model|tests/test_data/librispeech59.eos.model|" |
+	sed "s|\[TRANSCRIPTS\]||" |
+	sed "s|ON_MISSING|raise_error|" |
+	sed "s|/datasets/sentencepieces/SENTENCEPIECE.model|tests/test_data/librispeech62.eos.pnc-tag.model|" |
 	sed "s|/datasets/stats/STATS_SUBDIR|tests/test_data/|" |
+	sed "s|FT_LANGS||" |
+	sed "s|LANGS|en|" |
 	sed "s|/datasets/words/WORDS|tests/test_data/words|" |
-	sed "s/MAX_DURATION/16.7/" \
+	sed "s/MAX_DURATION/16.7/" |
+	sed "s/MIN_TPS/0.0/" |
+	sed "s/MAX_TPS/inf/" |
+	sed "s/MAX_TOKENS/500/" \
 		>/tmp/testing.yaml
 
 # Hence we skip the state dict check because this isn't one of
 # the 4 supported architectures
-./scripts/train.sh --model_config=/tmp/testing.yaml --skip_state_dict_check \
-	--data_dir=tests/test_data --train_manifests=peoples-speech-short.eos.json \
-	--val_manifests=peoples-speech-short.eos.json --num_gpus=1 \
-	--global_batch_size=2 --grad_accumulation_batches=1 --batch_split_factor=2 --training_steps=4 \
-	--prediction_frequency 1 --val_batch_size=2 --eos_decoding predict
+./scripts/train.sh \
+	--model_config=/tmp/testing.yaml \
+	--skip_state_dict_check \
+	--train_dataset_yaml=tests/test_data/peoples-speech-short.yaml \
+	--val_manifests=peoples-speech-short.cuts.jsonl \
+	--val_data_dir=tests/test_data \
+	--num_gpus=1 \
+	--batch_duration=30 \
+	--grad_accumulation_batches=1 \
+	--joint_lattice_cap=256 \
+	--training_steps=4 \
+	--prediction_frequency 1 \
+	--val_batch_size=2 \
+	--val_standardizer_lang en \
+	--conditional \
+	--pnc_prefix pnc \
+	--eos_decoding predict \
+	--dp_mu 0.0 \
+	--skip_val_loss
 
-./scripts/val.sh --model_config=/tmp/testing.yaml --data_dir=tests/test_data \
-	--val_manifests=peoples-speech-short.eos.json --num_gpus=1 --val_batch_size=2 \
-	--eos_decoding predict
+./scripts/val.sh \
+	--model_config=/tmp/testing.yaml \
+	--val_manifests=peoples-speech-short.eos.cuts.jsonl \
+	--val_data_dir=tests/test_data \
+	--num_gpus=1 \
+	--val_batch_size=2 \
+	--val_standardizer_lang en \
+	--eos_decoding predict \
+	--calculate_emission_latency \
+	--pnc_prefix 'pnc'
 
 # Check that CPU-only validation works
 
 export CUDA_VISIBLE_DEVICES=""
-./scripts/val.sh --model_config=/tmp/testing.yaml --data_dir=tests/test_data \
-	--val_manifests=peoples-speech-short.eos.json --num_gpus=1 --val_batch_size=2 \
-	--eos_decoding predict --cpu
+
+./scripts/val.sh \
+	--model_config=/tmp/testing.yaml \
+	--val_manifests=peoples-speech-short.eos.cuts.jsonl \
+	--val_data_dir=tests/test_data \
+	--num_gpus=1 \
+	--val_batch_size=2 \
+	--val_standardizer_lang en \
+	--eos_decoding predict \
+	--calculate_emission_latency \
+	--cpu \
+	--loader_val_device cpu \
+	--pnc_prefix 'pnc'
 unset CUDA_VISIBLE_DEVICES
-
-# Clean up results to prevent next training from failing
-rm -rf /results/*
-
-# Now run a tarfile train:
-./scripts/train.sh --model_config=/tmp/testing.yaml --skip_state_dict_check \
-	--read_from_tar --num_gpus=1 \
-	--data_dir=/ --train_tar_files /workspace/training/tests/test_data/webdataset-eg.tar \
-	--val_tar_files /workspace/training/tests/test_data/webdataset-eg-with-periods.tar \
-	--global_batch_size=2 --grad_accumulation_batches=1 --batch_split_factor=2 --training_steps=4 \
-	--prediction_frequency 1 --val_batch_size=2 --eos_decoding predict
-
-./scripts/val.sh --model_config=/tmp/testing.yaml --read_from_tar --num_gpus=1 \
-	--data_dir=/ --val_batch_size=2 --eos_decoding predict --val_tar_files \
-	/workspace/training/tests/test_data/webdataset-eg-with-periods.tar
-
-rm -rf /results/*
-
-# Now run a json train with Hugging Face validation
-./scripts/train.sh --model_config=/tmp/testing.yaml --skip_state_dict_check \
-	--data_dir=tests/test_data --train_manifests=peoples-speech-short.eos.json \
-	--use_hugging_face \
-	--hugging_face_val_dataset distil-whisper/librispeech_asr_dummy \
-	--hugging_face_val_split validation[0:2] --num_gpus=1 \
-	--global_batch_size=2 --grad_accumulation_batches=1 --batch_split_factor=2 \
-	--training_steps=4 --prediction_frequency 1 --val_batch_size=2 \
-	--eos_decoding predict
-
-./scripts/val.sh --model_config=/tmp/testing.yaml --use_hugging_face \
-	--hugging_face_val_dataset distil-whisper/librispeech_asr_dummy \
-	--hugging_face_val_split validation[0:2] --num_gpus=1 --val_batch_size=2 \
-	--eos_decoding predict

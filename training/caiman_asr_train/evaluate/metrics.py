@@ -13,23 +13,115 @@
 # limitations under the License.
 
 
-import string
 from collections import Counter
+from dataclasses import dataclass
 
 import jiwer
 from beartype import beartype
-from beartype.typing import Dict, List, Tuple
-from levenshtein_rs import levenshtein_list as levenshtein
+from beartype.typing import Dict, List, Optional, Tuple
+from rapidfuzz.distance import Levenshtein as RapidLevenshtein
 
+from caiman_asr_train.data.text.allowed_charset import get_allowed_charset
 from caiman_asr_train.data.text.normalizers import (
+    MemoizedLowercase,
     lowercase_normalize,
     punctuation_normalize,
 )
-from caiman_asr_train.data.text.whisper_text_normalizer import EnglishTextNormalizer
 from caiman_asr_train.evaluate.error_rates import ErrorRate, decide_and_split
 from caiman_asr_train.evaluate.punctuation_error_rate import (
     punctuation_error_rate_function,
 )
+
+# Shared module-level instance so the lru_cache inside it actually persists
+# across calls, instead of being rebuilt (and thrown away) on every single
+# word_error_rate()/calculate_keyword_wers() invocation.
+_WER_NORMALIZER = MemoizedLowercase(user_symbols=[])
+
+
+@beartype
+@dataclass
+class WerDetails:
+    """
+    Breakdown of WER results.
+
+
+    Attributes
+    ----------
+    wer : float
+        The WER metric.
+    scores : int
+        The number of additions, deletions, substitutions in all the entries of the
+        hypotheses list.
+    words : int
+        Total number of words in the reference list.
+    substitutions : int
+        Number of substitutions.
+    insertions : int
+        Number of insertions.
+    deletions : int
+        Number of deletions.
+    """
+
+    wer: float
+    scores: int
+    words: int
+    substitutions: int
+    insertions: int
+    deletions: int
+    norm_ref: Optional[str] = None
+    norm_hyp: Optional[str] = None
+
+    @classmethod
+    def aggregate(cls, items: list["WerDetails"]) -> "WerDetails":
+        """Aggregates a list of WerDetails into a single summary instance."""
+        tot_scores = sum(i.scores for i in items)
+        tot_words = sum(i.words for i in items)
+        tot_substitutions = sum(i.substitutions for i in items)
+        tot_insertions = sum(i.insertions for i in items)
+        tot_deletions = sum(i.deletions for i in items)
+
+        return cls(
+            wer=(tot_scores / tot_words) if tot_words > 0 else 0.0,
+            scores=tot_scores,
+            words=tot_words,
+            substitutions=tot_substitutions,
+            insertions=tot_insertions,
+            deletions=tot_deletions,
+        )
+
+
+@beartype
+@dataclass
+class PerDetails:
+    """
+    Breakdown of PER results.
+
+    Attributes
+    ----------
+    per : float
+        The PER metric.
+    scores : int
+        The number of additions, deletions, substitutions of punctuation marks in all
+        the entries of the hypotheses list.
+    punc_symbols : int
+        Total number of punctuation symbols in the reference list.
+    """
+
+    per: float
+    scores: int
+    punc_symbols: int
+
+    @classmethod
+    def aggregate(cls, items: list["PerDetails"]) -> "PerDetails":
+        """Aggregates a list of PerDetails into a single summary instance."""
+        tot_scores = sum(i.scores for i in items)
+        tot_symbols = sum(i.punc_symbols for i in items)
+
+        return cls(
+            per=(tot_scores / tot_symbols) if tot_symbols > 0 else 0.0,
+            scores=tot_scores,
+            punc_symbols=tot_symbols,
+        )
 
 
 @beartype
@@ -38,7 +130,7 @@ def punctuation_error_rate(
     references: List[str],
     punctuation_marks: List[str] = [",", ".", "?"],
     punctuation_normalization: bool = True,
-) -> Tuple[float, int]:
+) -> PerDetails:
     """Compute Punctuation Error Rate (PER) between two text lists.
 
     This function calculates the PER between two lists. It is calculated as the sum of
@@ -59,10 +151,8 @@ def punctuation_error_rate(
 
     Returns
     -------
-    per_score
-        the per metric
-    pun_symbols
-        the number of punctuation marks in the references list
+    PerDetails
+        Breakdown of PER results including per, scores, and punc_symbols.
     """
     per_score, pun_symbols = 0, 0
     for hyp, ref in zip(hypotheses, references):
@@ -74,9 +164,10 @@ def punctuation_error_rate(
         per_score += round(_per * _pun_symbols)
         pun_symbols += _pun_symbols
     if pun_symbols != 0:
-        return per_score / pun_symbols, pun_symbols
+        per = per_score / pun_symbols
+        return PerDetails(per=per, scores=per_score, punc_symbols=pun_symbols)
     else:
-        return 0.0, pun_symbols
+        return PerDetails(per=0.0, scores=0, punc_symbols=0)
 
 
 @beartype
@@ -84,8 +175,8 @@ def word_error_rate(
     hypotheses: List[str],
     references: List[str],
     error_rate: ErrorRate,
-    standardize: bool = True,
-) -> Tuple[float, int, int]:
+    lang_code: str,
+) -> WerDetails:
     """Compute Word Error Rate (WER) between two text lists.
 
     This function calculates the WER between two lists. It is calculated as the sum of
@@ -99,18 +190,16 @@ def word_error_rate(
         list of strings predicted by the system
     references
         list of transcripts
-    standardize
-        whether to standardize hypotheses and references before the WER calculation
+    error_rate
+        type of error rate to compute (word, char, or mixture)
+    lang_code
+        language code for the language of the hypotheses and references
 
     Returns
     -------
-    wer
-        the wer metric
-    scores
-        the number of additions, deletions, substitutions in all the entries of the
-        hypotheses list
-    words
-        the number of words in the references list
+    WerDetails
+        Detailed WER breakdown results including wer, scores, words, substitutions,
+        insertions, and deletions.
 
     Raises
     ------
@@ -118,54 +207,56 @@ def word_error_rate(
         if the number of references is greater than the number of hypotheses
     """
 
-    scores = 0
-    words = 0
     if len(references) != len(hypotheses):
         raise ValueError(
             "Unequal number of hypotheses and references: "
             "{0} and {1}".format(len(hypotheses), len(references))
         )
 
-    for hyp, ref in zip(hypotheses, references):
+    scores = 0
+    words = 0
+    insertions = 0
+    deletions = 0
+    substitutions = 0
+    norm_hypotheses = []
+    norm_references = []
 
-        if standardize:
-            hyp, ref = standardize_wer(hyp), standardize_wer(ref)
+    for hyp, ref in zip(hypotheses, references):
+        hyp = _WER_NORMALIZER.normalize(hyp, lang_code)
+        ref = _WER_NORMALIZER.normalize(ref, lang_code)
+        norm_hypotheses.append(hyp)
+        norm_references.append(ref)
         hyp_list = decide_and_split(hyp, error_rate)
         ref_list = decide_and_split(ref, error_rate)
         words += len(ref_list)
-        scores += levenshtein(hyp_list, ref_list)
+
+        editops = RapidLevenshtein.editops(ref_list, hyp_list)
+        ins = sum(1 for op in editops if op[0] == "insert")
+        dels = sum(1 for op in editops if op[0] == "delete")
+        subs = sum(1 for op in editops if op[0] == "replace")
+        insertions += ins
+        deletions += dels
+        substitutions += subs
+        scores += ins + dels + subs
+
     if words != 0:
         wer = 1.0 * scores / words
     else:
         wer = float("inf")
-    return wer, scores, words
 
+    norm_references = " ".join(norm_references)
+    norm_hypotheses = " ".join(norm_hypotheses)
 
-@beartype
-def standardize_wer(text: str) -> str:
-    """
-    Standardize text in preparation for WER calculation.
-    This function applies the Whisper normalization rules
-    and the train-time normalizer on the text of both
-    hypotheses and references in order to minimize
-    penalization of non-semantic text differences.
-    Parameters
-    ----------
-    text
-        string containing un-standardized text
-    Returns
-    -------
-    norm_text_list
-        string containing standardized text
-    """
-    # Hardcode charset, so WER doesn't depend on what charset the user trains with.
-    # Keep <> so that the EnglishTextNormalizer recognizes and removes tags.
-    charset = list(" '<>" + string.ascii_lowercase)
-    norm_text = lowercase_normalize(text, charset=charset)
-    standardizer = EnglishTextNormalizer()
-    standard_text = standardizer(norm_text)
-
-    return standard_text
+    return WerDetails(
+        wer=wer,
+        scores=scores,
+        words=words,
+        substitutions=substitutions,
+        insertions=insertions,
+        deletions=deletions,
+        norm_hyp=norm_hypotheses,
+        norm_ref=norm_references,
+    )
 
 
 @beartype
@@ -173,30 +264,36 @@ def count_keyword_stats(
     hypotheses: List[str],
     references: List[str],
     keywords: List[str],
-    normalize: bool = False,
+    lang_code: str,
 ) -> Tuple[int, int, int]:
     """
     Counts true positives, false positives, and false negatives for keywords.
     """
     tp = fp = fn = 0
-    charset = list(" '<>" + string.ascii_lowercase)
-    if normalize:
-        # Only normalize, don't standardize
-        keywords = [lowercase_normalize(k, charset=charset) for k in keywords]
+
+    charset = get_allowed_charset([lang_code], lowercase_only=True)
+
+    # Only normalize, don't standardize
+    keywords = [
+        lowercase_normalize(k, charset=charset, lang_code=lang_code) for k in keywords
+    ]
     keywords_set = {k for k in keywords}
 
     for hyp, ref in zip(hypotheses, references):
-        if normalize:
-            hyp = lowercase_normalize(hyp, charset=charset)
-            ref = lowercase_normalize(ref, charset=charset)
+        hyp = lowercase_normalize(hyp, charset=charset, lang_code=lang_code)
+        ref = lowercase_normalize(ref, charset=charset, lang_code=lang_code)
 
-        aligned = jiwer.process_words(ref, hyp)
         correct_hyps = []
-        for ali in aligned.alignments[0]:
-            if ali.type == "equal":
-                correct_hyps += aligned.hypotheses[0][
-                    ali.hyp_start_idx : ali.hyp_end_idx
-                ]
+
+        # If ref is the empty string jiwer.process_words fails,
+        # so handle this case separately.
+        if ref.strip():
+            aligned = jiwer.process_words(ref, hyp)
+            for ali in aligned.alignments[0]:
+                if ali.type == "equal":
+                    correct_hyps += aligned.hypotheses[0][
+                        ali.hyp_start_idx : ali.hyp_end_idx
+                    ]
 
         hyp_count = Counter(word for word in hyp.split() if word in keywords_set)
         ref_count = Counter(word for word in ref.split() if word in keywords_set)
@@ -212,7 +309,10 @@ def count_keyword_stats(
 
 @beartype
 def calculate_precision_recall_f1(
-    hypotheses: List[str], references: List[str], keywords: List[str], normalize: bool
+    hypotheses: List[str],
+    references: List[str],
+    keywords: List[str],
+    lang_code: str,
 ) -> Tuple[float, float, float]:
     """
     Calculates precision, recall, and F1 score for a list of hypotheses and references,
@@ -226,7 +326,7 @@ def calculate_precision_recall_f1(
     Recall = TP / (TP + FN)
     F1 = 2 * (Precision * Recall) / (Precision + Recall)
     """
-    tp, fp, fn = count_keyword_stats(hypotheses, references, keywords, normalize)
+    tp, fp, fn = count_keyword_stats(hypotheses, references, keywords, lang_code)
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
     recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
     f1 = (
@@ -242,7 +342,7 @@ def calculate_keyword_wers(
     hypotheses: List[str],
     references: List[str],
     keywords: List[str],
-    standardize: bool = True,
+    lang_code: str,
 ) -> Tuple[float | None, float | None]:
     """
     Calculates biased and unbiased WERs for a list of hypotheses and references,
@@ -254,17 +354,17 @@ def calculate_keyword_wers(
     Unbiased WER (u-WER) is the WER of the hypotheses
     that do not contain any keywords in the references.
     """
-    if standardize:
-        hypotheses = [standardize_wer(h) for h in hypotheses]
-        references = [standardize_wer(r) for r in references]
-        keywords = [standardize_wer(k) for k in keywords]
+    # Normalize only to decide the biased/unbiased split; word_error_rate()
+    # below normalizes hyp/ref itself, so passing the raw text through (and
+    # relying on _WER_NORMALIZER's shared cache) avoids normalizing twice.
+    norm_references = [_WER_NORMALIZER.normalize(r, lang_code) for r in references]
+    norm_keywords = {_WER_NORMALIZER.normalize(k, lang_code) for k in keywords}
 
     biased_hypotheses, biased_references = [], []
     unbiased_hypotheses, unbiased_references = [], []
 
-    for hyp, ref in zip(hypotheses, references):
-        ref_words = set(ref.split())
-        if not ref_words.isdisjoint(keywords):
+    for hyp, ref, norm_ref in zip(hypotheses, references, norm_references):
+        if not set(norm_ref.split()).isdisjoint(norm_keywords):
             biased_hypotheses.append(hyp)
             biased_references.append(ref)
         else:
@@ -272,21 +372,21 @@ def calculate_keyword_wers(
             unbiased_references.append(ref)
 
     if biased_references:
-        biased_wer, _, _ = word_error_rate(
+        biased_wer = word_error_rate(
             biased_hypotheses,
             biased_references,
             ErrorRate.WORD,
-            standardize=standardize,
-        )
+            lang_code,
+        ).wer
     else:
         biased_wer = None
     if unbiased_references:
-        unbiased_wer, _, _ = word_error_rate(
+        unbiased_wer = word_error_rate(
             unbiased_hypotheses,
             unbiased_references,
             ErrorRate.WORD,
-            standardize=standardize,
-        )
+            lang_code,
+        ).wer
     else:
         unbiased_wer = None
 
@@ -298,7 +398,7 @@ def compute_keyword_metrics(
     hypotheses: List[str],
     references: List[str],
     keywords: List[str],
-    standardize: bool = True,
+    lang_code: str,
 ) -> Dict[str, float | None]:
     """
     Computes keyword-based metrics for a list of hypotheses and references,
@@ -307,9 +407,9 @@ def compute_keyword_metrics(
     Returns a dictionary of the metrics: biased WER, unbiased WER,
     precision, recall, and F1 score.
     """
-    b_wer, u_wer = calculate_keyword_wers(hypotheses, references, keywords, standardize)
+    b_wer, u_wer = calculate_keyword_wers(hypotheses, references, keywords, lang_code)
     precision, recall, f1 = calculate_precision_recall_f1(
-        hypotheses, references, keywords, standardize
+        hypotheses, references, keywords, lang_code
     )
     return {
         "b_wer": b_wer,

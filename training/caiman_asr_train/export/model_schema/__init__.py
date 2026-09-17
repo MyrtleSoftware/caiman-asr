@@ -30,13 +30,20 @@ def get_schema(state_dict: dict) -> dict:
     return {k: list(v.shape) for (k, v) in state_dict.items()}
 
 
-def check_model_schema(model_sd, schemas):
+def check_model_schema(model_sd, schemas, conditional_encoder=False):
     """
     Raise CheckpointNotSupportedError if state dict isn't supported.
 
     This is necessary to avoid incompatibility with downstream inference server.
     """
     model_schema = get_schema(model_sd)
+
+    if conditional_encoder:
+        NEW_KEYS = ["prefix_token_map", "encoder.prefix_embd.weight"]
+        for k in NEW_KEYS:
+            assert k in model_schema, f"Expected key {k} not found in model state dict."
+        model_schema = {k: v for k, v in model_schema.items() if k not in NEW_KEYS}
+
     matching_schema = [schema for schema in schemas if schema == model_schema]
     if len(matching_schema) != 1:
         raise CheckpointNotSupportedError(
@@ -45,7 +52,11 @@ def check_model_schema(model_sd, schemas):
         )
 
 
-def check_schema_training(model_sd: dict, skip_state_dict_check: bool):
+def check_schema_training(
+    model_sd: dict,
+    skip_state_dict_check: bool,
+    conditional_encoder: bool = False,
+) -> None:
     """
     Check state dict matches one of ModelVariant schemas.
 
@@ -53,7 +64,11 @@ def check_schema_training(model_sd: dict, skip_state_dict_check: bool):
     --skip_state_dict_check is passed.
     """
     try:
-        check_model_schema(model_sd, return_schemas())
+        check_model_schema(
+            model_sd,
+            return_schemas(),
+            conditional_encoder=conditional_encoder,
+        )
     except CheckpointNotSupportedError as e:
         if not skip_state_dict_check:
             # Extend error message

@@ -1,7 +1,10 @@
 FROM ubuntu:22.04
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive \
-    apt-get install -y sox python3 python3-pip git curl tzdata
+    apt-get install -y sox python3 python3-pip git curl tzdata && \
+    # For pyicu
+    apt-get install -y libicu-dev && \
+    apt-get install -y pkg-config
 
 WORKDIR /workspace/benchmark
 COPY requirements.txt requirements.txt

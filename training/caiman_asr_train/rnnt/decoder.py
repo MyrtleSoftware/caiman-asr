@@ -22,6 +22,7 @@ import torch.nn.functional as F
 from beartype import beartype
 from beartype.typing import Dict, List, Optional
 
+from caiman_asr_train.core.batches import BatchFirst, TimeFirst
 from caiman_asr_train.rnnt.eos_strategy import (
     EOSBlank,
     EOSIgnore,
@@ -29,7 +30,7 @@ from caiman_asr_train.rnnt.eos_strategy import (
     EOSStrategy,
 )
 from caiman_asr_train.rnnt.fuzzy_logits import get_topk_logits
-from caiman_asr_train.rnnt.model import label_collate
+from caiman_asr_train.rnnt.model import RNNT
 from caiman_asr_train.rnnt.response import FrameResponses
 from caiman_asr_train.rnnt.sub_models import RNNTSubModels
 from caiman_asr_train.rnnt.unbatch_encoder import encode_lower_batch_size
@@ -44,22 +45,20 @@ class RNNTDecoder(ABC):
         eos_strategy: EOSStrategy,
         blank_idx: int,
         max_inputs_per_batch: int = int(1e7),
+        prefix_token_ids: Optional[List[int]] = None,
     ):
         model = model.rnnt if isinstance(model, RNNTSubModels) else model
         model = unwrap_ddp(model)
 
-        self.model = model
+        self.model: RNNT = model
         self.max_inputs_per_batch = max_inputs_per_batch
         self.eos_strategy = eos_strategy
         self.blank_idx = blank_idx
+        self.prefix_token_ids = prefix_token_ids
 
     @torch.no_grad()
     @beartype
-    def decode(
-        self,
-        feats: torch.Tensor,
-        feat_lens: torch.Tensor,
-    ) -> List[Dict[int, FrameResponses]]:
+    def decode(self, feats: TimeFirst) -> List[Dict[int, FrameResponses]]:
         """
         Returns a list of frame responses dictionaries for each frame in the batch.
 
@@ -73,13 +72,20 @@ class RNNTDecoder(ABC):
             the batch dimension and the dictionary keys are the frame indices.
         """
 
-        # encs     is shape (batch, time, enc_dim)
-        # enc_lens is shape (batch,)
-        encs, enc_lens = encode_lower_batch_size(
-            self.model, feats, feat_lens, self.max_inputs_per_batch
+        if self.model.config.prefix_token_map is not None:
+            # If model has token_map assume it requires an encoder prefix.
+            token_ids = self.prefix_token_ids
+        else:
+            token_ids = None
+
+        encs = encode_lower_batch_size(
+            self.model,
+            feats,
+            self.max_inputs_per_batch,
+            token_ids,
         )
 
-        return self._inner_decode(encs, enc_lens)
+        return self._inner_decode(encs.T)
 
     @property
     @beartype
@@ -97,9 +103,7 @@ class RNNTDecoder(ABC):
 
     @abstractmethod
     @beartype
-    def _inner_decode(
-        self, encs: torch.Tensor, enc_lens: torch.Tensor
-    ) -> List[Dict[int, FrameResponses]]:
+    def _inner_decode(self, encs: BatchFirst) -> List[Dict[int, FrameResponses]]:
         pass
 
 
@@ -118,7 +122,13 @@ class RNNTCommonDecoder(RNNTDecoder):
         # This isn't user-configurable for the greedy decoder.
         # This is configurable for the beam decoder, and the default is 1.4 for beam
     ):
-        super().__init__(model, eos_strategy, blank_idx, max_inputs_per_batch)
+        super().__init__(
+            model,
+            eos_strategy,
+            blank_idx,
+            max_inputs_per_batch,
+            prefix_token_ids,
+        )
 
         assert max_symbols_per_step is None or max_symbols_per_step > 0
         assert max_symbol_per_sample is None or max_symbol_per_sample > 0
@@ -126,61 +136,7 @@ class RNNTCommonDecoder(RNNTDecoder):
         self.blank_idx = blank_idx
         self.max_symbols = max_symbols_per_step
         self.max_symbol_per_sample = max_symbol_per_sample
-        self._SOS = -1  # start of sequence token
         self.temperature = temperature
-        self.prefix_token_ids = prefix_token_ids or []
-
-    def _pred_step_raw(self, label, hidden):
-        return self.model.predict(label, hidden, add_sos=False)
-
-    def _pred_step(self, label, hidden, device=None):
-        if label == self._SOS:
-            return self.model.predict(None, hidden, add_sos=False)
-
-        label = label_collate([[label]]).to(device)
-        return self._pred_step_raw(label, hidden)
-
-    def _pred_step_with_prefix(self, device=None, batch_size=1, beam=False):
-        """
-        Initialize prediction network with prefix tokens.
-        This replaces the standard SOS initialization when prefix tokens are available.
-
-        Args:
-            device: Device to place tensors on
-            batch_size: Batch size for expansion
-            beam: If True, handles beam decoder's special case where we need to
-                      process prefix[:-1] to avoid double processing the last token
-        """
-        if not self.prefix_token_ids:
-            # No prefix, use standard SOS initialization
-            return self._pred_step(self._SOS, hidden=None, device=device)
-
-        if beam and len(self.prefix_token_ids) == 1:
-            # For beam decoder with single token prefix, just use SOS.
-            # Note (beam + prefix):
-            # Prefix is included in the hypothesis,
-            # and will be processed by pred network in the beam decoder loop,
-            # before the beam search is started.
-            # See _batched_decode in beam.py
-            return self._pred_step(self._SOS, hidden=None, device=device)
-
-        prefix_tensor = torch.tensor([self.prefix_token_ids]).to(device)
-        if batch_size > 1:
-            prefix_tensor = prefix_tensor.expand(batch_size, -1)
-
-        if beam:
-            # For beam decoder, process prefix[:-1] to avoid double processing.
-            # See `Note (beam + prefix)` above.
-            prefix_tensor = prefix_tensor[:, :-1]
-
-        g, (h, c), _ = self.model.predict(
-            y=prefix_tensor, pred_state=None, add_sos=True
-        )
-
-        # Return the final timestep output
-        final_g = g[:, -1:, :]  # (B, 1, H)
-
-        return final_g, (h, c), None
 
     def _eos_prob_correction(self, logprobs):
         match self.eos_strategy:
@@ -202,8 +158,20 @@ class RNNTCommonDecoder(RNNTDecoder):
 
         return logprobs
 
-    def _joint_step(self, enc, pred, fuzzy=False):
-        logits = self.model.joint(enc, pred)[:, 0, 0, :]
+    @beartype
+    def _joint_step(self, enc: torch.Tensor, pred: torch.Tensor, fuzzy: bool = False):
+        """
+        Single operation of the joint network
+
+        enc:  [B, 1, J]
+        pred: [B, 1, J]
+
+        """
+
+        f = BatchFirst(enc, torch.full_like(enc[:, 0, 0], 1, dtype=torch.int))
+        g = BatchFirst(pred, torch.full_like(pred[:, 0, 0], 1, dtype=torch.int))
+
+        logits = self.model.joint(f, g)[0]
 
         if fuzzy:
             logits = get_topk_logits(logits)
@@ -217,7 +185,5 @@ class RNNTCommonDecoder(RNNTDecoder):
 
     @abstractmethod
     @beartype
-    def _inner_decode(
-        self, encs: torch.Tensor, enc_lens: torch.Tensor
-    ) -> List[Dict[int, FrameResponses]]:
+    def _inner_decode(self, encs: BatchFirst) -> List[Dict[int, FrameResponses]]:
         pass

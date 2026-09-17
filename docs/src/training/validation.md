@@ -7,10 +7,14 @@
 To run validation, execute:
 
 ```bash
-./scripts/val.sh
+./scripts/val.sh \
+  --checkpoint /path/to/checkpoint.pt \
+  --model_config /path/to/model_config.yaml \
+  --val_manifests /datasets/LibriSpeech/librispeech-dev-other-flac.cuts.jsonl.gz  \
+  --val_data_dir /datasets/LibriSpeech/ \
+  --val_standardizer_lang en \
+  --val_batch_duration 3600
 ```
-
-By default, a checkpoint saved at `/results/RNN-T_best_checkpoint.pt`, with the `testing-1023sp_run.yaml` model config, is evaluated on the `/datasets/LibriSpeech/librispeech-dev-clean-flac.json` manifest.
 
 ### Arguments
 
@@ -24,7 +28,7 @@ for the complete set of arguments and their respective docstrings.
 
 ### Further Detail
 
-- All references and hypotheses are normalized with the Whisper normalizer before calculating WERs, as described in the [WER calculation docs](./wer_calculation.md). To switch off normalization, modify the respective config file entry to read `standardize_wer: false`.
+- All references and hypotheses are normalized with the normalizer before calculating WERs, as described in the [WER calculation docs](./wer_calculation.md). Use `--val_standardizer_lang` to set the language for normalization. This normalization cannot be switched off.
 - During validation the [state resets technique](./state_resets.md) is applied by default in order to increase the model's accuracy.
 - The model's accuracy can be improved by using [beam search](./beam_decoder.md) and an [n-gram language model](./ngram_lm.md).
 - Validating on long utterances is calibrated to not run out of memory on a single 11 GB GPU.

@@ -31,15 +31,15 @@ The solution supports two models: `base` and `large` of sizes 85M and 196M param
 <!--
 
 These numbers are taken from performance.md:
-    - large + beam + lm + no-state-resets
-    - base + greedy + no-state-resets
+    - large + beam + lm + no-state-resets, lang_detect=off
+    - base + greedy + no-state-resets, lang_detect=off
 
 -->
 
 | Description   | Model   | Parameters | Decoding      | RTS  | CL99 at max RTS | CL99 at RTS=32 | median UPL | HF Leaderboard WER |
 | ------------- | ------- | ---------- | ------------- | ---- | --------------- | -------------- | ---------- | ------------------ |
-| fastest       | `base`  | 85M        | greedy        | 2000 | 25 ms           | 15 ms          | 147 ms     | 10.43%             |
-| most-accurate | `large` | 196M       | beam, width=4 | 500  | 40 ms           | 20 ms          | 158 ms     | 7.92%              |
+| fastest       | `base`  | 85M        | greedy        | 2000 | 25 ms           | 15 ms          | 147 ms     | 10.34%             |
+| most-accurate | `large` | 196M       | beam, width=4 | 500  | 40 ms           | 20 ms          | 158 ms     | 8.12%              |
 
 where:
 

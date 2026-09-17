@@ -2,5 +2,10 @@ from caiman_asr_train.utils.num_weights import num_weights
 
 
 def test_model_size(mini_model_factory):
+
     model, _ = mini_model_factory()
-    assert num_weights(model) == 1538
+
+    if model.config.prefix_token_map is not None:
+        assert num_weights(model) == 9538
+    else:
+        assert False, "unreachable"

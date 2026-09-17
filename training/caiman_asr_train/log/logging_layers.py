@@ -2,7 +2,7 @@ import math
 
 from beartype import beartype
 from beartype.typing import List, Optional, Tuple
-from torch.cuda.amp import GradScaler
+from torch.amp import GradScaler
 
 from caiman_asr_train.train_utils.distributed import print_once, unwrap_ddp
 
@@ -18,7 +18,13 @@ def get_logging_entries(
     - log base 2 of the GradScaler's scale
     """
     # Record before the optimizer step because it may get changed
-    log2_scaler = 0.0 if scaler is None else math.log2(scaler.get_scale())
+    if scaler is None:
+        log2_scaler = 0.0
+    else:
+        scale = scaler.get_scale()
+        # After enough consecutive overflow backoffs the scale can underflow
+        # float32 to exactly 0.0; math.log2(0) would raise and kill the run.
+        log2_scaler = math.log2(scale) if scale > 0 else float("-inf")
     total_norm = 0.0
     tb_per_layer_logs = []
     try:

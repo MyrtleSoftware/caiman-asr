@@ -69,7 +69,7 @@ __global__ void batched_logsumexp_kernel(
     uint32_t stride,
     O* __restrict__ out //
 ) {
-  T const* my_in = in + blockIdx.x * stride;
+  T const* my_in = in + (uint64_t(blockIdx.x) * uint64_t(stride));
 
   uint32_t tid = threadIdx.x;
 
@@ -193,6 +193,12 @@ torch::Tensor batched_logsumexp(torch::Tensor in, uint32_t max_threads, bool pro
 
   TORCH_CHECK(in.stride(1) == 1, "input must be contiguous in the last dimension");
   TORCH_CHECK(in.stride(0) >= in.size(1), "input tensor must not alias itself");
+
+  constexpr uint64_t lim = std::numeric_limits<uint32_t>::max();
+
+  TORCH_CHECK(in.size(0) <= lim, "Too many batches");
+  TORCH_CHECK(in.size(1) <= lim, "Dimension too large");
+  TORCH_CHECK(in.stride(0) <= lim, "Stride too large");
 
   uint32_t const batches = in.size(0);
   uint32_t const n = in.size(1);

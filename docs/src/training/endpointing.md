@@ -8,16 +8,23 @@ Add an EOS token definition to your model config, we suggest using `<EOS>`, see 
 
 ### Generating segmented transcripts
 
-To convert a regular dataset to a segmented dataset use the `eos_add.py` script:
+To convert a lhotse dataset to a segmented dataset use the `eos_add.py` script:
 
 ```sh
 python scripts/eos_add.py \
-    --data_dir=/datasets/Unsegmented \
-    --output_dir=/datasets/Segmented \
-    --manifests man1.json man2.json etc.json
+    --manifests /path/to/shar/manifest1 /path/to/shar/manifest2 /path/to/shar/manifestn \
+	--output_dirs /path/to/output/for/manifest1 /path/to/output/for/manifest2 /path/to/output/for/manifestn
 ```
 
 This will use the [wtpsplit](https://github.com/segment-any-text/wtpsplit) model family to add EOS tokens to your training manifest. This may take several hours depending on the size of your dataset and hardware.
+By default, this will use the "text" in each supervision for endpointing. To use a different field use `--transcript_field`
+
+```sh
+python scripts/eos_add.py \
+    --manifests /path/to/shar/manifest1 /path/to/shar/manifest2 /path/to/shar/manifestn \
+	--output_dirs /path/to/output/for/manifest1 /path/to/output/for/manifest2 /path/to/output/for/manifestn \
+	--transcript_field <transcript-field-name>
+```
 
 ### Tokenizer with EOS support
 

@@ -22,7 +22,7 @@ TIMESTAMP=$(date '+%Y_%m_%d_%H_%M_%S')
 
 ARGS+=" --timestamp=$TIMESTAMP"
 # the following args are ignored by val_multiple.py but are 'required' as we reuse the val args so
-ARGS+=" --dataset_dir=/tmp"
+ARGS+=" --val_dataset_dir=/tmp"
 ARGS+=" --val_manifests=/tmp"
 
 ${PYTHON_COMMAND} "$@" $ARGS

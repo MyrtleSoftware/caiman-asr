@@ -22,15 +22,24 @@ from caiman_asr_train.data.text.normalizers import lowercase_normalize
 
 
 @beartype
-def normalize_list(transcripts, charset: list[str], quiet: bool = False):
-    return [lowercase_normalize(t, charset=charset, quiet=quiet) for t in transcripts]
+def normalize_list(
+    transcripts, charset: list[str], lang_code: str, quiet: bool = False
+):
+    return [
+        lowercase_normalize(t, charset=charset, lang_code=lang_code, quiet=quiet)
+        for t in transcripts
+    ]
 
 
 @beartype
-def normalize_by_line(text, charset: list[str], quiet: bool = False):
+def normalize_by_line(text, charset: list[str], lang_code: str, quiet: bool = False):
     """Split text at \n, clean each line,
     and then glue together with spaces.
     Hence most of the document will be normalized
     even if one line is unnormalizable
     and needs to be deleted"""
-    return " ".join(normalize_list(text.split("\n"), charset=charset, quiet=quiet))
+    return " ".join(
+        normalize_list(
+            text.split("\n"), charset=charset, lang_code=lang_code, quiet=quiet
+        )
+    )

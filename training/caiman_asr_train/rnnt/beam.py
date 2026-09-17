@@ -29,6 +29,8 @@ from beartype import beartype
 from beartype.typing import Dict, Generator, List, Optional, Tuple, Union, ValuesView
 from sentencepiece import SentencePieceProcessor as SPP
 
+from caiman_asr_train.core.batches import BatchFirst, TimeFirst
+from caiman_asr_train.core.model import Hidden, StatePred
 from caiman_asr_train.keywords.process import load_keywords
 from caiman_asr_train.lm.kenlm_ngram import KenLmModel, NgramInfo
 from caiman_asr_train.rnnt.decoder import RNNTCommonDecoder
@@ -36,12 +38,12 @@ from caiman_asr_train.rnnt.eos_strategy import EOSPredict, EOSStrategy
 from caiman_asr_train.rnnt.hypothesis import (
     SPU_UNICODE,
     Hypothesis,
-    init_prefix_hyp,
-    init_sos_hyp,
+    init_hyp,
 )
 from caiman_asr_train.rnnt.model import RNNT
 from caiman_asr_train.rnnt.response import FrameResponses
 from caiman_asr_train.rnnt.serialise_responses import ResponseSerializer
+from caiman_asr_train.utils.prefix import broadcast_prefix
 
 
 @beartype
@@ -225,25 +227,21 @@ class RNNTBeamDecoder(RNNTCommonDecoder):
         self.return_partials = return_partials
 
     @torch.no_grad()
-    def _inner_decode(
-        self, encs: torch.Tensor, encs_len: torch.Tensor
-    ) -> List[Dict[int, FrameResponses]]:
-        training_state = self.model.training
+    def _inner_decode(self, encs: BatchFirst) -> List[Dict[int, FrameResponses]]:
         #
+        training_state = self.model.training
         self.model.eval()
 
-        B, _, _ = encs.shape
+        B, _, _ = encs.data.shape
 
-        thr = [
-            GThread(i, self._gloop(encs[None, i], encs_len[None, i])) for i in range(B)
-        ]
+        thr = [GThread(i, self._gloop(encs.sub_batch(i, i + 1))) for i in range(B)]
 
         pend = [(t, t.gen.send(None)) for t in thr]
         done = {}
 
         while pend:
-            y_pred = []
-            n_pred = []
+            n_seq = []
+            y_seq = []
 
             for t, res in pend:
                 match res:
@@ -251,28 +249,29 @@ class RNNTBeamDecoder(RNNTCommonDecoder):
                         done[t.idx] = responses
 
                     case Work(hyp, enc):
-                        if hyp.pred_state is None:
-                            n_pred.append((t, hyp, enc))
+                        if hyp.y_seq[-1] != -1:
+                            # SOS handling
+                            y_seq.append((t, hyp, enc))
                         else:
-                            y_pred.append((t, hyp, enc))
+                            n_seq.append((t, hyp, enc))
 
                     case _:
                         raise ValueError("Unexpected result")
 
             pend = []
 
-            def ingest(batch, has_pred_state):
+            def ingest(batch, has_ys):
                 if not batch:
                     return
 
-                outs = self._batched_decode_step(encs, batch, has_pred_state)
+                outs = self._batched_decode_step(encs, batch, has_ys)
 
                 pend.extend(
                     (t, t.gen.send(pack)) for (t, _, _), pack in zip(batch, outs)
                 )
 
-            ingest(n_pred, False)
-            ingest(y_pred, True)
+            ingest(y_seq, True)
+            ingest(n_seq, False)
 
         self.model.train(training_state)
 
@@ -298,7 +297,7 @@ class RNNTBeamDecoder(RNNTCommonDecoder):
 
         return silence >= self.eos_vad_threshold
 
-    def _gloop(self, encs: torch.Tensor, encs_len: torch.Tensor) -> Generator:
+    def _gloop(self, encs: BatchFirst) -> Generator:
         """
         Run decoding loop given encoder features.
 
@@ -308,14 +307,15 @@ class RNNTBeamDecoder(RNNTCommonDecoder):
         blank_tensor = torch.tensor([self.blank_idx], device="cpu", dtype=torch.long)
 
         if self.prefix_token_ids:
-            _, (h, c), _ = self._pred_step_with_prefix(
-                device=encs.device, batch_size=1, beam=True
-            )
-            sos_hyp = init_prefix_hyp(
-                self._SOS, self.prefix_token_ids, self.ngram_lm, (h, c), self.detokenize
-            )
+            prefix = broadcast_prefix(self.prefix_token_ids, 1, encs.data.device)
         else:
-            sos_hyp = init_sos_hyp(self._SOS, self.ngram_lm)
+            prefix = None
+
+        sos_state = self.model.sos_for(1)
+
+        _, state = self.model.predict(state=sos_state, prefix=prefix, tokens=None)
+
+        sos_hyp = init_hyp(self.prefix_token_ids, self.ngram_lm, state)
 
         kept_hyps = {sos_hyp.hashval: sos_hyp}
 
@@ -323,7 +323,7 @@ class RNNTBeamDecoder(RNNTCommonDecoder):
 
         last_final_idx = 0
 
-        for time_idx in range(encs_len.max()):
+        for time_idx in range(encs.lens.max()):
             # Stop if the length of the best hypothesis exceeds max_symbol_per_sample
             if self.max_symbol_per_sample is not None:
                 max_hyp = max(kept_hyps.values(), key=lambda x: x.score)
@@ -331,7 +331,7 @@ class RNNTBeamDecoder(RNNTCommonDecoder):
                     break
 
             # encs_t is the acoustic encoding for this timestep, shape (batch, 1, enc_dim)
-            encs_t = encs[:, None, time_idx, :]
+            encs_t = encs.data[:, None, time_idx, :]
 
             kept_hyps = yield from self._beam_run_timestep(
                 encs_t, kept_hyps, time_idx, blank_tensor
@@ -478,7 +478,7 @@ class RNNTBeamDecoder(RNNTCommonDecoder):
         kept_hyps: Dict[int, Hypothesis],
         hyps: Dict[int, Hypothesis],
         time_idx: int,
-        pred_state_prime: Optional[Tuple[torch.Tensor, torch.Tensor]],
+        pred_state_prime: StatePred,
     ) -> Tuple[Dict[int, Hypothesis], Dict[int, Hypothesis]]:
         """
         Create a new hypothesis and update the beam
@@ -541,20 +541,16 @@ class RNNTBeamDecoder(RNNTCommonDecoder):
 
     def _batched_decode_step(
         self,
-        encs: torch.Tensor,
+        encs: BatchFirst,
         batch: List[Tuple[GThread, Hypothesis, torch.Tensor]],
-        has_pred_state: bool,
-    ) -> List[
-        Tuple[
-            torch.Tensor, torch.Tensor, torch.Tensor, Tuple[torch.Tensor, torch.Tensor]
-        ]
-    ]:
+        has_ys: bool,
+    ) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor, StatePred]]:
         """
         Run predict and joint steps for a batch of hypotheses and
         package the results into packets for each generator.
         """
 
-        log_p, h, c = self._batched_decode(encs, batch, has_pred_state)
+        log_p, state = self._batched_decode(encs, batch, has_ys)
 
         top_k_score, top_k_idx = log_p.topk(self.beam_width, dim=1)
         max_score, _ = top_k_score.max(dim=1, keepdim=True)
@@ -569,71 +565,70 @@ class RNNTBeamDecoder(RNNTCommonDecoder):
         top_k_score, top_k_idx = top_k_score[keep].cpu(), top_k_idx[keep].cpu()
         blank_p = log_p[:, self.blank_idx].cpu().unbind()
 
-        hs = h.unsqueeze(2).unbind(1)
-        cs = c.unsqueeze(2).unbind(1)
+        hs = state.state.hidd.unsqueeze(2).unbind(1)
+        cs = state.state.cell.unsqueeze(2).unbind(1)
+        es = state.embed.unsqueeze(2).unbind(1)
 
         # Process into packets
 
-        packets = []
-
-        if has_pred_state:
-            for h, c, ps, lo, hi in zip(hs, cs, blank_p, offsets[:-1], offsets[1:]):
-                packets.append((top_k_score[lo:hi], top_k_idx[lo:hi], ps, (h, c)))
-        else:
-            for ps, lo, hi in zip(blank_p, offsets[:-1], offsets[1:]):
-                packets.append((top_k_score[lo:hi], top_k_idx[lo:hi], ps, (h, c)))
-
-        return packets
+        return [
+            (top_k_score[lo:hi], top_k_idx[lo:hi], ps, StatePred(Hidden(h, c), e))
+            for e, h, c, ps, lo, hi in zip(
+                es, hs, cs, blank_p, offsets[:-1], offsets[1:]
+            )
+        ]
 
     def _batched_decode(
         self,
-        encs: torch.Tensor,
+        encs: BatchFirst,
         batch: List[Tuple[GThread, Hypothesis, torch.Tensor]],
-        has_pred_state: bool,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        has_ys: bool,
+    ) -> Tuple[torch.Tensor, StatePred]:
         """
         Run predict and joint steps for a batch of hypotheses.
         """
-        f, y, state = self._collate(encs.device, batch, has_pred_state)
+        f, y, state = self._collate(encs.data.device, batch, has_ys)
 
-        g, (h, c), _ = self._pred_step_raw(y, state)
+        g, state = self.model.predict(state=state, prefix=None, tokens=y)
+        assert state is not None
 
-        log_p = self._joint_step(
-            f,
-            g,
-            fuzzy=self.fuzzy_topk_logits,
-        )
+        # Ignore the SoS
+        g.data = g.data[-1:]
 
-        return log_p, h, c
+        log_p = self._joint_step(f, g.T.data, fuzzy=self.fuzzy_topk_logits)
+
+        return log_p, state
 
     def _collate(
         self,
         device,
         batch: List[Tuple[GThread, Hypothesis, torch.Tensor]],
-        has_pred_state: bool,
-    ) -> Tuple[
-        torch.Tensor,
-        Optional[torch.Tensor],
-        Optional[Tuple[torch.Tensor, torch.Tensor]],
-    ]:
+        has_ys: bool,
+    ) -> Tuple[torch.Tensor, Optional[TimeFirst], StatePred]:
         """
         Stitch together y_last values and hidden states for batched evaluation.
         """
         f = torch.cat([enc for _, _, enc in batch], dim=0)
 
-        if has_pred_state:
-            # Collate y_last values (shape (B, U=1))
-            y = torch.tensor(
-                [[h.y_last] for _, h, _ in batch], dtype=torch.long, device=device
-            )
+        if has_ys:
+            # Collate y_last values (shape (U=1, B))
+            y = BatchFirst(
+                torch.tensor(
+                    [[h.y_last] for _, h, _ in batch], dtype=torch.long, device=device
+                ),
+                torch.tensor([1] * len(batch), dtype=torch.long, device=device),
+            ).T
+        else:
+            y = None
 
-            # Collate hidden states (shape (L, B, H))
-            h = torch.cat([s.pred_state[0] for _, s, _ in batch], dim=1)
-            c = torch.cat([s.pred_state[1] for _, s, _ in batch], dim=1)
+        # Collate hidden states (shape (L, B, H))
+        h = torch.cat([s.pred_state.state.hidd for _, s, _ in batch], dim=1)
+        c = torch.cat([s.pred_state.state.cell for _, s, _ in batch], dim=1)
 
-            return f, y, (h, c)
+        # Collate hidden states (shape (T, B, H))
+        e = torch.cat([s.pred_state.embed for _, s, _ in batch], dim=1)
 
-        return f, None, None
+        return f, y, StatePred(Hidden(h, c), e)
 
     def _keyword_correction(self, new_hyp: Hypothesis) -> Hypothesis:
         """

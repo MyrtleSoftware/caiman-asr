@@ -12,70 +12,44 @@ The WERs in the following section are for models trained on 154k hours of mostly
 
 The UPL were computed by streaming librispeech-dev-clean audio live to an FPGA backend server on-site. Please refer to this [document](./inference/user_perceived_latency.md) for more details on latencies.
 
-## Without state resets
+## Monolingual
 
 <!-- These use a language model for beam because it doesn't slow down inference-->
 
-<!-- All WERs with <nopnc> prefix -->
+<!-- All WERs with <nopnc> prefix, inf_mode=default -->
 
-The solution supports decoding with a [beam search](./training/beam_decoder.md) (default beam width=4) with an [n-gram language model](./training/ngram_lm.md) for improved accuracy. The solution supports greedy decoding for higher throughput.
+The solution supports decoding with a [beam search](./training/beam_decoder.md)
+(default beam width=4) with an [n-gram language model](./training/ngram_lm.md)
+for improved accuracy. The solution supports greedy decoding for higher
+throughput.
 
-| Model   | Parameters | Decoding          | RTS  | CL99 at max RTS | median UPL | HF Leaderboard WER | Earnings21 WER |
-| ------- | ---------- | ----------------- | ---- | --------------- | ---------- | ------------------ | -------------- |
-| `base`  | 85M        | `greedy`          | 2000 | 25 ms           | 147 ms     | 10.43%             | 20.87%         |
-| `base`  | 85M        | `beam`, `width=4` | 1300 | 80 ms           | -          | 9.03%              | 14.09%         |
-| `large` | 196M       | `greedy`          | 800  | 25 ms           | -          | 8.99%              | 34.26%         |
-| `large` | 196M       | `beam`, `width=4` | 500  | 40 ms           | 158 ms     | 7.92%              | 23.74%         |
+Note: RTS has two values, the first/larger is without state resetting and the
+latter/smaller is with state resetting. State resets is a technique that
+improves the accuracy on long utterances (over 60s) by resetting the model's
+hidden state after a fixed duration. This reduces the number of real-time
+streams that can be supported by around 25%. All the datasets in the
+HuggingFace benchmark ase sufficienatly short that state resets have only a
+minor (i.e. \<.2%) effect on WER.
 
-## State resets
+| Model   | Parameters | Decoding          | RTS       | CL99 at max RTS | median UPL | HF Leaderboard WER |
+| ------- | ---------- | ----------------- | --------- | --------------- | ---------- | ------------------ |
+| `base`  | 85M        | `greedy`          | 2000/1600 | 25 ms           | 147 ms     | 10.34%             |
+| `base`  | 85M        | `beam`, `width=4` | 1300/1200 | 80 ms           | -          | 9.02%              |
+| `large` | 196M       | `greedy`          | 800/650   | 25 ms           | -          | 9.07%              |
+| `large` | 196M       | `beam`, `width=4` | 500/400   | 40 ms           | 158 ms     | 8.12%              |
 
-<!-- These use a language model for beam because it doesn't slow down inference-->
+UPL numbers were computed from librispeech-dev-clean, the effect of state resets is not reflected in measured latencies.
 
-State resets is a technique that improves the accuracy on long utterances (over 60s) by resetting the model's hidden state after a fixed duration. This reduces the number of real-time streams that can be supported by around 25%:
+Monolingual models are fine-tuned variants of the multilingual models.
 
-| Model   | Parameters | Decoding          | RTS  | CL99 at max RTS | median UPL | HF Leaderboard WER | Earnings21 WER |
-| ------- | ---------- | ----------------- | ---- | --------------- | ---------- | ------------------ | -------------- |
-| `base`  | 85M        | `greedy`          | 1600 | 45 ms           | 147 ms     | 10.43%             | 15.41%         |
-| `base`  | 85M        | `beam`, `width=4` | 1200 | 50 ms           | -          | 9.02%              | 12.87%         |
-| `large` | 196M       | `greedy`          | 650  | 55 ms           | -          | 8.99%              | 13.54%         |
-| `large` | 196M       | `beam`, `width=4` | 400  | 60 ms           | 158 ms     | 7.93%              | 11.37%         |
+## Multilingual
 
-Note that most of the data in the HuggingFace Leaderboard is less than 60s long so the impact of state resets is not reflected in the leaderboard WER.
-The average duration of audio in Earnings21 is ~54 minutes, making it a more representative benchmark for evaluating the impact of state resets on long-form transcription accuracy.
+| Model   | Parameters | Decoding          | En     | Fr     | Es     | De     | It     | Pt     |
+| ------- | ---------- | ----------------- | ------ | ------ | ------ | ------ | ------ | ------ |
+| `base`  | 85M        | `greedy`          | 12.73% | 16.25% | 12.06% | 15.87% | 16.24% | 20.95% |
+| `base`  | 85M        | `beam`, `width=4` | 10.94% | 14.13% | 10.27% | 14.01% | 14.44% | 18.23% |
+| `large` | 196M       | `greedy`          | 11.06% | 13.46% | 9.48%  | 12.81% | 13.93% | 16.66% |
+| `large` | 196M       | `beam`, `width=4` | 9.73%  | 11.82% | 8.39%  | 11.71% | 12.56% | 14.93% |
 
-Since the UPL numbers were computed from librispeech-dev-clean, the effect of state resets is not reflected in measured latencies.
-
-## WER test set breakdown
-
-The WER breakdown across the HuggingFace Leaderboard is shown for the 'highest-throughput' and 'most-accurate' configurations in the table below:
-
-<!-- highest-throughput: base-ekans, greedy, sr=off -->
-
-<!-- most-accurate: large-arbok. beam=4, sr=off -->
-
-| Model Configuration | AVERAGE | AMI    | E22 (segmented) | Gigaspeech | LS test clean | LS test other | SPGISpeech | TED-LIUM | VoxPopuli |
-| ------------------- | ------- | ------ | --------------- | ---------- | ------------- | ------------- | ---------- | -------- | --------- |
-| base (greedy)       | 10.43%  | 14.82% | 17.36%          | 14.41%     | 3.83%         | 9.38%         | 6.06%      | 6.78%    | 10.83%    |
-| large (beam=4)      | 7.92%   | 11.46% | 13.24%          | 11.52%     | 2.59%         | 6.66%         | 4.38%      | 4.95%    | 8.53%     |
-
-## 154k hour dataset <a name="13k_hrs"></a>
-
-The models above were trained on 154k hrs of mostly open-source training data consisting of:
-
-- Emilia-YODAS: 93k hours of YODAS; filtered and transcribed with Emilia-Pipe.
-- YODAS: 19k hour subset of YODAS manual English subset filtered for transcription quality.
-- Peoples' Speech: A 9.4k hour subset filtered for transcription quality.
-- Unsupervised Peoples' Speech: A 17k hour subset of unsupervised Peoples' Speech; automatically labelled.
-- NPTEL: 570 hour subset of NPTEL2000, filtered for transcription quality.
-- VoxPopuli: 500 hours.
-- Unsupervised VoxPopuli: 8.6k hrs subset of unsupervised VoxPopuli; automatically labelled.
-- National Speech Corpus: 980 hour subset; automatically labelled and filtered for transcription quality.
-- LibriSpeech: 960 hours.
-- Common Voice 17.0: 1.7k hours
-- MLS: 961 hours.
-- Spoken Wikipedia Corpora: 350 hours.
-- AMI: 155 hours.
-
-Additionally, we used 550 hrs of TTS-generated speech data targeting virtual assistant use cases.
-
-This data has a `maximum_duration` of 20s.
+- The RTM/CL99 are the same as the above monolingual table but omitted for space.
+- The WER's are against the HF leader board datasets

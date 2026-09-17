@@ -66,6 +66,12 @@ def caiman_parser():
         nargs="+",
         help="List of keywords to be boosted.",
     )
+    parser.add_argument(
+        "--lang_code",
+        type=str,
+        required=True,
+        help="ISO language code to use for normalization",
+    )
     shared_args(parser)
     return parser
 
@@ -287,8 +293,8 @@ def main(args):
         hyp_ctm = transcriber.trans_to_ctm(manifest)
         hyp_ctm.to_file(hyp_ctm_fpath)
         ref_ctm = CTM.from_file(ref_ctm_fpath)
-        latency_metrics, utt_stats = calculate_latency(ref_ctm, hyp_ctm)
-        wer_metrics = calculate_wer(ref_ctm, hyp_ctm)
+        latency_metrics, utt_stats = calculate_latency(ref_ctm, hyp_ctm, args.lang_code)
+        wer_metrics = calculate_wer(ref_ctm, hyp_ctm, args.lang_code)
         save_results_to_csv(
             wer_metrics,
             latency_metrics,

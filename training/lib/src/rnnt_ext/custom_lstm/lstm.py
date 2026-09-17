@@ -11,7 +11,7 @@ from torch import Tensor as Ten
 class Function(torch.autograd.Function):
     @staticmethod
     @torch.autograd.function.once_differentiable
-    @torch.cuda.amp.custom_fwd
+    @torch.amp.custom_fwd(device_type="cuda")
     @beartype
     def forward(
         ctx,
@@ -94,7 +94,7 @@ class Function(torch.autograd.Function):
 
     @staticmethod
     @torch.autograd.function.once_differentiable
-    @torch.cuda.amp.custom_bwd
+    @torch.amp.custom_bwd(device_type="cuda")
     @beartype
     def backward(
         ctx,
@@ -230,9 +230,16 @@ class Layer(torch.nn.Module):
         """
 
         # Tensor float is enabled by default for cudnn, so mirror that here.
-        cache_tf32 = torch.backends.cuda.matmul.allow_tf32
 
-        torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32
+        if hasattr(torch.backends.cuda.matmul, "fp32_precision"):
+            attr = "fp32_precision"
+        else:
+            attr = "allow_tf32"
+
+        cache_fp32 = getattr(torch.backends.cuda.matmul, attr)
+        cudnn_fp32 = getattr(torch.backends.cudnn, attr)
+
+        setattr(torch.backends.cuda.matmul, attr, cudnn_fp32)
 
         h, c = self.layer_fun(
             *state,
@@ -243,7 +250,7 @@ class Layer(torch.nn.Module):
             self.bias_hh,
         )
 
-        torch.backends.cuda.matmul.allow_tf32 = cache_tf32
+        setattr(torch.backends.cuda.matmul, attr, cache_fp32)
 
         return h, c
 

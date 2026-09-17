@@ -32,6 +32,7 @@ done
 : ${TTY=true}
 : ${HF_CACHE:="$HOME/.cache/huggingface"}
 : ${MYRTLE_CACHE:="$HOME/.cache/myrtle"}
+: ${TILELANG_CACHE:="$HOME/.tilelang/cache"}
 : ${PORTS:=""}
 
 DOCKER_ARGS=""
@@ -40,7 +41,7 @@ if [ "$TTY" = true ]; then
 	DOCKER_ARGS+="-t "
 fi
 
-DOCKER_ARGS+="-i --rm --gpus=all --shm-size=4g --ulimit memlock=-1 --ulimit stack=67108864 "
+DOCKER_ARGS+="-i --rm --gpus=all --shm-size=32g --ulimit memlock=-1 --ulimit stack=67108864 "
 DOCKER_ARGS+="-v $CHECKPOINTS:/checkpoints/ "
 DOCKER_ARGS+="-v $RESULTS:/results/ "
 DOCKER_ARGS+="-v $PWD:/code "
@@ -53,8 +54,25 @@ DOCKER_ARGS+=" -v $hf_cache_volume "
 myrtle_cache_volume="$MYRTLE_CACHE:/root/.cache/myrtle"
 DOCKER_ARGS+=" -v $myrtle_cache_volume "
 
+# Keep compiled tilelang kernels (and the autotune bench cache) across containers.
+# Pre-create the host dir so it stays user-owned (docker would make it root-owned).
+mkdir -p "$TILELANG_CACHE"
+tilelang_cache_volume="$TILELANG_CACHE:/root/.tilelang/cache"
+DOCKER_ARGS+=" -v $tilelang_cache_volume "
+
 DOCKER_ARGS+="$EXTRA_VOLUMES $volumes "
 DOCKER_ARGS+="-e TZ=$(cat /etc/timezone) "
+# The container runs as root and mounts the repo, so any .pyc / cache it writes into
+# the mounted tree is root-owned and the unprivileged CI runner can't clean it -- a
+# later actions/checkout then fails to remove it (EACCES). Don't write bytecode at all,
+# and keep pytest's cache and hypothesis's example database in the container's
+# ephemeral /tmp rather than the mount (hypothesis writes to $CWD/.hypothesis by
+# default, independently of pytest's cache_dir).
+DOCKER_ARGS+="-e PYTHONDONTWRITEBYTECODE=1 "
+DOCKER_ARGS+="-e HYPOTHESIS_STORAGE_DIRECTORY=/tmp/hypothesis "
+# PYTEST_ADDOPTS may grow spaces, and DOCKER_ARGS is expanded unquoted -- pass it
+# as a separately quoted -e at the `docker run` call below.
+PYTEST_ENV="PYTEST_ADDOPTS=${PYTEST_ADDOPTS:+$PYTEST_ADDOPTS }--override-ini=cache_dir=/tmp/pytest_cache"
 
 if [ "$USER" == 'root' ]; then
 	container_owner="$SUDO_USER"
@@ -73,11 +91,14 @@ if [ -n "${PORTS}" ]; then
 	DOCKER_ARGS+="-p $PORTS "
 fi
 
-if [ -n "$JENKINS_JOB" ]; then
-	DOCKER_ARGS+="--name $JENKINS_JOB "
+# Name the container (Jenkins sets JENKINS_JOB, GitHub CI sets CI_CONTAINER) so
+# that cleanup can `docker rm -f` it if the job is cancelled mid-run.
+: "${CI_CONTAINER:=${JENKINS_JOB:-}}"
+if [ -n "$CI_CONTAINER" ]; then
+	DOCKER_ARGS+="--name $CI_CONTAINER "
 fi
 
 # Symlink to /datasets to preserve relative symlinks between drives
 LINK="ln -s $DATASETS /datasets"
 
-docker run ${DOCKER_ARGS} ${DOCKER_NAME} sh -c "/workspace/training/scripts/docker/settimezone.sh && $LINK && $COMMAND"
+docker run ${DOCKER_ARGS} -e "$PYTEST_ENV" ${DOCKER_NAME} sh -c "/workspace/training/scripts/docker/settimezone.sh && $LINK && $COMMAND"

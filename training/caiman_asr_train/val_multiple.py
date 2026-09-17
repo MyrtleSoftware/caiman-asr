@@ -26,7 +26,6 @@ def add_val_multiple_args_in_place(parser: ArgumentParser) -> None:
             "will have no effect in this script"
         ),
         nargs="+",
-        required=True,
     )
     val_multiple.add_argument(
         "--all_val_manifests",
@@ -36,7 +35,6 @@ def add_val_multiple_args_in_place(parser: ArgumentParser) -> None:
             "effect in this script"
         ),
         nargs="+",
-        required=True,
     )
     val_multiple.add_argument(
         "--custom_batch_sizes",
@@ -76,6 +74,11 @@ def check_val_multiple_args(args: Namespace):
     if args.num_gpus > 1:
         assert not args.cpu, "Cannot use --cpu with multiple processes"
 
+    if args.all_val_manifests is None or args.all_dataset_dirs is None:
+        raise ValueError(
+            "Missing required args '--all_val_manifests' or --all_dataset_dirs'"
+        )
+
     if len(args.all_val_manifests) != len(args.all_dataset_dirs):
         raise ValueError(
             f"'--all_val_manifests'={args.all_val_manifests} and "
@@ -110,7 +113,7 @@ def validate_multiple(args: Namespace):
             f"Attempting to overwrite {results_fp}. Either pass a new --output_dir "
             "or, if overwriting is the intended behaviour, pass --overwrite_ok"
         )
-    results_fp.parent.mkdir(exist_ok=True)
+    results_fp.parent.mkdir(exist_ok=True, parents=True)
 
     for manifest, dataset_dir in zip(
         args.all_val_manifests, args.all_dataset_dirs, strict=True
@@ -145,7 +148,7 @@ def validate_multiple(args: Namespace):
 
         val_args = copy(args)
         val_args.val_manifests = [manifest]
-        val_args.dataset_dir = dataset_dir
+        val_args.val_dataset_dir = dataset_dir
         val_args.val_batch_size = batch_size
         val_args.output_dir = str(output_dir)
         val_args.skip_init = skip_init
@@ -154,7 +157,7 @@ def validate_multiple(args: Namespace):
         val_objects = setup_class().run(val_args)
         model_results = validate(val_args, val_objects=val_objects)
 
-        manifest_path = Path(val_args.dataset_dir) / manifest
+        manifest_path = Path(val_args.val_dataset_dir) / manifest
 
         all_results[str(manifest_path)] = model_results
 
@@ -191,14 +194,20 @@ def validate_multiple(args: Namespace):
         "keyword_metrics",
     ]
 
+    # Create final json structure with all args listed at the top level and the
+    # actual results contained under datasets -> [dataset name] -> [metric name].
+    # NB pnc/no_pnc configuration is under "prefix"
     out_json = {
-        val_dataset: {
-            metric: val_results[metric] for metric in out_keys if metric in val_results
-        }
-        for val_dataset, val_results in all_results.items()
+        **args.__dict__,
+        "datasets": {
+            val_dataset: {
+                metric: val_results[metric]
+                for metric in out_keys
+                if metric in val_results
+            }
+            for val_dataset, val_results in all_results.items()
+        },
     }
-
-    out_json["args"] = args.__dict__
 
     with results_fp.open("w") as f:
         json.dump(out_json, f, indent=2)
@@ -254,7 +263,6 @@ def write_csv(abbrev, results_csv_fp, all_results):
         writer.writeheader()
 
         writer.writerow(to_row(abbrev, lambda x: x[abbrev]))
-
         writer.writerow(to_row_from_latency("median-emission-latency"))
         writer.writerow(to_row_from_latency("p90-emission-latency"))
         writer.writerow(to_row_from_latency("p99-emission-latency"))
@@ -270,7 +278,7 @@ def write_csv(abbrev, results_csv_fp, all_results):
         writer.writerow(to_row_from_timestamp("optimal_head_offset"))
         writer.writerow(to_row_from_timestamp("optimal_tail_offset"))
 
-        writer.writerow(to_row("per", lambda x: x["per"]))
+        writer.writerow(to_row("per", lambda x: x.get("per", float("nan"))))
 
         writer.writerow(to_row_from_keyword("b_wer"))
         writer.writerow(to_row_from_keyword("u_wer"))

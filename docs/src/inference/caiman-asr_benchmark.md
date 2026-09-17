@@ -27,13 +27,13 @@ The script to run CAIMAN-ASR evaluation is `transcribe_caiman.py`. It is compose
 Running the command will perform all 3 steps.
 
 ```bash
-./transcribe_caiman.py --address <ADDRESS> --port <PORT> --run_name <unique name> --append_results caiman-base
+./transcribe_caiman.py --address <ADDRESS> --port <PORT> --run_name <unique name> --append_results caiman-base --lang_code <lang-code>
 ```
 
 And if you installed using Docker, instead run:
 
 ```bash
-./launch.bash ./transcribe_caiman.py --address <ADDRESS> --port <PORT> --run_name <unique name> --append_results caiman-base
+./launch.bash ./transcribe_caiman.py --address <ADDRESS> --port <PORT> --run_name <unique name> --append_results caiman-base --lang_code <lang-code>
 ```
 
 where `--address` is the websocket address of transcription service and `--port` is the port.
@@ -58,7 +58,7 @@ so the script will automatically skip this step if the data exists.
 If you want to redo the data preparation step anyway, pass the `--force_data_prep` flag.
 
 ```bash
-./transcribe_caiman.py --address <ADDRESS> --port <PORT> --force_data_prep --run_name <unique name> --append_results caiman-base
+./transcribe_caiman.py --address <ADDRESS> --port <PORT> --force_data_prep --run_name <unique name> --append_results caiman-base --lang_code <lang-code>
 ```
 
 ### Transcription
@@ -70,13 +70,13 @@ which will happen if you run the script another time with the same `run_name`.
 This behavior can be changed by passing the `--force_transcription` flag, and all files will be transcribed from scratch and existing transcription files will be overwritten.
 
 ```bash
-./transcribe_caiman.py --address <ADDRESS> --port <PORT> --force_transcription --run_name <name of previous run> --append_results caiman-base
+./transcribe_caiman.py --address <ADDRESS> --port <PORT> --force_transcription --run_name <name of previous run> --append_results caiman-base --lang_code <lang-code>
 ```
 
 The transcription step can be skipped by running the `transcribe_caiman.py` and passing the `--skip_transcription` flag.
 
 ```bash
-./transcribe_caiman.py --address <ADDRESS> --port <PORT> --skip_transcription --run_name <name of previous run> --append_results caiman-base
+./transcribe_caiman.py --address <ADDRESS> --port <PORT> --skip_transcription --run_name <name of previous run> --append_results caiman-base --lang_code <lang-code>
 ```
 
 ### Evaluation
@@ -84,7 +84,7 @@ The transcription step can be skipped by running the `transcribe_caiman.py` and 
 This step takes generated trans files, aggregates them to a single `librispeech-dev-clean.caiman-asr.ctm` file, a ground truth CTM file, and computes the word error rate (WER) and latencies. The evaluation step can be skipped by running the `transcribe_caiman.py` and passing the `--skip_evaluation` flag.
 
 ```bash
-./transcribe_caiman.py --address <ADDRESS> --port <PORT> --skip_evaluation --run_name <unique name> --append_results caiman-base
+./transcribe_caiman.py --address <ADDRESS> --port <PORT> --skip_evaluation --run_name <unique name> --append_results caiman-base --lang_code <lang-code>
 ```
 
 Results will also be saved in `~/.cache/myrtle/benchmark/results/[append_results].csv`.
@@ -99,7 +99,7 @@ Use `--prefix` to condition the RNN-T prediction network:
 For example,
 
 ```bash
-./transcribe_caiman.py --address <ADDRESS> --port <PORT> --run_name <unique name> --append_results caiman-base --prefix="<pnc>"
+./transcribe_caiman.py --address <ADDRESS> --port <PORT> --run_name <unique name> --append_results caiman-base --prefix="<pnc>" --lang_code <lang-code>
 ```
 
 Note: ensure the server is running a model that supports `prefix`.
@@ -113,7 +113,7 @@ by boosting the probability of specific tokens at inference time.
 To provide keywords to the server, use the `--keywords` argument with a space-separated list of keywords e.g.
 
 ```bash
-./transcribe_caiman.py --keywords caiman asr myrtle
+./transcribe_caiman.py --keywords caiman asr myrtle --lang_code <lang-code>
 ```
 
 ### List of arguments
@@ -134,4 +134,5 @@ The arguments for `transcribe_caiman` are as follows:
   Must be one of caiman-base, caiman-large.
 --prefix <STRING_VALUE>: Prefix to condition RNN-T prediction network: "<pnc>" or "<nopnc>".
 --keywords <STRING_VALUE>: Space-separated list of keywords to be boosted.
+--lang_code <STRING_VALUE>: ISO language code to use for normalization of transcripts.
 ```

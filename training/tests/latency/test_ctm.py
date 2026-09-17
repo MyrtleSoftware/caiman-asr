@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from caiman_asr_train.latency import ctm
+from caiman_asr_train.latency.measure_latency import Latencies
 from caiman_asr_train.latency.timestamp import EOS, PerWordTimestamp, SequenceTimestamp
 
 
@@ -114,46 +115,25 @@ def test_get_audio_filenames_from_tar(tmp_path):
     "val_multiple",
     [False, True],
 )
-def test_get_reference_ctms(tmp_path, val_multiple):
+def test_get_reference_manifest_files(tmp_path, val_multiple):
     dataset_dir = tmp_path / "dataset"
     dataset_dir.mkdir()
 
-    manifest = dataset_dir / "val.json"
+    manifest = dataset_dir / "val.cuts.jsonl.gz"
     manifest.write_text("{}")
-    ctm_path = dataset_dir / "val.ctm"
-    ctm_path.write_text("ctm")
 
     args = Namespace(
         read_from_tar=False,
         val_tar_files=[],
-        val_manifests=["val.json"],
-        dataset_dir=str(dataset_dir),
-        all_val_manifests=["val.json"],
+        val_manifests=["val.cuts.jsonl.gz"],
+        val_dataset_dir=str(dataset_dir),
+        all_val_manifests=["val.cuts.jsonl.gz"],
         all_dataset_dirs=[str(dataset_dir)],
     )
 
-    assert ctm.get_reference_ctms(args, val_multiple=val_multiple) == [str(ctm_path)]
-
-
-def test_get_reference_ctms_from_tar(tmp_path):
-    dataset_dir = tmp_path / "tar_dataset"
-    dataset_dir.mkdir()
-
-    tar_name = "data.tar"
-    (dataset_dir / tar_name).write_text("")
-    ctm_file = dataset_dir / "data.ctm"
-    ctm_file.write_text("ctm")
-
-    args = Namespace(
-        read_from_tar=True,
-        val_tar_files=[tar_name],
-        val_manifests=[],
-        dataset_dir=str(dataset_dir),
-        all_val_manifests=[],
-        all_dataset_dirs=[],
-    )
-
-    assert ctm.get_reference_ctms(args) == [str(ctm_file)]
+    assert ctm.get_reference_manifest_files(args, val_multiple=val_multiple) == [
+        str(manifest)
+    ]
 
 
 def test_manage_ctm_export(monkeypatch, tmp_path):
@@ -167,6 +147,7 @@ def test_manage_ctm_export(monkeypatch, tmp_path):
         latency_head_offset=0.0,
         latency_tail_offset=0.0,
         turn_off_initial_padding=False,
+        val_standardizer_lang="en",
     )
 
     sequences = [
@@ -186,20 +167,20 @@ def test_manage_ctm_export(monkeypatch, tmp_path):
         gt_ctm_fpaths,
         produced_ctm,
         last_emit_time,
+        lang_code,
         head_offset,
         tail_offset,
     ):
         captured["produced_ctm"] = produced_ctm
         captured["last_emit_time"] = last_emit_time
-        return (
-            [0.1, 0.2],
-            "unused",
-            [0.3],
-            [0.4],
-            0.8,
-            0.9,
-            {"timestamp_metric": 1.0},
+
+        latencies = Latencies(
+            raw_latency=[0.1, 0.2],
+            fw_latency=[0.15],
+            sil_latency=[0.3],
+            eos_latency=[0.4],
         )
+        return (latencies, "unused", 0.8, 0.9, {"timestamp_metric": 1.0})
 
     monkeypatch.setattr(ctm, "align_ctm_files", fake_align_ctm_files)
     monkeypatch.setattr(
@@ -210,8 +191,6 @@ def test_manage_ctm_export(monkeypatch, tmp_path):
         latency_metrics,
         timestamp_metrics,
         latencies,
-        sil_latency,
-        eos_latency,
     ) = ctm.manage_ctm_export(args, sequences, gt_ctm_files, flist)
 
     ctm_path = Path(args.output_dir) / "first-second_123.ctm"
@@ -226,7 +205,8 @@ def test_manage_ctm_export(monkeypatch, tmp_path):
         "terminal_token_usage_rate": 0.9,
     }
     assert timestamp_metrics == {"timestamp_metric": 1.0}
-    assert latencies == [0.1, 0.2]
-    assert sil_latency == [0.3]
-    assert eos_latency == [0.4]
+    assert latencies.raw_latency == [0.1, 0.2]
+    assert latencies.fw_latency == [0.15]
+    assert latencies.sil_latency == [0.3]
+    assert latencies.eos_latency == [0.4]
     assert ctm_path.exists()

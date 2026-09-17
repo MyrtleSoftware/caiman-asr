@@ -1,32 +1,48 @@
-audiomentations==0.39.0
-beartype==0.15.0
-cerberus==1.3.7
-coverage==7.4.0
-datasets==2.17.1
-einops==0.7.0
+apache-tvm-ffi==0.1.11 # unpinned tilelang dep; 0.1.12 breaks `import tilelang` (duplicate __ffi_repr__ registration)
+audiomentations==0.7.0
+beartype==0.22.5
+Cerberus==1.3.8
+coverage==7.11.3
+datasets>=2.2.1,<=4.4.1 # Need older version in the 24.12 container
+DLLogger @ git+https://github.com/NVIDIA/dllogger@0478734ff7be75adde8d160e04872664d1c62e5f
 filetype==1.2.0
-https://github.com/NVIDIA/dllogger/archive/26a0f8f1958de2c0c460925ff6102a4d2486d6cc.zip
-inflect==4.1.0
-jaxtyping==0.2.25
-jiwer==4.0.0
+inflect==7.5.0
+jaxtyping==0.3.3
+jiwer>=3.0.5
+joblib>=1.4.2 # tilelstm tree-model bundle serialization; already in base image at this version
 kenlm==0.3.0
-levenshtein==0.27.1
-levenshtein_rs==0.1.7
-librosa==0.8.0
-more-itertools==10.2.0
-numpy==1.23
-orjson==3.10.6
-pandas==1.5.3
-pydantic==2.8.2
-pytest==7.2.1
+Levenshtein==0.27.3
+lhotse==1.31.1
+more-itertools==11.1.0
+optuna>=4.8.0
+orjson==3.11.4
+orjsonl==1.0.0
+plotly==6.5.0
+pyicu==2.16.0
+pytest==8.1.1
 qtorch==0.3.0
-ruamel.yaml==0.18.6
-sentencepiece==0.1.96
-snakeviz==2.2.0
-soundfile==0.12.1
-sox==1.4.1
-tensorboard==2.11.2
-text_unidecode==1.3
-wtpsplit==2.0.6
-yappi==1.5.1
+rapidfuzz>=3.14.5
+ruamel.yaml==0.19.1
+sentencepiece>=0.2.1
+smart_open==7.0.4
+snakeviz==2.2.2
+sox==1.5.0
+statsmodels==0.14.6
+text-unidecode==1.3
+tilelang==0.1.11
+torchcodec==0.8.1
+transformers>=4.22.2,<4.57  # 4.57+ imports torchao.prototype.safetensors which doesn't exist in our torchao version
+wtpsplit==2.2.0
+xgboost>=2.1.1 # tilelstm tree-model GBDT ranker;
+yappi==1.7.3
 zmq==0.0.0
+
+# Following are both already in base image but at different versions
+# einops==0.8.1
+# librosa==0.11.0
+# numpy==2.1.0
+# pandas==2.3.3
+# pydantic==2.12.2
+# soundfile==0.13.1
+# tensorboard==2.20.0
+# wrapt==1.17.3

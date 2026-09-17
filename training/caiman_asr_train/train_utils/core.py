@@ -1,26 +1,24 @@
 #!/usr/bin/env python3
 
 import time
-from argparse import Namespace
+from contextlib import contextmanager, nullcontext
 
 import torch
 from beartype import beartype
-from beartype.typing import Callable, Optional, Tuple, Union
-from torch.cuda.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from caiman_asr_train.log.tb_dllogger import log
-from caiman_asr_train.rnnt.loss import ApexTransducerLoss, LossModifiers
-from caiman_asr_train.rnnt.model import RNNT
-from caiman_asr_train.rnnt.model_forward import model_loss_forward_train
-from caiman_asr_train.rnnt.state import RNNTState
-from caiman_asr_train.train_utils.distributed import print_once
 
 
-def is_loss_nan(loss: torch.Tensor, num_gpus: int) -> bool:
-    """When doing distributed training, check for a NaN on any of the GPUs.
+def is_loss_invalid(loss: torch.Tensor, num_gpus: int) -> bool:
+    """
+    Check for a non-finite (NaN or +/-inf) loss, on any GPU when distributed.
 
-    If a single GPU was checked, and some other GPU had a NaN but this GPU
+    An inf loss is just as fatal as a NaN one: backpropagating it produces
+    non-finite gradients, so it must drop the batch the same way (checking
+    only isnan let inf losses through to backward).
+
+    If a single GPU was checked, and some other GPU had a bad loss but this GPU
     hadn't, then the backwards pass would be skipped only on the other GPU.
     That's a problem because the GPUs sync during the backwards pass
     (https://pytorch.org/tutorials/intermediate/ddp_tutorial.html), so the GPUs
@@ -36,67 +34,47 @@ def is_loss_nan(loss: torch.Tensor, num_gpus: int) -> bool:
         # all_gather broadcasts loss to all processes.
         # loss_list receives the loss from all processes.
         torch.distributed.all_gather(loss_list, loss)
-        return any([torch.isnan(loss).any() for loss in loss_list])
+        return any([not torch.isfinite(loss).all() for loss in loss_list])
     else:
-        return torch.isnan(loss).any().item()
+        return not torch.isfinite(loss).all().item()
 
 
-def maybe_autocast(function: Callable, amp: bool):
+def are_losses_invalid(all_finite: torch.Tensor, num_gpus: int) -> bool:
+    if num_gpus > 1:
+        flags = [torch.empty_like(all_finite) for _ in range(num_gpus)]
+        torch.distributed.all_gather(flags, all_finite)
+        all_finite = torch.stack(flags).all()
+
+    return not all_finite.item()
+
+
+@contextmanager
+@beartype
+def autocast_if(amp: bool, device: str = "cuda"):
     """
-    Optionally call function with autocast wrapper.
+    Enable autocast only if condition on x is met.
+
+    Modify `should_autocast` as needed.
     """
-    if amp:
 
-        def auto_cast_wrap(*args, **kwargs):
-            with torch.cuda.amp.autocast():
-                return function(*args, **kwargs)
-
-        return auto_cast_wrap
-    return function
+    with torch.amp.autocast(device) if amp else nullcontext():
+        yield
 
 
-def train_step(
-    model: Union[RNNT, DDP],
-    loss_fn: ApexTransducerLoss,
-    args: Namespace,
-    feats: torch.Tensor,
-    feat_lens: torch.Tensor,
-    txt: torch.Tensor,
-    txt_lens: torch.Tensor,
-    scaler: Optional[GradScaler],
-    rnnt_state: Optional[RNNTState],
-    loss_mods: LossModifiers,
-    # kwargs are for prefix_lens in conditional training
-    # which is not supported when bsf=1
-    **kwargs,
-) -> Tuple[float, bool, Optional[RNNTState]]:
+def sync_ctx(module, do_sync: bool):
     """
-    Run a step of training.
+    Context manager gating DDP gradient all-reduce on the following backward.
+
+    The wrapped module's forward must run inside the returned context: DDP decides
+    whether to all-reduce at forward time, so a forward run under ``module.no_sync()``
+    accumulates gradients locally and the subsequent backward (wherever it is called)
+    does not all-reduce. Returns a no-op when ``do_sync`` is True or when ``module`` is
+    not a DDP instance (single-GPU / bare model), so callers can use it unconditionally.
     """
-    model_fwd_fn = maybe_autocast(model_loss_forward_train, not args.no_amp)
-    loss, new_rnnt_state = model_fwd_fn(
-        model=model,
-        loss_fn=loss_fn,
-        args=args,
-        feats=feats,
-        feat_lens=feat_lens,
-        txt=txt,
-        txt_lens=txt_lens,
-        rnnt_state=rnnt_state,
-        loss_mods=loss_mods,
-    )
-    loss_nan = is_loss_nan(loss, args.num_gpus)
-    if loss_nan:
-        print_once("WARNING: loss is NaN; skipping update")
-    else:
-        if not args.no_amp:
-            # scale losses w/ pytorch AMP to prevent underflowing before backward pass
-            scaler.scale(loss).backward()
-        else:
-            loss.backward()
-    loss_item = loss.item()
-    del loss
-    return loss_item, loss_nan, new_rnnt_state
+    if do_sync or not isinstance(module, DDP):
+        return nullcontext()
+
+    return module.no_sync()
 
 
 @beartype

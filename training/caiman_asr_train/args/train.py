@@ -4,7 +4,6 @@ import time
 from argparse import Namespace
 from pathlib import Path
 
-import yaml
 from beartype import beartype
 
 from caiman_asr_train.args.argparser import MyrtleArgumentParser
@@ -16,7 +15,7 @@ from caiman_asr_train.args.eos import add_eos_train_args
 from caiman_asr_train.args.noise_augmentation import add_noise_augmentation_args
 from caiman_asr_train.args.shared import add_shared_args
 from caiman_asr_train.args.star import add_star_args
-from caiman_asr_train.data.schema import DatasetSchemaValidator
+from caiman_asr_train.lhotse.config_build import validate_dataset_yaml
 
 
 @beartype
@@ -90,6 +89,94 @@ def train_arg_parser() -> argparse.ArgumentParser:
         default=0.5,
         help="Fraction of utterances to drop EOI from, ignored if not appending EOI",
     )
+    training.add_argument(
+        "--inspect_memory_usage",
+        type=str,
+        help="Append memory usage statistics to the specified file path",
+    )
+
+    sampler = parser.add_argument_group("Sampler setup")
+
+    sampler.add_argument(
+        "--sampling_mode",
+        type=str,
+        default="1D-bucketing-dyn",
+        choices=[
+            "duration",
+            "fixed",
+            "1D-bucketing",
+            "1D-bucketing-dyn",
+            "2D-bucketing",
+            "2D-bucketing-fixed",
+            "2D-bucketing-singlet",
+        ],
+    )
+
+    sampler.add_argument(
+        "--singlet_bucket",
+        type=int,
+        help="For 2D-bucketing-singlet mode, the index of the single bucket to use",
+    )
+
+    sampler.add_argument(
+        "--buckets",
+        type=str,
+        help="Path to precomputed buckets file",
+    )
+
+    # Fixed batching
+    sampler.add_argument(
+        "--batch_size",
+        type=int,
+        help="Fixed batch-size for fixed sampling and singlet 2D-bucketing modes",
+    )
+
+    # Variables for dynamic batching
+    sampler.add_argument(
+        "--batch_duration",
+        type=float,
+        help="Batch duration for dynamic batching",
+    )
+    sampler.add_argument(
+        "--batch_tokens",
+        type=int,
+        help="Batch size in tokens",
+    )
+    sampler.add_argument(
+        "--batch_area",
+        type=float,
+        help="Batch size in area (tokens * duration)",
+    )
+    sampler.add_argument(
+        "--batch_vram",
+        type=float,
+        help="Batch size in vram (MB) for area-batching",
+    )
+
+    sampler.add_argument(
+        "--ols_vram_coeff",
+        type=float,
+        nargs=3,
+        help="OLS regression coefficients for area to VRAM estimation. "
+        "Provide three coefficients in the order: [coeff_time, coeff_toks, coeff_area].",
+    )
+
+    sampler.add_argument(
+        "--num_dur_buckets", type=int, default=10, help="Number of duration buckets"
+    )
+    sampler.add_argument(
+        "--num_tok_buckets", type=int, default=4, help="Number of token buckets"
+    )
+    sampler.add_argument(
+        "--optimize_buckets",
+        action="store_true",
+        help="Compute optimal 1D/2D bucketing boundaries, these bucket boundaries will"
+        "be written to `out_dir/bins*`, they will not overwrite the existing bucketing "
+        "settings used for training (if any). The train will terminate after computing "
+        "the optimal buckets. To use the optimal buckets at train time pass the path "
+        "to the --buckets flag on the next invocation of training.",
+    )
+
     optim = parser.add_argument_group("optimization setup")
     optim.add_argument(
         "--num_gpus",
@@ -99,24 +186,12 @@ def train_arg_parser() -> argparse.ArgumentParser:
         each running a copy of train.py on one GPU.""",
     )
     optim.add_argument(
-        "--global_batch_size",
-        default=1024,
-        type=int,
-        help="Effective batch size across all GPUs after grad accumulation",
-    )
-    optim.add_argument(
         "--grad_accumulation_batches",
         default=8,
         type=int,
         help="Number of batches that must be accumulated for a single model update (step)",
     )
-    optim.add_argument(
-        "--batch_split_factor",
-        default=1,
-        type=int,
-        help="Multiple >=1 describing how much larger the encoder/prediction batch size "
-        "is than the joint/loss batch size",
-    )
+
     optim.add_argument(
         "--val_batch_size", default=16, type=int, help="Evaluation time batch size"
     )
@@ -155,25 +230,49 @@ def train_arg_parser() -> argparse.ArgumentParser:
     optim.add_argument(
         "-scaler_lbl2",
         "--grad_scaler_lower_bound_log2",
-        default=None,
+        default=6.0,
         type=float,
-        help="The minimum value of the gradient scaler, set to None for no minimum",
+        help="log2 of the minimum value of the AMP gradient scaler. The default "
+        "floor of 2^6 is far below any healthy scale (~2^10-2^16) so it only "
+        "engages during an instability, where it stops the scale free-falling "
+        "into the fp16-underflow regime that blocks recovery. Set very negative "
+        "(e.g. -100) to effectively disable",
+    )
+    optim.add_argument(
+        "--grad_norm_skip_factor",
+        default=20.0,
+        type=float,
+        help="Skip the optimizer step when the unscaled gradient norm exceeds this "
+        "factor times its running average. Guards against finite-but-huge "
+        "gradients that pass the AMP inf check during an instability cascade. "
+        "Set to 0 to disable the check",
+    )
+    optim.add_argument(
+        "--skip_decay_momentum",
+        default=0.99,
+        type=float,
+        help="Momentum for the decoupled weight decay applied on skipped optimizer "
+        "steps. On each consecutive skip a velocity accumulates (v <- momentum*v + 1) "
+        "and scales the lr*weight_decay decay, so the longer a skip episode runs the "
+        "harder the (growing) weights are decayed; it resets on the next real step. "
+        "0 recovers the un-augmented fixed decay, 1 ramps linearly, and 0<m<1 "
+        "saturates at 1/(1-m).",
     )
 
     io = parser.add_argument_group("feature and checkpointing setup")
     io.add_argument(
-        "--dali_train_device",
+        "--loader_train_device",
         type=str,
         choices=["cpu", "gpu"],
         default="gpu",
-        help="Use DALI pipeline for fast data processing",
+        help="Set the device for the training data loader",
     )
     io.add_argument(
-        "--dali_val_device",
+        "--loader_val_device",
         type=str,
         choices=["cpu", "gpu"],
         default="cpu",
-        help="Use DALI pipeline for fast data processing",
+        help="Set the device for the validation data loader",
     )
     io.add_argument(
         "--resume",
@@ -209,6 +308,12 @@ def train_arg_parser() -> argparse.ArgumentParser:
         help="Number of steps between evaluations on dev set",
     )
     io.add_argument(
+        "--val_nth_batch_only",
+        default=None,
+        type=int,
+        help="Only evaluate the nth val batch during training, useful for debugging.",
+    )
+    io.add_argument(
         "--log_frequency",
         default=1,
         type=int,
@@ -222,108 +327,15 @@ def train_arg_parser() -> argparse.ArgumentParser:
     )
     io.add_argument(
         "--model_config",
-        default="/workspace/training/configs/testing-1023sp_run.yaml",
         type=str,
         help="Path of the model configuration file",
-    )
-    io.add_argument(
-        "--num_buckets",
-        type=int,
-        default=6,
-        help="The number of buckets for the Bucketing Sampler, "
-        "according to which audio files are grouped by audio duration "
-        "and shuffled within each bucket. Setting it to 0 will use "
-        "the RandomSampler.",
-    )
-    io.add_argument(
-        "--randomize_first_n_epochs",
-        type=int,
-        default=0,
-        help="Completely randomize the first n epochs regardless of bucketing",
-    )
-    io.add_argument(
-        "--train_manifests",
-        type=str,
-        required=False,
-        nargs="+",
-        help="Paths of the training dataset manifest file"
-        "Ignored if --read_from_tar=True",
+        required=True,
     )
     io.add_argument(
         "--train_dataset_yaml",
         type=str,
-        required=False,
+        required=True,
         help="Path to training dataset config (.yaml) file",
-    )
-    io.add_argument(
-        "--train_manifest_ratios",
-        "--train_manifests_ratios",
-        type=float,
-        required=False,
-        nargs="+",
-        help="Ratio to weight each training manifest file in each epoch by. "
-        " 1 2 means the model will see utterances from the second manifest "
-        "twice as often as utterances from the first, "
-        "regardless of the lengths of the manifests",
-    )
-    io.add_argument(
-        "--relative_train_manifest_ratios",
-        type=float,
-        required=False,
-        nargs="+",
-        help="Ratio to weight each training manifest file in each epoch by. "
-        " 1 2 means the second manifest will be upweighted by a factor of 2, "
-        " but the lengths of the manifests will be taken into account",
-    )
-    io.add_argument(
-        "--canary_exponent",
-        type=float,
-        help="The exponent for the canary manifest weights. Canary weighting is "
-        "on by default (with an exponent of 0.75) unless relative/absolute "
-        "manifest ratios are set. To explicitly disable canary weighting set "
-        "this flag to negative value.",
-    )
-    io.add_argument(
-        "--val_manifests",
-        type=str,
-        required=False,
-        default=["/datasets/LibriSpeech/librispeech-dev-clean-flac.json"],
-        nargs="+",
-        help="Paths of the evaluation datasets manifest files"
-        "Ignored if --read_from_tar=True",
-    )
-    io.add_argument(
-        "--read_from_tar",
-        action="store_true",
-        default=False,
-        help="Read data from tar files instead of json manifest files",
-    )
-    io.add_argument(
-        "--train_tar_files",
-        type=str,
-        required=False,
-        default=None,
-        nargs="+",
-        help="One or more paths or globs for the training dataset tar files. "
-        "Ignored if --read_from_tar=False. Must be provided if "
-        "--read_from_tar=True.",
-    )
-    io.add_argument(
-        "--val_tar_files",
-        type=str,
-        required=False,
-        default=None,
-        nargs="+",
-        help="Paths (or globs) of the evaluation datasets tar files."
-        "Ignored if --read_from_tar=False. Must be provided if "
-        "--read_from_tar=True.",
-    )
-    io.add_argument(
-        "--dataset_dir",
-        "--data_dir",
-        type=str,
-        help="Root dir of dataset",
-        default="/datasets/LibriSpeech",
     )
     io.add_argument(
         "--output_dir",
@@ -392,13 +404,6 @@ def train_arg_parser() -> argparse.ArgumentParser:
         "server and is intended for experimentation only.",
     )
     io.add_argument(
-        "--prob_train_narrowband",
-        type=float,
-        default=0.0,
-        help="Probability that a batch of training audio gets downsampled to 8kHz"
-        " and then upsampled to original sample rate",
-    )
-    io.add_argument(
         "--skip_val_loss",
         action="store_true",
         help="""Only calculate WER, not loss, on validation set.
@@ -415,15 +420,42 @@ def train_arg_parser() -> argparse.ArgumentParser:
         help="Skip the first validation evaluation after training starts.",
     )
     io.add_argument(
+        "--skip_final_val_eval",
+        action="store_true",
+        help="Skip the final validation evaluation at the end of training.",
+    )
+    io.add_argument(
         "--conditional",
         action="store_true",
-        help="Enable conditional training.",
+        help="Enable conditional PnC/NoPnC training.",
+    )
+    io.add_argument(
+        "--conditional_language",
+        action="store_true",
+        help="Enable conditional language training (requires --conditional).",
     )
     io.add_argument(
         "--pnc_prob",
         type=float,
         default=0.25,
         help="Probability that a training utterance is PNC",
+    )
+    io.add_argument(
+        "--lang_mask_prob",
+        type=float,
+        default=None,
+        help="""Probability of masking the lang_tok with
+          <lang_detect> in a training utterance""",
+    )
+    io.add_argument(
+        "--cuts_dump_path",
+        type=str,
+        default=None,
+        help="""Path to dump the cuts used for training. This is useful for debugging as
+        it contains the pre- and post-normalization cuts used for training.
+        The path should be in the format /results/<filename>.jsonl. Each process
+        (rank) writes to its own file, named <filename>_rank<N>.jsonl, so make sure
+        to use a small number of training steps.""",
     )
 
     add_noise_augmentation_args(parser)
@@ -437,99 +469,7 @@ def train_arg_parser() -> argparse.ArgumentParser:
 def verify_train_args(args: Namespace) -> Namespace:
     # check data path args
 
-    if args.train_dataset_yaml:
-        assert (
-            not args.train_manifests
-        ), "Cannot provide both --train_dataset_yaml and --train_manifests."
-        assert (
-            not args.train_manifest_ratios
-        ), "Cannot provide both --train_dataset_yaml and --train_manifest_ratios."
-        assert (
-            not args.relative_train_manifest_ratios
-        ), "Cannot provide both --train_dataset_yaml and --relative_train_manifest_ratios."
-        assert (
-            not args.canary_exponent or args.canary_exponent < 0
-        ), "Cannot provide both --train_dataset_yaml and --canary_exponent."
-
-        # Load and validate the YAML file
-        with open(args.train_dataset_yaml, "r") as f:
-            dataset_config = yaml.safe_load(f)
-
-        validator = DatasetSchemaValidator()
-        validated_data = validator.validate(dataset_config)
-
-        datasets = validated_data["datasets"]
-        args.train_manifests = [datasets[name]["manifest"] for name in datasets]
-        args.relative_train_manifest_ratios = [
-            datasets[name]["weight"] for name in datasets
-        ]
-
-        assert len(args.train_manifests) > 0, "No valid datasets found in YAML."
-
-    if not args.read_from_tar:
-        assert (
-            args.train_manifests is not None
-        ), "Must provide train_manifests if not reading from tar"
-        assert args.train_tar_files is None and args.val_tar_files is None, (
-            "Must not provide tar files if not reading from tar but "
-            f"{args.train_tar_files=} and {args.val_tar_files=}.\nDid you mean to "
-            "pass --read_from_tar?"
-        )
-
-        assert (
-            args.train_manifest_ratios is None
-            or args.relative_train_manifest_ratios is None
-        ), "Cannot set both --train_manifest_ratios and --relative_train_manifest_ratios"
-        if args.train_manifest_ratios is not None:
-            assert len(args.train_manifests) == len(
-                args.train_manifest_ratios
-            ), "Number of train manifests must match number of train manifest ratios"
-        if args.relative_train_manifest_ratios is not None:
-            assert len(args.train_manifests) == len(
-                args.relative_train_manifest_ratios
-            ), "Number of train manifests must match number of train manifest ratios"
-
-        no_ratios = (
-            args.train_manifest_ratios is None
-            and args.relative_train_manifest_ratios is None
-        )
-
-        if args.canary_exponent is not None and args.canary_exponent < 0:
-            # Explicit disable
-            args.canary_exponent = None
-        elif args.canary_exponent is None and no_ratios:
-            # Default to canary weighting
-            args.canary_exponent = 0.75
-
-    else:
-        assert (
-            args.val_tar_files is not None
-        ), "Must provide val_tar_files if --read_from_tar=True"
-        assert (
-            args.train_tar_files is not None
-        ), "Must provide train_tar_files if --read_from_tar=True"
-        assert (
-            args.train_manifest_ratios is None
-        ), "Manifest balancing only works with json manifests"
-        assert (
-            args.relative_train_manifest_ratios is None
-        ), "Manifest balancing only works with json manifests"
-        assert (
-            args.canary_exponent is None
-        ), "Canary weights not supported with tar files"
-
-    mutual_exclusive_args = [
-        args.canary_exponent is not None,
-        args.train_manifest_ratios is not None,
-        args.relative_train_manifest_ratios is not None,
-    ]
-
-    assert (
-        mutual_exclusive_args.count(True) <= 1
-    ), "Only one of the manifest ratio args should be set"
-
-    if args.canary_exponent is not None:
-        assert 0 < args.canary_exponent < 1, "Canary exponent must be between 0 and 1"
+    validate_dataset_yaml(args.train_dataset_yaml)
 
     verify_delay_penalty_args(args)
 
@@ -549,8 +489,12 @@ def verify_train_args(args: Namespace) -> Namespace:
             )
         raise ValueError(error_msg)
 
-    if args.conditional:
-        assert (
-            args.batch_split_factor > 1
-        ), "batch_split_factor must be greater than 1 when conditional training is enabled."
+    if args.lang_mask_prob is not None:
+        if not args.conditional:
+            raise ValueError("language masking requires conditional mode.")
+        if not args.conditional_language:
+            raise ValueError("language masking requires conditional_language mode.")
+        if args.lang_mask_prob < 0 or args.lang_mask_prob > 1:
+            raise ValueError("args.lang_mask_prob must be between 0 and 1")
+
     return args

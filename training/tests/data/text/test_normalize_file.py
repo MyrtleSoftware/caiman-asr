@@ -13,7 +13,7 @@ def test_wishlist(norm, default_charset):
     rebuilding"""
 
     def n(x):
-        return norm(x, charset=default_charset)
+        return norm(x, charset=default_charset, lang_code="en")
 
     assert (
         n("$ 124,758") == "one hundred twenty four thousand seven hundred fifty eight"
@@ -32,7 +32,7 @@ def test_wishlist(norm, default_charset):
 @pytest.mark.parametrize("norm", [lowercase_normalize, normalize_by_line])
 def test_both(norm, default_charset):
     def n(x):
-        return norm(x, charset=default_charset)
+        return norm(x, charset=default_charset, lang_code="en")
 
     # Tests for dollars and percentages
     assert (
@@ -102,17 +102,18 @@ def test_both(norm, default_charset):
     # removed or kept. The following "detagging" behavior isn't how tags are
     # handled in training; it's just a quirk of this function.
     assert n("<tags> <like_these> are detagged") == "tags like these are detagged"
-    assert lowercase_normalize("\n", default_charset) == ""
+    assert lowercase_normalize("\n", default_charset, "en") == ""
 
 
 def test_normalize_by_line(default_charset):
     # A single "\n" becomes " "
-    assert normalize_by_line("\n", default_charset) == " "
+    assert normalize_by_line("\n", default_charset, "en") == " "
     # Unparsable lines are skipped:
     assert (
         normalize_by_line(
             "$11.00 is parseable\n$12.,00is not parseable\n$13.01 is parseable",
             default_charset,
+            "en",
             quiet=True,
         )
         == "eleven dollars is parseable  thirteen dollars one cent is parseable"

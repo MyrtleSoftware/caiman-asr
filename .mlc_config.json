@@ -1,3 +1,13 @@
 {
-  "aliveStatusCodes": [200, 404]
+  "comment": [
+    "Links into private resources cannot be verified from CI:",
+    "this repo and the other MyrtleSoftware repos answer 404, Google Sheets 401,",
+    "and bot-blocking hosts (openreview, blogspot) 403."
+  ],
+  "aliveStatusCodes": [200, 401, 403, 404],
+  "ignorePatterns": [{ "pattern": "^https?://localhost" }],
+  "retryOn429": true,
+  "retryCount": 3,
+  "fallbackRetryDelay": "30s",
+  "timeout": "20s"
 }

@@ -2,6 +2,7 @@ import torch
 from beartype import beartype
 from beartype.typing import List, Optional, Tuple
 
+from caiman_asr_train.core.batches import TimeFirst
 from caiman_asr_train.evaluate.state_resets.core import (
     get_state_resets_stats,
     state_resets_merge_segments,
@@ -15,9 +16,8 @@ def state_resets_reshape_batched_feats(
     sr_segment: float,
     sr_overlap: float,
     cfg: dict,
-    feats: torch.Tensor,
-    feat_lens: torch.Tensor,
-) -> Tuple[torch.Tensor, torch.Tensor, List[Tuple[int, int, int]]]:
+    feats: TimeFirst,
+) -> Tuple[TimeFirst, List[Tuple[int, int, int]]]:
     """Reshape the feats tensor with length of first dimension equal to the segment.
 
     This function will reshape the feats and feat_lens tensors to reflect the use of
@@ -58,9 +58,9 @@ def state_resets_reshape_batched_feats(
         sr_segment, sr_overlap, cfg
     )
 
-    for b in range(feats.shape[1]):
-        feat_len = feat_lens[b].unsqueeze(0)
-        feat = feats[:feat_len, b, :].unsqueeze(1)
+    for b in range(feats.data.shape[1]):
+        feat_len = feats.lens[b].unsqueeze(0)
+        feat = feats.data[:feat_len, b, :].unsqueeze(1)
 
         (feat, feat_len, _, _) = state_resets_reshape_feats(
             sr_segment, sr_overlap, cfg, feat, feat_len
@@ -72,12 +72,14 @@ def state_resets_reshape_batched_feats(
 
         meta.append((feat.shape[1], sr_segment_frames, sr_overlap_frames))
 
-    # This is stack + pad in one call
-    feats = torch.nn.utils.rnn.pad_sequence(jagged_feats)
-    # All the same length so can use regular stack
-    feat_lens = torch.stack(jagged_lens)
+    feats = TimeFirst(
+        # This is stack + pad in one call
+        data=torch.nn.utils.rnn.pad_sequence(jagged_feats),
+        # All the same length so can use regular stack
+        lens=torch.stack(jagged_lens),
+    )
 
-    return feats, feat_lens, meta
+    return feats, meta
 
 
 @beartype

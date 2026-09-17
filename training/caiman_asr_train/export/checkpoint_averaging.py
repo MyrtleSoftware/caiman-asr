@@ -12,6 +12,8 @@ from caiman_asr_train.data.tokenizer import Tokenizer
 from caiman_asr_train.export.checkpointer import Checkpointer
 from caiman_asr_train.rnnt import config
 from caiman_asr_train.rnnt.model import RNNT
+from caiman_asr_train.utils.prefix import build_prefix_token_map
+from caiman_asr_train.utils.user_tokens_lite import get_all_user_tokens
 
 
 def accumulate_state_dicts(
@@ -36,11 +38,20 @@ def average_checkpoints(
     sum_ema_state_dict = OrderedDict()
 
     ema_present = True
+    reference_prefix_map = None
 
     for ckpt_path in checkpoint_paths:
-        checkpoint = torch.load(ckpt_path, map_location="cpu")
+        checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         model_state_dict = checkpoint["state_dict"]
         ema_state_dict = checkpoint.get("ema_state_dict", None)
+
+        if "prefix_token_map" in model_state_dict:
+            if reference_prefix_map is None:
+                reference_prefix_map = model_state_dict["prefix_token_map"].clone()
+            elif not torch.equal(
+                reference_prefix_map, model_state_dict["prefix_token_map"]
+            ):
+                raise ValueError(f"prefix_token_map in {ckpt_path} does not match!")
 
         accumulate_state_dicts(model_state_dict, sum_model_state_dict)
 
@@ -51,11 +62,17 @@ def average_checkpoints(
 
     # Divide by the number of checkpoints to get the average
     for key in sum_model_state_dict.keys():
-        sum_model_state_dict[key].div_(num_ckpts)
+        if key == "prefix_token_map":
+            sum_model_state_dict[key] = reference_prefix_map
+        else:
+            sum_model_state_dict[key].div_(num_ckpts)
 
     if ema_present:
         for key in sum_ema_state_dict.keys():
-            sum_ema_state_dict[key].div_(num_ckpts)
+            if key == "prefix_token_map":
+                sum_ema_state_dict[key] = reference_prefix_map
+            else:
+                sum_ema_state_dict[key].div_(num_ckpts)
     else:
         sum_ema_state_dict = None
 
@@ -67,6 +84,14 @@ def main(args):
     tokenizer_kw = config.get_tokenizer_conf(cfg)
     tokenizer = Tokenizer(**tokenizer_kw)
     rnnt_config = config.rnnt(cfg)
+
+    if cfg["rnnt"].get("conditional_encoder", False):
+        user_tokens, _ = get_all_user_tokens(cfg)
+        prefix_token_map = build_prefix_token_map(
+            user_tokens=user_tokens,
+            tokenizer=tokenizer,
+        )
+        rnnt_config["prefix_token_map"] = prefix_token_map
 
     model = RNNT(n_classes=tokenizer.num_labels + 1, **rnnt_config).to("cpu")
     ema_model = copy.deepcopy(model).to("cpu")
@@ -80,22 +105,23 @@ def main(args):
     os.makedirs(output_dir, exist_ok=True)
     checkpointer = Checkpointer(output_dir, output_name)
     checkpointer.save(
-        model,
-        ema_model,
-        None,
-        0,
-        0,
-        0,
-        tokenizer_kw,
-        1.0,
-        args.model_config,
+        model=model,
+        ema_model=ema_model,
+        optimizer=None,
+        epoch=0,
+        step=0,
+        duration=0.0,
+        best_wer=0.0,
+        tokenizer_kw=tokenizer_kw,
+        logmel_norm_weight=1.0,
+        config_path=args.model_config,
         is_best=False,
         filepath=args.output_path,
     )
     if args.save_hw_ckpt:
         # remove duplicate keys not used in inference
-        averaged_state_dict.pop("joint_fc.weight")
-        averaged_state_dict.pop("joint_fc.bias")
+        averaged_state_dict.pop("joint_fc.weight", None)
+        averaged_state_dict.pop("joint_fc.bias", None)
         checkpointer.save_hardware_checkpoint(
             args.output_path,
             1.0,
@@ -122,8 +148,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_config",
         type=str,
-        default="/workspace/training/configs/testing-1023sp_run.yaml",
         help="Path of the model configuration file.",
+        required=True,
     )
     parser.add_argument(
         "--save_hw_ckpt",

@@ -1,11 +1,13 @@
 import os
 import shutil
+from datetime import timedelta
 from pathlib import Path
 from time import strftime
 
+import torch
 import torch.distributed as dist
 from beartype import beartype
-from beartype.typing import Callable, ParamSpec, TypeVar
+from beartype.typing import Callable, ParamSpec, TypeVar, cast
 
 from caiman_asr_train.utils.color_print import bold_yellow
 
@@ -13,6 +15,11 @@ from caiman_asr_train.utils.color_print import bold_yellow
 @beartype
 def get_rank_or_zero() -> int:
     return dist.get_rank() if dist.is_initialized() else 0
+
+
+@beartype
+def get_world_size_or_one() -> int:
+    return dist.get_world_size() if dist.is_initialized() else 1
 
 
 @beartype
@@ -66,6 +73,54 @@ def barrier_if_init():
         dist.barrier()
 
 
+def start_ddp_with_gpu(
+    multi_gpu: bool,
+    local_rank: int,
+    skip_init: bool,
+    timeout: dict[str, int],
+) -> tuple[bool, int]:
+    assert torch.cuda.is_available()
+
+    if multi_gpu:
+        torch.cuda.set_device(local_rank)
+        if not skip_init:
+            dist.init_process_group(
+                backend="nccl",
+                init_method="env://",
+                timeout=timedelta(**timeout),
+            )
+        world_size = dist.get_world_size()
+        print_once(f"Distributed processing with {world_size} GPUs\n")
+    else:
+        world_size = 1
+
+    return multi_gpu, world_size
+
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+@beartype
+def exec_and_broadcast(f: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
+    """
+    Calls a function only on rank 0 and broadcasts to all other ranks.
+    Note that the result must a picklable python object.
+    """
+    if not dist.is_initialized():
+        return f(*args, **kwargs)
+
+    if is_rank_zero():
+        object_list = [f(*args, **kwargs)]
+    else:
+        # The following broadcast will overwrite the None with the actual object.
+        object_list = cast(list[R], [None])
+
+    dist.broadcast_object_list(object_list, src=0)
+    assert len(object_list) == 1
+    return object_list[0]
+
+
 @beartype
 def maybe_cached(
     populate: Callable[[str | Path], None],
@@ -111,3 +166,15 @@ def maybe_cached(
     else:
         # Wait for cache to be populated.
         barrier_if_init()
+
+
+@beartype
+def merge_transcripts_across_ranks(rank_files: list[str], output_path: str) -> None:
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w") as outfile:
+        for rank_file in rank_files:
+            with open(rank_file, "r") as infile:
+                shutil.copyfileobj(infile, outfile)
+            Path(rank_file).unlink()
+    print(f"Saved transcripts to {output_path}")

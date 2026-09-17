@@ -52,16 +52,16 @@ def lstarmap(fun: Callable, x: Iterable) -> List:
 
 
 @beartype
-def starmap_zip(fun: Callable, *xs: Iterable) -> Iterable:
+def starmap_zip(fun: Callable, *xs: Iterable, strict=False) -> Iterable:
     """
     An alias for `starmap(fun, zip(*xs))`.
     """
-    return starmap(fun, zip(*xs))
+    return starmap(fun, zip(*xs, strict=strict))
 
 
 @beartype
-def lstarmap_zip(fun: Callable, *xs: Iterable) -> List:
+def lstarmap_zip(fun: Callable, *xs: Iterable, strict=False) -> List:
     """
     An alias for `list(starmap_zip(fun,*xs))`.
     """
-    return list(starmap_zip(fun, *xs))
+    return list(starmap_zip(fun, *xs, strict=strict))

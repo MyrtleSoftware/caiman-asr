@@ -3,15 +3,11 @@
 import random
 from argparse import Namespace
 
-import torch
 from beartype import beartype
 from beartype.typing import Optional, Tuple
-from jaxtyping import Float, Int, jaxtyped
 
-from caiman_asr_train.rnnt.state import PredNetState, RNNTState
+from caiman_asr_train.rnnt.model import StateRNNT
 from caiman_asr_train.train_utils.distributed import print_once
-
-# flake8: noqa
 
 
 def is_random_state_passing_on(batch_concat_list):
@@ -34,7 +30,8 @@ def set_rsp_delay_default(args) -> None:
     rsp_delay = args.warmup_steps + args.hold_steps + args.half_life_steps * 3
 
     print_once(
-        f"--rsp_delay not set. Setting {rsp_delay=} based on a learning rate schedule heuristic."
+        f"--rsp_delay not set. Setting {rsp_delay=} based on a learning "
+        "rate schedule heuristic."
     )
     if args.training_steps < rsp_delay + 5000:
         print_once(
@@ -76,12 +73,12 @@ def generate_batch_history(batch_concat_list):
 
 @beartype
 def rsp_end_step(
-    rnnt_state: Optional[RNNTState],
+    rnnt_state: Optional[StateRNNT],
     loss_nan: bool,
     step: int,
     args: Namespace,
     batches_until_history_reset: int,
-) -> Tuple[Optional[RNNTState], int, bool]:
+) -> Tuple[Optional[StateRNNT], int, bool]:
     rsp_on = is_random_state_passing_on(args.rsp_seq_len_freq)
 
     if not loss_nan:
@@ -102,104 +99,3 @@ def rsp_end_step(
         batches_until_history_reset = generate_batch_history(args.rsp_seq_len_freq)
 
     return rnnt_state, batches_until_history_reset, rsp_on and step >= args.rsp_delay
-
-
-@jaxtyped(typechecker=beartype)
-def get_last_nonpadded_states(
-    all_hid: Tuple[
-        Float[torch.Tensor, "layers seq batch hidden"],
-        Float[torch.Tensor, "layers seq batch hidden"],
-    ],
-    lens: Int[torch.Tensor, "batch"],
-    how_far_back: int = 0,
-) -> Tuple[
-    Float[torch.Tensor, "layers batch hidden"],
-    Float[torch.Tensor, "layers batch hidden"],
-]:
-    """The last hidden state for each member of the batch has to be picked.
-    This is not the last state in the tensor, since there's padding.
-    Hence index using lens to get the last non-padded state."""
-    return (
-        all_hid[0][:, lens - 1 - how_far_back, range(len(lens)), :],
-        all_hid[1][:, lens - 1 - how_far_back, range(len(lens)), :],
-    )
-
-
-def maybe_get_last_nonpadded(all_hid, lens):
-    return None if all_hid is None else get_last_nonpadded_states(all_hid, lens)
-
-
-@jaxtyped(typechecker=beartype)
-def get_pred_net_state(
-    y: Int[torch.Tensor, "batch seq"],
-    all_pred_hid: Optional[
-        Tuple[
-            Float[torch.Tensor, "layers seq+1 batch hidden"],
-            Float[torch.Tensor, "layers seq+1 batch hidden"],
-        ]
-    ],
-    y_lens: Int[torch.Tensor, "batch"],
-    g_lens: Int[torch.Tensor, "batch"],
-):
-    """Returns the PredNetState representing the pred net's internal state at
-    the end of an utterance. The PredNetState consists of the last token and a
-    LSTM state.
-
-    Unintuitively: set how_far_back=1 to get the next-to-last LSTM state.
-    Justification: Consider two utterances, with token sequences [I,
-    like, cats] and [You, love, dogs]
-
-    By training on the concatenation of these two utterances,
-    the pred net calculation looks like:
-
-    (A)
-    SOS  I like cats You love dogs
-       ↘  ↘    ↘    ↘   ↘    ↘   ↘
-     0 ➡h1➡h2  ➡h3  ➡h4 ➡h5  ➡h6 ➡h7
-
-    Here 0 is the zero vector which LSTMs use as the initial hidden
-    state if you don't pass in a hidden state.
-
-    By training on these utterances individually, the pred net
-    calculations are:
-
-    (B)
-    SOS  I like cats
-       ↘  ↘    ↘    ↘
-     0 ➡h1➡h2  ➡h3  ➡h4
-
-    (C)
-    SOS You love dogs
-       ↘   ↘    ↘    ↘
-     0 ➡h1 ➡H2  ➡H3  ➡H4
-    (where H_i is a different state from h_i)
-
-    Note that for the second utterance the hidden states are different
-    than in A, because the context of the first utterance is lost.
-    This can be fixed by replacing (SOS, 0) in C with (cats, h3) from B:
-
-    (D)
-    cats You love dogs
-        ↘   ↘    ↘    ↘
-     h3 ➡h4 ➡h5  ➡h6  ➡h7
-
-    Hence, D has the same hidden states as A since
-    combining the tokens and states is done the same way as in A.
-
-    Thus, it's required to save the last token (e.g. cats) and the
-    next-to-last state (e.g. h3) to make this work.
-
-    """
-    if all_pred_hid is None:
-        return None
-    # Pick out the last token from each label sequence, using y_lens to index
-    # because of the padding.
-    last_tokens = torch.unsqueeze(y[range(len(y_lens)), y_lens - 1], 1)
-
-    next_to_last_staggered_pred_hid = get_last_nonpadded_states(
-        all_pred_hid, g_lens, how_far_back=1
-    )
-    return PredNetState(
-        next_to_last_pred_state=next_to_last_staggered_pred_hid,
-        last_token=last_tokens,
-    )

@@ -22,10 +22,10 @@ import copy
 from dataclasses import dataclass, field
 
 import kenlm
-import torch
 from beartype import beartype
-from beartype.typing import Tuple
+from beartype.typing import List, Optional
 
+from caiman_asr_train.core.model import StatePred
 from caiman_asr_train.keywords.trie import Keywords
 from caiman_asr_train.lm.kenlm_ngram import KenLmModel
 
@@ -46,8 +46,8 @@ class Hypothesis:
     are not considered in the future. However, the score, hashval, y_length_tot and
     state are retained for the un-truncated sequence.
 
-    NOTE: the first token in the sequence arrays is always ignored as it is either
-    the SOS tag or it has already been shipped as a final.
+    NOTE: the first token in the sequence arrays may be ignored if it has
+    already been shipped as a final token.
 
     Args:
     score       : cumulative logprob
@@ -69,7 +69,7 @@ class Hypothesis:
     timesteps: list[int]
     s_seq: list[str]
     hashval: int
-    pred_state: Tuple[torch.Tensor, torch.Tensor] | None
+    pred_state: StatePred
     ngram_lm_state: kenlm.State | None = None
     is_terminal: bool = False
     kws_state: Keywords.State = field(default_factory=Keywords.init)
@@ -83,6 +83,7 @@ class Hypothesis:
 
     @property
     def y_last(self):
+        assert len(self.y_seq) > 0
         return self.y_seq[-1]
 
     @property
@@ -166,46 +167,18 @@ def token_strs_to_transcript(tokens: list[str]) -> str:
 
 
 @beartype
-def init_sos_hyp(sos_tkn: int, ngram_lm: KenLmModel | None) -> Hypothesis:
-    """
-    Return a SOS hypothesis.
-    """
-    init_ngram_state = None
-    if ngram_lm:
-        init_ngram_state = kenlm.State()
-        ngram_lm.model.BeginSentenceWrite(init_ngram_state)
-
-    return Hypothesis(
-        score=0.0,
-        p_seq=[1.0],
-        y_seq=[sos_tkn],
-        y_len_t=1,
-        timesteps=[-1],
-        s_seq=[CHR_SPU_UNICODE],
-        hashval=0,
-        pred_state=None,
-        ngram_lm_state=init_ngram_state,
-        is_terminal=False,
-    )
-
-
-@beartype
-def init_prefix_hyp(
-    sos_tkn: int,
-    prefix_token_ids: list[int],
+def init_hyp(
+    prefix_token_ids: Optional[List[int]],
     ngram_lm: KenLmModel | None,
-    pred_state: Tuple[torch.Tensor, torch.Tensor],
-    detokenize_fn,
+    pred_state: StatePred,
 ) -> Hypothesis:
     """
-    Return a hypothesis initialized with SOS + prefix tokens.
+    Return an initial hypothesis (possibly initialized with a prefix).
 
     Args:
-        sos_tkn: Start of sequence token (-1)
         prefix_token_ids: List of prefix token IDs to add
         ngram_lm: Optional n-gram language model
         pred_state: Prediction network state
-        detokenize_fn: Function to convert token IDs to strings
     """
     init_ngram_state = None
     if ngram_lm:
@@ -213,24 +186,11 @@ def init_prefix_hyp(
         ngram_lm.model.BeginSentenceWrite(init_ngram_state)
 
     # Start with SOS
-    y_seq = [sos_tkn]
+    y_seq = [-1]
     timesteps = [-1]
     s_seq = [CHR_SPU_UNICODE]
     p_seq = [1.0]
     hashval = 0
-
-    # Add prefix tokens
-    for token_id in prefix_token_ids:
-        y_seq.append(token_id)
-        timesteps.append(-1)  # All prefix tokens at timestamp -1
-        token_str = detokenize_fn(token_id)
-        s_seq.append(token_str)
-        p_seq.append(1.0)  # Assuming prefix tokens have probability 1.0
-
-        # Update hash with token string
-        for c in token_str:
-            hashval = (hashval * MAX_UNICODE) + ord(c)
-            hashval = hashval % HASHSIZE
 
     return Hypothesis(
         score=0.0,
@@ -243,4 +203,5 @@ def init_prefix_hyp(
         pred_state=pred_state,
         ngram_lm_state=init_ngram_state,
         is_terminal=False,
+        _prev_length=1 if prefix_token_ids is None else 1 + len(prefix_token_ids),
     )

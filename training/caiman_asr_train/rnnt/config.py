@@ -21,13 +21,9 @@ from beartype import beartype
 from beartype.typing import Dict, Optional
 from pydantic import BaseModel, ConfigDict, confloat
 
-from caiman_asr_train.data import features
-from caiman_asr_train.data.dali.pipeline import (
-    PipelineParams,
-    SpeedPerturbationParams,
-)
 from caiman_asr_train.data.unk_handling import UnkHandling
 from caiman_asr_train.rnnt.model import RNNT
+from caiman_asr_train.setup.tokenizer_labels import set_tokenizer_labels
 from caiman_asr_train.train_utils.grad_noise_scheduler import GradNoiseScheduler
 
 
@@ -49,6 +45,8 @@ def load(fpath) -> Dict:
     # Reload to deep copy shallow copies, which were made with yaml anchors
     yaml.Dumper.ignore_aliases = lambda *args: True
     cfg = yaml.safe_load(yaml.dump(cfg))
+    # labels/tokens are not loaded but generated from language ID
+    cfg = set_tokenizer_labels(cfg)
 
     return cfg
 
@@ -78,6 +76,46 @@ def validate_and_fill(klass, user_conf, ignore=[], optional=[], deprecated=[]):
     return conf
 
 
+class _PipelineParams:
+    """
+    This class is a dummy for signature extraction.
+    """
+
+    def __init__(
+        self,
+        replacements,
+        sample_rate=16000,
+        max_duration=float("inf"),
+        max_transcript_len=float("inf"),
+        min_duration=0.0,
+        trim_silence=False,
+        speed_perturbation=None,
+        user_symbols=None,
+        error_rate="word",
+        standardize_text=False,
+        preserve_case=False,
+        preserve_punctuation=False,
+        append_EOI=False,
+        min_tps=0.0,
+        max_tps=float("inf"),
+    ): ...
+
+
+class SpecAugment:
+    """
+    This class is a dummy for signature extraction.
+    """
+
+    def __init__(
+        self,
+        freq_masks: int = 0,
+        max_freq: int = 10,
+        time_masks: int = 0,
+        max_time: int | float = 10,
+        ratio_spec_aug_on: float = 1.0,
+    ): ...
+
+
 def input(conf_yaml, split="train"):
     conf = copy.deepcopy(conf_yaml[f"input_{split}"])
     conf_dataset = conf.pop("audio_dataset")
@@ -86,45 +124,42 @@ def input(conf_yaml, split="train"):
     conf_specaugm = conf.pop("spec_augment", None)
     _ = conf.pop("cutout_augment", None)
 
-    # Validate known inner classes
-    inner_classes = [
-        (conf_dataset, "speed_perturbation", SpeedPerturbationParams),
-    ]
-    for conf_tgt, key, klass in inner_classes:
-        if key in conf_tgt:
-            conf_tgt[key] = validate_and_fill(klass, conf_tgt[key])
-
     for k in conf:
         raise ValueError(f"Unknown key {k}")
 
     if split == "val":
         assert not ("standardize_text" in conf_dataset), (
             "YAML config has 'standardize_text' key for `input_val`. "
-            "This key is supported only for `input_train`. Use 'standardize_wer' "
-            "to control text normalization during validation."
+            "This key is supported only for `input_train`. Validation always "
+            "runs with standardization disabled, so that on-the-fly "
+            "normalization doesn't strip filler-only references to '' and "
+            "have them silently dropped by the min_tokens cutset filter."
         )
+
     # Validate outer classes
     conf_dataset = validate_and_fill(
-        PipelineParams,
+        _PipelineParams,
         conf_dataset,
         optional=[
-            "standardize_wer",
             "replacements",
-            "remove_tags",
             "user_symbols",
             "standardize_text",
             "preserve_case",
             "preserve_punctuation",
+            "min_tps",
+            "max_tps",
         ],
+        deprecated=["normalize_transcripts", "standardize_wer", "remove_tags"],
     )
 
-    conf_splicing = validate_and_fill(features.FrameSplicing, conf_splicing)
+    assert "frame_subsampling" in conf_splicing
+    assert "frame_stacking" in conf_splicing
+    assert len(conf_splicing) == 2
+
     if conf_dataset["append_EOI"]:
         assert conf_splicing["frame_stacking"] == conf_splicing["frame_subsampling"]
 
-    conf_specaugm = conf_specaugm and validate_and_fill(
-        features.SpecAugment, conf_specaugm, optional=["eoi_frames"]
-    )
+    conf_specaugm = conf_specaugm and validate_and_fill(SpecAugment, conf_specaugm)
 
     # Check params shared between classes
     for shared in ["sample_rate"]:
@@ -145,7 +180,7 @@ def rnnt(conf) -> Dict:
     return validate_and_fill(
         RNNT,
         conf["rnnt"],
-        optional=["n_classes"],
+        optional=["n_classes", "prefix_token_map"],
         deprecated=["hard_activation_functions"],
     )
 

@@ -1,13 +1,25 @@
 from argparse import Namespace
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 import torch
+from beartype.typing import Optional
 
+from caiman_asr_train.core.batches import BatchFirst, TimeFirst
+from caiman_asr_train.core.model import Hidden, StateEncoder, StatePred
 from caiman_asr_train.lm.kenlm_ngram import NgramInfo
+from caiman_asr_train.rnnt.beam import RNNTBeamDecoder
 from caiman_asr_train.rnnt.model import RNNT
 from caiman_asr_train.setup.val import ValSetup
 from caiman_asr_train.utils.responses import split_batched_finals
+
+
+@dataclass
+class MockConfig:
+    prefix_token_map = None
+    pred_rnn_layers = 1
+    pred_n_hid = 1
 
 
 class MockModel(RNNT):
@@ -21,17 +33,45 @@ class MockModel(RNNT):
         self.joint_counter = 0
         self.blank_idx = 0
         self.vocab_size = vocab_size
+        self.conditional_encoder = False
+        self.config = MockConfig()
+
+        # Bypass RNNT init
         torch.nn.Module.__init__(self)
 
-    def encode(self, x, x_lens, enc_state=None):
-        return x.transpose(0, 1), x_lens, None
+        # Just for deduction by sos_for
+        self.joint_enc = torch.nn.Linear(1, 1)
 
-    def predict(self, y, pred_state=None, add_sos=True, special_sos=None):
-        x = torch.zeros(1, 1, 1)
+    def encode(
+        self,
+        *,
+        state: Optional[StateEncoder],
+        prefix: Optional[TimeFirst],
+        feats: Optional[TimeFirst],
+    ) -> tuple[TimeFirst, Optional[StateEncoder]]:
+        assert feats is not None, "feats should be provided for this test"
+        return feats, None
 
-        return x, (x, x), None
+    def predict(
+        self,
+        *,
+        state: StatePred,
+        prefix: Optional[TimeFirst],
+        tokens: Optional[TimeFirst],
+    ) -> tuple[TimeFirst, Optional[StatePred]]:
 
-    def joint(self, f, g, f_len=None, g_len=None, batch_offset=None):
+        lens = torch.tensor([2])  # U + 1 i.e. add one to length
+
+        x = torch.zeros(2, 1, 1)  # [T, B, H]
+        s = torch.zeros(1, 1, 1)  # [L/T=1, B, H]
+
+        return (
+            TimeFirst(x, lens),
+            # State will be ignored so just match shape
+            StatePred(embed=s, state=Hidden(s, s)),
+        )
+
+    def joint(self, f: BatchFirst, g: BatchFirst):
         """
         On odd values of self.joint_counter return logits indicating blank index.
 
@@ -39,6 +79,7 @@ class MockModel(RNNT):
         """
         large_neg, large_prob = -100, 10
         logits = torch.ones((1, self.vocab_size + 1)) * large_neg
+
         if self.joint_counter % 2 == 1:
             idx = self.blank_idx
         else:
@@ -46,7 +87,10 @@ class MockModel(RNNT):
 
         logits[0, idx] = large_prob
         self.joint_counter += 1
-        return logits.view(1, 1, 1, -1)
+
+        logits = logits.view(1, -1)  # [B*T*U, K]
+        print(f"joint_counter={self.joint_counter}, idx={idx}, logits={logits.shape}")
+        return (logits, 0)
 
 
 @pytest.fixture
@@ -69,7 +113,8 @@ def args():
         keyword_boost_c0=0.3,
         keyword_boost_beta=0.9,
         keyword_boost_context_score=1.0,
-        prefix=None,
+        pnc_prefix=None,
+        val_lang_prefix=None,
         top_k=5,
     )
 
@@ -151,8 +196,71 @@ def test_decoders(
     feats = torch.randn((time_dim, 1, model_dim))
     feat_lens = torch.tensor([time_dim])
 
-    tks, timesteps, _, probs = split_batched_finals(decoder.decode(feats, feat_lens))
+    tks, timesteps, _, probs = split_batched_finals(
+        decoder.decode(TimeFirst(feats, feat_lens))
+    )
 
     assert tks == [expected_tokens]
     assert timesteps == [expected_timesteps]
     assert probs == [expected_probs]
+
+
+@pytest.mark.parametrize(
+    "prefix_token_ids",
+    [
+        [1],
+        [1, 2],
+        [1, 2, 3],
+    ],
+)
+def test_beam_prefix(prefix_token_ids, test_data_dir):
+    """
+    Test that prefix tokens are fed to the predictor exactly once,
+    regardless of prefix length.
+
+    The predictor is initialised by a single predict(prefix=..., tokens=None) call that
+    advances the LSTM through all prefix tokens. After that, the initial hypothesis has
+    y_last=-1 (SOS), so the first beam expansion call does not feed any token to the
+    predictor (tokens=None). All subsequent expansion calls advance the predictor with
+    decoded tokens via predict(tokens=[[token]]).
+    """
+
+    time_dim = 4
+    model_dim = 1
+    vocab_size = 6
+    predict_calls = []
+
+    class PredictTrackingMockModel(MockModel):
+        def predict(self, *, state, prefix, tokens):
+            predict_calls.append((prefix is not None, tokens))
+            return super().predict(state=state, prefix=prefix, tokens=tokens)
+
+    model = PredictTrackingMockModel(vocab_size)
+
+    decoder = RNNTBeamDecoder(
+        model=model,
+        blank_idx=0,
+        eos_strategy=None,
+        sentpiece_model=str(test_data_dir / "librispeech29.model"),
+        beam_width=1,
+        prefix_token_ids=prefix_token_ids,
+    )
+
+    feats = torch.randn((time_dim, 1, model_dim))
+    feat_lens = torch.tensor([time_dim])
+    decoder.decode(TimeFirst(feats, feat_lens))
+
+    # Filter initialization call (has prefix!=None)
+    # All expansion calls should have prefix=None
+    beam_expansion_tokens = [
+        tokens for has_prefix, tokens in predict_calls if not has_prefix
+    ]
+
+    # sanity check beam successful
+    assert len(beam_expansion_tokens) > 0, "No expansion calls were made"
+    # incorrectly processing the last prefix token twice
+    assert beam_expansion_tokens[0] is None, (
+        f"First beam expansion called predict with tokens={beam_expansion_tokens[0]}, "
+        f"expected None. This indicates init_hyp was called with prefix_token_ids, "
+        f"causing y_last={prefix_token_ids[-1]} instead of -1."
+    )

@@ -46,7 +46,7 @@ cd training
 
 ### Requirements
 
-Currently, the reference uses CUDA-12.2.
+Currently, the reference uses CUDA-13.0.
 Here you can find a table listing compatible drivers: <https://docs.nvidia.com/deploy/cuda-compatibility/index.html#binary-compatibility__table-toolkit-driver>
 
 ### Information about volume mounts

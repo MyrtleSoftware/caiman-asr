@@ -245,6 +245,6 @@ def test_whisper_expand_contractions(test_input, expected1, expected2):
 )
 def test_normalize_standardize(test_input, expected):
     charset = list(" '<>" + string.ascii_lowercase)
-    test_input = lowercase_normalize(test_input, charset=charset)
-    returned = standardize_text((test_input))
+    test_input = lowercase_normalize(test_input, charset=charset, lang_code="en")
+    returned = standardize_text((test_input), lang_code="en")
     assert expected == returned

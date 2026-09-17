@@ -1,3 +1,4 @@
+import math
 from abc import ABC, abstractmethod
 
 from beartype import beartype
@@ -112,3 +113,95 @@ class StepSchedule(Schedule):
             return self.final_value
 
         return self.initial_value
+
+
+@beartype
+class DPSchedule(Schedule):
+    """
+    Delay penalty scheduler that ramps from initial value to final value
+    based on WER thresholds.
+    """
+
+    def __init__(
+        self,
+        initial_value: float = 0.0,
+        final_value: float = 0.01,
+        wer_threshold_initial: float = 0.95,
+        wer_threshold_final: float = 0.4,
+        interpolation_steps: int = 1000,
+    ) -> None:
+        """
+        Args:
+            initial_value:  Initial penalty at the start of training.
+            final_value: Penalty value to ramp up to and continue to the end of training.
+            wer_threshold_initial: Penalty stays at initial_value for WERs above this value.
+            wer_threshold_final: Penalty jumps to final_value for WERs below this value.
+            interpolation_steps: Number of training steps to spend smoothly transitioning
+                                 penalty values between WER intervals. Should be
+                                 set to the same value as WER interval
+        """
+        self.initial_value = initial_value
+        self.final_value = final_value
+        self.wer_threshold_initial = wer_threshold_initial
+        self.wer_threshold_final = wer_threshold_final
+        self.interpolation_steps = interpolation_steps
+
+        # The value actually used by the loss function. Updated every step.
+        self._current_value = initial_value
+
+        # The penalty value at the moment the last WER eval arrived.
+        self._source_value = initial_value
+
+        # The penalty value to interpolate towards.
+        # Set each time a new WER arrives.
+        self._target_value = initial_value
+
+        self._interp_start_step = 0
+        self._last_seen_wer = None
+
+    @beartype
+    def step(self, train_step: int, *, hints: Optional[Dict[str, Any]] = None) -> float:
+
+        if hints is not None and "wer" in hints:
+            current_wer = hints["wer"]
+            if current_wer != self._last_seen_wer:
+                self._last_seen_wer = current_wer
+                # desired penalty value
+                new_target = self._compute_target_from_wer(current_wer)
+                new_target = max(new_target, self._current_value)
+
+                self._source_value = self._current_value
+                self._target_value = new_target
+                self._interp_start_step = train_step
+
+        elapsed = train_step - self._interp_start_step
+        progress = min(elapsed / self.interpolation_steps, 1.0)
+
+        # Cosine schedule
+        beta = 0.5 * (1 - math.cos(math.pi * progress))
+        self._current_value = self._source_value + (
+            (self._target_value - self._source_value) * beta
+        )
+        return self._current_value
+
+    def _compute_target_from_wer(self, wer: float) -> float:
+        """
+        Compute penalty value based on WER value.
+        """
+        if wer >= self.wer_threshold_initial:
+            return self.initial_value
+
+        elif wer <= self.wer_threshold_final:
+            return self.final_value
+
+        else:
+            # cosine schedule
+            progress = (wer - self.wer_threshold_initial) / (
+                self.wer_threshold_final - self.wer_threshold_initial
+            )
+            beta = 0.5 * (1 - math.cos(math.pi * progress))
+            return self.initial_value + (self.final_value - self.initial_value) * beta
+
+    def value(self) -> float:
+
+        return self._current_value

@@ -32,25 +32,3 @@ def check_tokenized_transcript(
             warn_once(message)
         case _:
             raise ValueError(f"Invalid enum value: {unk_handling}")
-
-
-@beartype
-def maybe_filter_transcripts(
-    transcripts: list[list[int]], unk_handling: UnkHandling
-) -> list[list[int]]:
-    """When the user sets unk_handling to WARN,
-    filter out transcripts with unks
-    so that KenLM training doesn't crash"""
-    match unk_handling:
-        case UnkHandling.FAIL:
-            return transcripts
-        case UnkHandling.WARN:
-            # The user will have previously seen warnings about the unks
-            # during tokenization. Filter the unks out here so the ngram
-            # training doesn't fail
-            return [transcript for transcript in transcripts if 0 not in transcript]
-        case _:
-            raise ValueError(
-                f"Invalid value: {unk_handling} "
-                "in the '/path/to/sentencepiece.yaml' configuration file."
-            )

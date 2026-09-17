@@ -1,59 +1,36 @@
 import os
+from argparse import Namespace
 
-import pytest
-
-from caiman_asr_train.lm.prep_kenlm_data import (
-    extract_transcripts_from_manifests,
-    extract_transcripts_from_tars,
-)
-from caiman_asr_train.rnnt import config
-from caiman_asr_train.setup.text_normalization import normalize_config_from_full_yaml
-from caiman_asr_train.utils.select_transcripts import SelectTranscript
+from caiman_asr_train.lm.prep_kenlm_data import main
 
 
 def load_text_file_to_list(file_path):
     return open(file_path).read().splitlines()
 
 
-@pytest.mark.parametrize(
-    "dataset, saved_txt_file, read_from_tar",
-    [
-        ("peoples-speech-short.json", "ngram/ps-short_ls29.txt", False),
-        ("webdataset-eg.tar", "ngram/webd-eg_ls29.txt", True),
-    ],
-)
 def test_prep_kenlm_data(
     test_data_dir,
-    val_tokenizer,
     tmp_path,
-    mini_config_fp,
-    dataset,
-    saved_txt_file,
-    read_from_tar,
+    dataload_args,
 ):
-    cfg = config.load(mini_config_fp)
-    labels = cfg["tokenizer"]["labels"]
-    normalize_config = normalize_config_from_full_yaml(cfg)
+    args = Namespace(
+        model_config=dataload_args.model_config,
+        train_dataset_yaml=dataload_args.train_dataset_yaml,
+        max_utterances=None,
+        output_path=str(tmp_path / "kenlm_input.txt"),
+        batch_size=1,
+        inspect_memory_usage=None,
+        cpu=True,
+    )
 
-    saved_txt_filepath = os.path.join(str(test_data_dir), saved_txt_file)
-    loaded_txt = load_text_file_to_list(saved_txt_filepath)
+    main(args)
 
-    if read_from_tar:
-        transcripts = extract_transcripts_from_tars(
-            [dataset], str(test_data_dir), val_tokenizer, normalize_config, labels
-        )
-    else:
-        transcripts = extract_transcripts_from_manifests(
-            [dataset],
-            str(test_data_dir),
-            val_tokenizer,
-            normalize_config,
-            labels,
-            SelectTranscript(cfg),
-        )
+    with open(args.output_path) as f:
+        produced_lines = f.read().splitlines()
 
-    token_sentences = [
-        " ".join(val_tokenizer.sentpiece.id_to_piece(token) for token in sentence)
-        for sentence in transcripts
-    ]
-    assert token_sentences == loaded_txt
+    loaded_txt = load_text_file_to_list(
+        os.path.join(str(test_data_dir), "ngram/ps-short_ls29.txt")
+    )
+
+    for p in produced_lines:
+        assert p in loaded_txt

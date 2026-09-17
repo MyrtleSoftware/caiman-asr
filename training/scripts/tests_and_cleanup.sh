@@ -1,6 +1,6 @@
 #!/bin/bash
 
-pytest tests
+python -X utf8 -m pytest tests
 TEST_EXIT_CODE=$?
 
 # cleanup any artefacts created during testing

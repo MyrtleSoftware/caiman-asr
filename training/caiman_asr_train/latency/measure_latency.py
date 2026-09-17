@@ -9,15 +9,15 @@ from statistics import mean, median
 
 import matplotlib.pyplot as plt
 from beartype import beartype
-from beartype.typing import Callable, Dict, List, Optional, Tuple
+from beartype.typing import Any, Callable, Dict, List, Optional, Tuple
+from lhotse import CutSet
 
+from caiman_asr_train.data.text.allowed_charset import get_allowed_charset
 from caiman_asr_train.data.text.is_tag import is_tag
 from caiman_asr_train.data.text.normalizers import lowercase_normalize as norm
 from caiman_asr_train.latency.measure_latency_lite import compute_latency_metrics
 from caiman_asr_train.latency.timestamp import EOS, Never, Silence, Termination
 from caiman_asr_train.train_utils.distributed import print_once
-
-BASIC_CHAR_SET = list(" abcdefghijklmnopqrstuvwxyz'")
 
 
 @dataclass
@@ -26,6 +26,15 @@ class CTMTimestamp:
     beg_time: float
     end_time: float
     filename: str
+
+
+@beartype
+@dataclass
+class Latencies:
+    raw_latency: List[float]
+    fw_latency: List[float]
+    sil_latency: List[float]
+    eos_latency: List[float]
 
 
 def parse_args() -> Namespace:
@@ -38,6 +47,12 @@ def parse_args() -> Namespace:
     )
     parser.add_argument(
         "--model_ctm", required=True, type=str, help="Absolute path to model ctm file"
+    )
+    parser.add_argument(
+        "--lang_code",
+        type=str,
+        required=True,
+        help="ISO language code to use for normalizing transcripts",
     )
     parser.add_argument(
         "--include_subs",
@@ -61,6 +76,32 @@ def parse_args() -> Namespace:
         ),
     )
     return parser.parse_args()
+
+
+@beartype
+def load_ctm_from_cuts(manifest_path: str) -> list[Any]:
+    cutset = CutSet.from_jsonl(manifest_path)
+    ctm_data = []
+    for cut in cutset:
+        filename = cut.recording.sources[0].source
+        for sup in cut.supervisions:
+            if sup.alignment is None or "word" not in sup.alignment:
+                continue
+
+            for word, start_time, duration, _ in sup.alignment["word"]:
+                ctm_data.append(
+                    CTMTimestamp(
+                        word,
+                        float(start_time),
+                        float(start_time) + float(duration),
+                        filename,
+                    )
+                )
+
+    if not ctm_data:
+        print_once(f"WARNING: CTM not found for manifest {manifest_path}.")
+
+    return ctm_data
 
 
 @beartype
@@ -166,19 +207,23 @@ def align_transcripts(
     last_emit_time: Optional[Dict[str, Termination]],
     head_offset: float,
     tail_offset: float,
+    lang_code: str,
     include_subs: bool = False,
-) -> Tuple[
-    List[float], List[float], List[float], List[float], float, float, dict[str, float]
-]:
+) -> Tuple[Latencies, List[float], float, float, dict[str, float]]:
     """
     Aligns the words from ground truth and predicted transcripts and calculates the
     emission latencies.
 
     Returns:
-        latency: List of emission latencies.
+        latencies: Latencies dataclass object containing:
+            - raw_latency: List of emission latencies.
+            - fw_latency: List of latencies for the first matched word in each file.
+            - sil_latency: List of end point latencies for SIL terminated utterances.
+            - eos_latency: List of end point latencies for EOS terminated utterances.
         end_times: List of end times of ground truth words.
-        sil_latency: List of end point latencies for SIL terminated utterances.
-        eos_latency: List of end point latencies for EOS terminated utterances.
+        token_usage_rate: Fraction of ground truth words successfully matched (Recall).
+        terminal_token_usage_rate: %files with a correctly matched terminal token.
+        t_stats: Dictionary of alignment metrics, offsets, and Average Alignment Scores.
     """
     # Create dictionaries to group words by filenames
     ground_truth_dict = {}
@@ -194,7 +239,7 @@ def align_transcripts(
     all_gt_words = 0
 
     deltas = []
-
+    fw_latency = []
     eos_latency = []
     sil_latency = []
 
@@ -210,6 +255,8 @@ def align_transcripts(
 
         return False
 
+    charset = get_allowed_charset([lang_code], lowercase_only=True)
+
     # Process each file separately
     for filename in ground_truth_dict:
         if filename not in predicted_dict:
@@ -221,13 +268,22 @@ def align_transcripts(
 
         predicted = [ctm for ctm in predicted_dict[filename] if not is_tag(ctm.word)]
 
-        ground_truth_words = [norm(ctm.word, BASIC_CHAR_SET) for ctm in ground_truth]
-        predicted_words = [norm(ctm.word, BASIC_CHAR_SET) for ctm in predicted]
+        ground_truth_words = [
+            norm(ctm.word, charset, lang_code) for ctm in ground_truth
+        ]
+        predicted_words = [norm(ctm.word, charset, lang_code) for ctm in predicted]
 
         # Initialize the SequenceMatcher for each file
         matcher = difflib.SequenceMatcher(
             None, ground_truth_words, predicted_words, autojunk=False
         )
+
+        if (
+            ground_truth_words
+            and predicted_words
+            and ground_truth_words[0] == predicted_words[0]
+        ):
+            fw_latency.append(predicted[0].end_time - ground_truth[0].end_time)
 
         for tag, i1, i2, j1, j2 in matcher.get_opcodes():
             # opcodes are instructions ('equal', 'replace', 'delete', 'insert')
@@ -281,11 +337,16 @@ def align_transcripts(
         terminal_token_usage_rate = 0.0
         print_once("WARNING: No ground truth words found. Please check the CTM files.")
 
-    return (
+    latencies = Latencies(
         [x.tail_lat for x in deltas],
-        [x.gt_end for x in deltas],
+        fw_latency,
         sil_latency,
         eos_latency,
+    )
+
+    return (
+        latencies,
+        [x.gt_end for x in deltas],
         token_usage_rate,
         terminal_token_usage_rate,
         t_stats,
@@ -297,15 +358,14 @@ def align_ctm_files(
     gt_ctm_paths: List[str],
     model_ctm_path: str,
     last_emit_time: Optional[Dict[str, Termination]],
+    lang_code: str,
     include_subs: bool = False,
     head_offset: float = 0.0,
     tail_offset: float = 0.0,
-) -> Tuple[
-    List[float], List[float], List[float], List[float], float, float, dict[str, float]
-]:
+) -> Tuple[Latencies, List[float], float, float, dict[str, float]]:
     gt_ctm = []
     for ctm in gt_ctm_paths:
-        gt_ctm += load_ctm(ctm)
+        gt_ctm += load_ctm_from_cuts(ctm)
     model_ctm = load_ctm(model_ctm_path)
 
     return align_transcripts(
@@ -315,6 +375,7 @@ def align_ctm_files(
         include_subs=include_subs,
         head_offset=head_offset,
         tail_offset=tail_offset,
+        lang_code=lang_code,
     )
 
 
@@ -339,13 +400,17 @@ def plot_latency_vs_seq_len(latencies, end_times, save_path):
 
 
 def main(args: Namespace):
-    latencies, end_times, sil_latency, eos_latency, *_ = align_ctm_files(
-        [args.gt_ctm], args.model_ctm, None, args.include_subs
+    latencies, end_times, *_ = align_ctm_files(
+        [args.gt_ctm], args.model_ctm, None, args.lang_code, args.include_subs
     )
 
     print(
         compute_latency_metrics(
-            latencies, sil_latency, eos_latency, frame_width=args.frame_width
+            latencies=latencies.raw_latency,
+            fw_latency=latencies.fw_latency,
+            sil_latency=latencies.sil_latency,
+            eos_latency=latencies.eos_latency,
+            frame_width=args.frame_width,
         )
     )
 
@@ -353,7 +418,7 @@ def main(args: Namespace):
         assert (
             os.path.splitext(args.output_img_path)[1] == ".png"
         ), "Incorrect file extension for plot."
-        plot_latency_vs_seq_len(latencies, end_times, args.output_img_path)
+        plot_latency_vs_seq_len(latencies.raw_latency, end_times, args.output_img_path)
 
 
 if __name__ == "__main__":

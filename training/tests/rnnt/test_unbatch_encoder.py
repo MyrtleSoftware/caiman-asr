@@ -2,6 +2,7 @@
 import pytest
 import torch
 
+from caiman_asr_train.core.batches import TimeFirst
 from caiman_asr_train.rnnt.unbatch_encoder import encode_lower_batch_size
 
 
@@ -13,9 +14,23 @@ def test_apply_encoder(model_factory, max_inputs_per_batch):
     feat_dim = 240
     feats = torch.randn(seq_len, batch_size, feat_dim).cuda()
     feat_lens = torch.randint(1, seq_len, (batch_size,)).cuda()
-    encs1, enc_lens1 = encode_lower_batch_size(
-        model, feats, feat_lens, max_inputs_per_batch
+
+    # Make even
+    feat_lens = (feat_lens // 2) * 2
+
+    # The sub_batch ensures minimal-padding
+    feats = TimeFirst(data=feats, lens=feat_lens).sub_batch(0, batch_size)
+
+    encs1 = encode_lower_batch_size(
+        model, feats, max_inputs_per_batch, prefix_token_ids=None
     )
-    encs2, enc_lens2, _ = model.encode(feats, feat_lens)
-    assert torch.allclose(encs1, encs2, atol=1e-4)
-    assert torch.allclose(enc_lens1, enc_lens2)
+
+    encs2, _ = model.encode(feats=feats, state=None, prefix=None)
+
+    assert torch.allclose(encs1.lens, encs2.lens, atol=1e-4)
+
+    for i in range(batch_size):
+        # Only compare non-padded frames
+        a = encs1.sub_batch(i, i + 1).data
+        b = encs2.sub_batch(i, i + 1).data
+        assert torch.allclose(a, b, atol=1e-4)

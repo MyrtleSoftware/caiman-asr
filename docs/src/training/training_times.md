@@ -22,7 +22,7 @@ where:
 - **Throughput (utt/s)** is the number of samples/utterances seen per second during training (higher is better). **NOTE:** This metric is deprecated and will be removed in a future update, it is provided here for comparison.
 - **No. of updates** is the number of optimiser steps at `--global_batch_size=1024` that are required to train the models on the 13k hrs training dataset. You may need fewer steps when training with less data
 - **`grad_accumulation_batches`** is the number of gradient accumulation steps performed on each GPU before taking an optimizer step
-- **`batch_split_factor`** is the number of sub-batches that the `PER_GPU_BATCH_SIZE` is split into before these sub-batches are passed through the joint network and loss.
+- **`batch_split_factor`** (removed, replaced by `joint_lattice_cap`) was the number of sub-batches that the `PER_GPU_BATCH_SIZE` was split into before these sub-batches were passed through the joint network and loss.
 - Times appended with a '\*' are estimates from throughput scaling and extrapolation.
 
-For more details on these hyper-parameters, including how to set them, please refer to the [batch size arguments](batch_size_hyperparameters.md) documentation. For some information about tuning DALI parameters see the [heterogeneous CPU](heterogeneous_cpu.md) page.
+For more details on these hyper-parameters, including how to set them, please refer to the [batch size arguments](batch_size_hyperparameters.md) documentation. For some information about tuning hyper-parameters see the [heterogeneous CPU](heterogeneous_cpu.md) page.

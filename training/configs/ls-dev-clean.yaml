@@ -1,0 +1,6 @@
+format: multilingual-jsonl
+languages:
+  en:
+    datasets:
+      - librispeech-dev-clean-flac.cuts.jsonl.gz:
+          data_dir: /datasets/LibriSpeech

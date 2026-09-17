@@ -6,11 +6,10 @@ import numpy as np
 import torch
 from apex.optimizers import FusedLAMB
 from beartype import beartype
-from beartype.typing import Callable, Dict, List, Optional, Tuple, Union
-from torch.cuda.amp import GradScaler
+from beartype.typing import Dict, List, Optional, Tuple, Union
+from torch.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from caiman_asr_train.data.dali import sampler as dali_sampler
 from caiman_asr_train.data.tokenizer import Tokenizer
 from caiman_asr_train.export.checkpointer import Checkpointer
 from caiman_asr_train.export.model_schema import check_schema_training
@@ -18,14 +17,13 @@ from caiman_asr_train.log.tb_dllogger import init_log
 from caiman_asr_train.log.tee import start_logging_stdout_and_stderr
 from caiman_asr_train.rnnt import config
 from caiman_asr_train.rnnt.config import get_tokenizer_conf
+from caiman_asr_train.rnnt.loss import LossSpec, build_loss_fn
 from caiman_asr_train.rnnt.model import RNNT
 from caiman_asr_train.rnnt.sub_models import RNNTSubModels
 from caiman_asr_train.setup.base import Setup, TrainingOnly
 from caiman_asr_train.setup.check_tokenizer import check_tokenizer_kw
 from caiman_asr_train.setup.core import CUDA, TRAIN, VAL, PipelineType
-from caiman_asr_train.train_utils.batch_splitting import train_step_batch_split
 from caiman_asr_train.train_utils.build_optimizer import build_optimizer
-from caiman_asr_train.train_utils.core import train_step
 from caiman_asr_train.train_utils.distributed import print_once
 from caiman_asr_train.train_utils.grad_noise_scheduler import (
     GradNoiseScheduler,
@@ -35,6 +33,7 @@ from caiman_asr_train.train_utils.lr import lr_policy
 from caiman_asr_train.train_utils.optimizer import OptimizerWrapper
 from caiman_asr_train.train_utils.schedule import (
     ConstantSchedule,
+    DPSchedule,
     Schedule,
     StepSchedule,
 )
@@ -51,6 +50,8 @@ class TrainSetup(Setup):
         tokenizer: Tokenizer,
         multi_gpu: bool,
         tokenizer_kw: dict,
+        spec: LossSpec,
+        prefix_token_map: Optional[dict] = None,
     ) -> Tuple[Union[RNNT, DDP, RNNTSubModels], RNNT, TrainingOnly]:
         """Build RNNT model and associated training objects such as optimizer"""
         rnnt_config = config.rnnt(cfg)
@@ -58,17 +59,31 @@ class TrainSetup(Setup):
             rnnt_config["weights_init_scale"] = args.weights_init_scale
         if args.hidden_hidden_bias_scale is not None:
             rnnt_config["hidden_hidden_bias_scale"] = args.hidden_hidden_bias_scale
+        if rnnt_config.get("conditional_encoder", False):
+            assert (
+                prefix_token_map is not None
+            ), "prefix_token_map must be provided for conditional encoder"
+            rnnt_config["prefix_token_map"] = prefix_token_map
         model_cls = self.get_model_cls(args)
         model = model_cls(n_classes=tokenizer.num_labels + 1, **rnnt_config)
         model.cuda()
 
-        check_schema_training(model.state_dict(), args.skip_state_dict_check)
+        check_schema_training(
+            model.state_dict(),
+            args.skip_state_dict_check,
+            rnnt_config.get("conditional_encoder", False),
+        )
 
         print_once(f"Model size: {num_weights(model) / 10**6:.1f}M params\n")
 
         scaler = None
         if not args.no_amp:
-            scaler = GradScaler()
+            # growth_interval halved from torch's default of 2000: recovery
+            # from a backoff costs +1 log2 per interval of clean steps, so a
+            # deep instability at the default pace takes 12-18k steps to
+            # regrow to a healthy 2^12-2^15 scale. The cost is at most one
+            # extra probe overflow (a skipped step) per 1000 steps.
+            scaler = torch.amp.GradScaler("cuda", growth_interval=1000)
 
         # optimization
         optimizer = self.build_optimizer(args, model)
@@ -91,10 +106,12 @@ class TrainSetup(Setup):
                 half_life_steps=args.half_life_steps,
             )
 
-        model = self.build_dist_model(model, args, multi_gpu)
+        model = self.build_dist_model(
+            model, args, multi_gpu, spec, rnnt_config["joint_dropout"]
+        )
 
         # load checkpoint
-        meta = {"best_wer": 10**6, "start_epoch": 1, "step": 1}
+        meta = {"best_wer": float("inf"), "start_epoch": 1, "step": 1, "duration": 0.0}
         checkpointer = Checkpointer(
             args.output_dir, "RNN-T", allow_partial_load=args.allow_partial_checkpoint
         )
@@ -144,7 +161,6 @@ class TrainSetup(Setup):
             checkpointer=checkpointer,
             grad_noise_scheduler=grad_noise_scheduler,
             optimizer_wrapper=optimizer_wrapper,
-            train_step_fn=self.get_train_step_fn(args),
             dp_scheduler=self.build_delay_penalty_scheduler(args),
             star_scheduler=self.build_star_scheduler(args),
         )
@@ -166,7 +182,14 @@ class TrainSetup(Setup):
             else 2**args.grad_scaler_lower_bound_log2
         )
 
-        return OptimizerWrapper(args, optimizer, scaler, lower_bound=bound)
+        return OptimizerWrapper(
+            args,
+            optimizer,
+            scaler,
+            lower_bound=bound,
+            norm_skip_factor=args.grad_norm_skip_factor,
+            skip_decay_momentum=args.skip_decay_momentum,
+        )
 
     def build_tokenizer(
         self, cfg: dict
@@ -189,12 +212,16 @@ class TrainSetup(Setup):
         )
 
     def build_dist_model(
-        self, model: RNNT, args: Namespace, multi_gpu: bool
-    ) -> Union[RNNT, DDP, RNNTSubModels]:
-        if args.batch_split_factor > 1:
-            return RNNTSubModels.from_RNNT(model, multi_gpu)
-        else:
-            return DDP(model) if multi_gpu else model
+        self,
+        model: RNNT,
+        args: Namespace,
+        multi_gpu: bool,
+        spec: LossSpec,
+        dropout_prob: float,
+    ) -> RNNTSubModels:
+        return RNNTSubModels.from_RNNT(
+            model, multi_gpu, loss_fn=build_loss_fn(spec), dropout_prob=dropout_prob
+        )
 
     def build_grad_noise_scheduler(
         self, args: Namespace, cfg: dict
@@ -220,80 +247,15 @@ class TrainSetup(Setup):
 
     def build_delay_penalty_scheduler(self, args: Namespace) -> Schedule:
         if args.delay_penalty == "wer_schedule":
-            return StepSchedule(
+            return DPSchedule(
                 initial_value=args.dp_initial_value,
                 final_value=args.dp_final_value,
-                toggle_step=args.dp_toggle_step,
-                wer_threshold=args.dp_wer_threshold,
+                wer_threshold_initial=args.dp_wer_threshold_initial,
+                wer_threshold_final=args.dp_wer_threshold_final,
+                interpolation_steps=args.val_frequency,
             )
         else:
             return ConstantSchedule(float(args.delay_penalty))
-
-    def get_batch_sizes(self, args: Namespace) -> Dict[PipelineType, int]:
-        # Effective batch size per GPU after grad accumulation
-        accum_batch_size = int(args.global_batch_size / args.num_gpus)
-        train_batch_size = accum_batch_size // args.grad_accumulation_batches
-        self.batch_checks(args, train_batch_size, accum_batch_size)
-        return {TRAIN: train_batch_size, VAL: args.val_batch_size}
-
-    def get_pipeline_resume_step(
-        self, args: Namespace, training_only: Optional[TrainingOnly]
-    ) -> Dict[PipelineType, int]:
-        if not args.resume:
-            resume_training_step = 0
-        else:
-            resume_training_step = training_only.meta["step"]
-        return {TRAIN: resume_training_step, VAL: 0}
-
-    def batch_checks(
-        self, args: Namespace, train_batch_size: int, accum_batch_size: int
-    ) -> None:
-        assert (
-            accum_batch_size % args.grad_accumulation_batches == 0
-        ), f"{accum_batch_size=} % {args.grad_accumulation_batches=} != 0"
-
-        if args.batch_split_factor != 1:
-            assert (
-                train_batch_size % args.batch_split_factor == 0
-            ), f"{train_batch_size=} % {args.batch_split_factor=} != 0"
-
-    @beartype
-    def build_samplers(
-        self,
-        args: Namespace,
-        np_rng: np.random.Generator,
-        world_size: int,
-        batch_sizes: Dict[PipelineType, int],
-        resume_step: Dict[PipelineType, int],
-    ) -> Dict[PipelineType, Optional[dali_sampler.Sampler]]:
-        # Because of accumulation the sampler dose several steps per global step
-        sampler_steps_per_step = args.global_batch_size // (
-            batch_sizes[TRAIN] * world_size
-        )
-
-        num_batches = args.training_steps * args.global_batch_size // batch_sizes[TRAIN]
-
-        if args.num_buckets > 0:
-            train_sampler = dali_sampler.BucketingSampler(
-                num_buckets=args.num_buckets,
-                batch_size=batch_sizes[TRAIN],
-                global_batch_size=args.global_batch_size,
-                world_size=world_size,
-                total_batches=num_batches,
-                rng=np_rng,
-                resume_step=resume_step[TRAIN] * sampler_steps_per_step,
-                randomize_n_epochs=args.randomize_first_n_epochs,
-            )
-        else:
-            train_sampler = dali_sampler.RandomSampler(
-                total_batches=num_batches,
-                batch_size=batch_sizes[TRAIN],
-                global_batch_size=args.global_batch_size,
-                world_size=world_size,
-                resume_step=resume_step[TRAIN] * sampler_steps_per_step,
-                rng=np_rng,
-            )
-        return {TRAIN: train_sampler, VAL: None}
 
     def pipeline_types(self) -> List[PipelineType]:
         return [TRAIN, VAL]
@@ -316,6 +278,3 @@ class TrainSetup(Setup):
         # increase the default (30 min) to 4hrs to reduce chance of crashing.
         # https://pytorch.org/docs/stable/distributed.html#torch.distributed.init_process_group # noqa
         return self.start_ddp_with_gpu(args, self.multi_gpu, timeout={"hours": 4})
-
-    def get_train_step_fn(self, args: Namespace) -> Callable:
-        return train_step if args.batch_split_factor == 1 else train_step_batch_split

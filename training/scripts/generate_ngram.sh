@@ -21,6 +21,6 @@ cd ../kenlm/build
 # If the text corpus is too small, the `--discount_fallback` argument must be used,
 # which applies predefined discount values for smoothing, rather than estimating them from the data.
 # This ensures model robustness despite limited data.
-bin/lmplz --discount_fallback -o $NGRAM_ORDER <$PATH_TO_TXT >$PATH_TO_ARPA
+bin/lmplz --discount_fallback -o $NGRAM_ORDER --prune 0 0 1 <$PATH_TO_TXT >$PATH_TO_ARPA
 
 bin/build_binary $PATH_TO_ARPA $PATH_TO_BINARY

@@ -14,16 +14,16 @@ The original paper describes fixing the delay penalty at a constant value `lambd
 
 The paper shows that the optimal values of `lambda` are in range of [0.001, 0.01].
 
-## Stepwise
+## Schedule
 
-Our experiments have shown that a non-constant delay penalty scheduler achieves a better trade-off between WER and emission latency. Enabling delay penalty before the model has learned a small amount of language was empirically found to prevent the RNN model from converging below a WER of 100%. However, this requires having a good estimate __before training__ of the point at which the model goes below 100% WER. The stepwise schedule avoids this by stepping from an initial delay penalty to a final delay penalty at a WER threshold. The stepwise schedule can be enabled by passing:
+Our experiments have shown that a non-constant delay penalty scheduler achieves a better trade-off between WER and emission latency. Enabling delay penalty before the model has learned a small amount of language was empirically found to prevent the RNN model from converging below a WER of 100%. However, this requires having a good estimate __before training__ of the point at which the model goes below 100% WER. The delay penalty schedule avoids this by ramping from an initial delay penalty to a final delay penalty at a WER threshold. This schedule can be enabled by passing:
 
 ```bash
 --delay_penalty 'wer_schedule' \
 --dp_initial_value <value before toggle step> \
 --dp_final_value <value after toggle step> \
---dp_toggle_step <fallback training step to toggle on> \
---dp_wer_threshold <WER threshold to trigger step>
+--dp_wer_threshold_initial <WER threshold to trigger ramp> \
+--dp_wer_threshold_final <WER threshold to end ramping>
 ```
 
 The default values for these arguments were the values used to train the v1.13.0 models.

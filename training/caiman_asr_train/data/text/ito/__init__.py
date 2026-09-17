@@ -3,17 +3,6 @@
 """from https://github.com/keithito/tacotron"""
 import string
 
-import caiman_asr_train.data.text.ito.cleaners as cleaners
-
-
-def _clean_text(text, cleaner_names, *args):
-    for name in cleaner_names:
-        cleaner = getattr(cleaners, name)
-        if not cleaner:
-            raise Exception("Unknown cleaner: %s" % name)
-        text = cleaner(text, *args)
-    return text
-
 
 def punctuation_map(labels):
     # Punctuation to remove

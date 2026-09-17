@@ -1,0 +1,21 @@
+name: Prep CI temp dirs
+description: >-
+  Create the per-job temp dirs up front and give the job's docker container a unique name, so that the always() cleanup step (.github/ci-clean.sh) can delete the dirs and docker rm -f the container even when the job is cancelled mid-run. Not every job uses every dir; unused ones stay empty and are removed by the same cleanup.
+runs:
+  using: composite
+  steps:
+    - name: Create temp dirs and container name
+      shell: bash
+      run: |
+        # CI_DS/CI_CK/CI_RS = the launchers' datasets/checkpoints/results args,
+        # CI_HF = HF_CACHE, CI_HC = the benchmark launchers' HOST_CACHE.
+        {
+          echo "CI_DS=$(mktemp -d /tmp/ci.XXXXXXXXXX)"
+          echo "CI_CK=$(mktemp -d /tmp/ci.XXXXXXXXXX)"
+          echo "CI_RS=$(mktemp -d /tmp/ci.XXXXXXXXXX)"
+          echo "CI_HF=$(mktemp -d /tmp/ci.XXXXXXXXXX)"
+          echo "CI_HC=$(mktemp -d /tmp/ci.XXXXXXXXXX)"
+          # A random uuid: unique across concurrent jobs on one docker daemon,
+          # including any future matrix jobs (GITHUB_JOB is the shared job key).
+          echo "CI_CONTAINER=ci-$(cat /proc/sys/kernel/random/uuid)"
+        } >> "$GITHUB_ENV"

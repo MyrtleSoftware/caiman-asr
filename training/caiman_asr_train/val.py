@@ -55,14 +55,12 @@ def validate(
         epoch,
         step,
         val_loader,
-        val_objects.feat_procs[VAL],
         val_objects.tokenizers[VAL].detokenize,
         val_objects.ema_model,
-        val_objects.loss_fn,
+        val_objects.val_joint_loss,
         val_objects.decoder,
         val_objects.cfg,
         args=args,
-        standardize_wer=val_objects.data_objects[VAL].dataset_kw["standardize_wer"],
         calculate_loss=args.calculate_loss,
         nth_batch_only=args.nth_batch_only,
         using_cpu=args.cpu,
@@ -71,41 +69,26 @@ def validate(
     wer = results[error_rate_abbrev(val_objects.error_rate)]
 
     flush_log()
-    if not args.val_from_dir:
-        if args.read_from_tar:
-            val_files = args.val_tar_files
-        elif args.use_hugging_face:
-            val_files = [
-                f"dataset={args.hugging_face_val_dataset},",
-                f"config={args.hugging_face_val_config},",
-                f"split={args.hugging_face_val_split},",
-                f"transcript_key={args.hugging_face_val_transcript_key}",
-            ]
-        else:
-            val_files = args.val_manifests
-        val_files_str = " ".join(val_files)
-        if len(val_files_str) > 200:
-            val_files_str = val_files_str[:200] + "..."
-        print_once(
-            f"\n{error_rate_long(val_objects.error_rate)}: "
-            f'{wer*100.0:5.3f}% on "{val_files_str}"\n'
-            f"Punctuation Error Rate: {results['per']*100.0:5.3f}%\n"
-        )
+    val_files = args.val_manifests
+    val_files_str = " ".join(val_files)
+    if len(val_files_str) > 200:
+        val_files_str = val_files_str[:200] + "..."
+    print_once(
+        f"\n{error_rate_long(val_objects.error_rate)}: "
+        f'{wer * 100.0:5.3f}% on "{val_files_str}"\n'
+    )
 
-    else:
-        print_once(
-            f"\n{error_rate_long(val_objects.error_rate)}: "
-            f"{wer*100.0:5.3f}% on {args.val_audio_dir=} and "
-            f"{args.val_txt_dir=}\n"
-            f"Punctuation Error Rate: {results['per']*100.0:5.3f}%\n"
-        )
+    if "per" in results:
+        print_once(f"punctuation error rate: {results['per'] * 100.0:5.3f}%\n")
 
     if "keyword_metrics" in results:
-        print_once(f"b-WER: {results['keyword_metrics']['b_wer']*100.0:5.3f}%")
-        print_once(f"u-WER: {results['keyword_metrics']['u_wer']*100.0:5.3f}%")
-        print_once(f"Precision: {results['keyword_metrics']['precision']*100.0:5.3f}%")
-        print_once(f"Recall: {results['keyword_metrics']['recall']*100.0:5.3f}%")
-        print_once(f"F1: {results['keyword_metrics']['f1']*100.0:5.3f}%")
+        print_once(f"b-WER: {results['keyword_metrics']['b_wer'] * 100.0:5.3f}%")
+        print_once(f"u-WER: {results['keyword_metrics']['u_wer'] * 100.0:5.3f}%")
+        print_once(
+            f"Precision: {results['keyword_metrics']['precision'] * 100.0:5.3f}%"
+        )
+        print_once(f"Recall: {results['keyword_metrics']['recall'] * 100.0:5.3f}%")
+        print_once(f"F1: {results['keyword_metrics']['f1'] * 100.0:5.3f}%")
 
     if return_dataloader:
         results["dataloader"] = val_loader
@@ -134,7 +117,7 @@ def validation_routine(args, build_objects_func, validation_func):
                 args.skip_init = True
             args.ckpt = ckpt_file
             if args.local_rank == 0:
-                print(f"{i+1}/{len(ckpt_files)} Validating checkpoint: {ckpt_file}")
+                print(f"{i + 1}/{len(ckpt_files)} Validating checkpoint: {ckpt_file}")
             val_objects, profilers = build_objects_func(args)
             results = validation_func(args, val_objects)
             wers[ckpt_file] = round(
@@ -153,10 +136,6 @@ def validation_routine(args, build_objects_func, validation_func):
 
 def run_validate(args: Namespace, val_objects: BuiltObjects):
     # check data path args
-    if not args.read_from_tar:
-        assert (
-            args.val_manifests is not None
-        ), "Must provide val_manifests if not reading from tar"
     return validate(args, val_objects=val_objects)
 
 

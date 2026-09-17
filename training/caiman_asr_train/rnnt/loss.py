@@ -13,47 +13,88 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import torch
 from beartype import beartype
-from beartype.typing import Optional
-from rnnt_ext.transducer.loss import TransducerLoss
+from beartype.typing import Literal, Optional, Union
+from rnnt_ext.transducer.loss import TransducerLoss as CUDATransducerLoss
 
+from caiman_asr_train.core.packing import packed_batch_offsets
+from caiman_asr_train.rnnt.loss_modifiers import (  # noqa: F401
+    IDENTITY_LOSS_MODIFIERS,
+    LossModifiers,
+)
+from caiman_asr_train.rnnt.triton_loss import TritonTransducerLoss
+from caiman_asr_train.tile_transducer.autotune import (
+    Mode,
+    TileLangKernels,
+    select_tilelang_kernels,
+)
+from caiman_asr_train.tile_transducer.tilelang_loss import TileLangTransducerLoss
+from caiman_asr_train.tile_transducer.tilelang_proj_and_loss import TileLangProjAndLoss
 from caiman_asr_train.train_utils.distributed import print_once
 
 
 @beartype
-@dataclass
-class LossModifiers:
-    delay_penalty: float
-    eos_penalty: float
-    star_penalty: float
+@dataclass(frozen=True)
+class LossSpec:
+    """Everything ``build_loss_fn`` needs to build one loss at one precision."""
 
+    backend: str
+    blank_idx: int
+    eos_idx: Optional[int]
+    star_idx: Optional[int]
+    packed_input: bool
+    joint_n_hid: int
+    device: torch.device
+    dtype: torch.dtype
+    # dp_mu and dp_clamp fixed for the whole run.
+    dp_mu: float = 0.0
+    dp_clamp: Optional[float] = None
 
-IDENTITY_LOSS_MODIFIERS = LossModifiers(
-    delay_penalty=0.0,
-    eos_penalty=0.0,
-    star_penalty=1.0,
-)
+    @property
+    def vocab_size(self) -> int:
+        return self.blank_idx + 1
 
 
 class ApexTransducerLoss(torch.nn.Module):
     """
-    NVIDIA apex RNNT implementation from the apex module transducer_loss_cuda.
+    NVIDIA apex RNNT implementation from the apex module transducer_loss_cuda, or
+    the equivalent Triton / TileLang implementation.
     """
 
     @beartype
     def __init__(
         self,
+        backend: Literal["triton", "cuda"] | TileLangKernels,
         blank_idx: int,
         eos_idx: Optional[int],
         star_idx: Optional[int],
         packed_input: bool,
         validate_first_n_remaining: int = 10,
+        dp_mu: float = 0.0,
+        dp_clamp: Optional[float] = None,
     ):
         super().__init__()
-        self.t_loss = TransducerLoss(packed_input=packed_input)
+        match backend:
+            case "triton":
+                self.t_loss = TritonTransducerLoss(
+                    packed_input=packed_input, dp_mu=dp_mu, dp_clamp=dp_clamp
+                )
+            case "cuda":
+                assert dp_mu == 0.0 and dp_clamp is None, (
+                    "the generalized delay penalty (dp_mu / dp_clamp) is only "
+                    "implemented in the triton and tilelang backends"
+                )
+                self.t_loss = CUDATransducerLoss(packed_input=packed_input)
+            case TileLangKernels():
+                self.t_loss = TileLangTransducerLoss(
+                    kernels=backend,
+                    packed_input=packed_input,
+                    dp_mu=dp_mu,
+                    dp_clamp=dp_clamp,
+                )
         self.packed_input = packed_input
         self.blank_idx = blank_idx
         self.eos_idx = eos_idx
@@ -61,7 +102,8 @@ class ApexTransducerLoss(torch.nn.Module):
         self.validate_first_n_remaining = validate_first_n_remaining
 
         print_once(
-            f"TransducerLoss: blank_idx={blank_idx}, eos_idx={eos_idx}, star_idx={star_idx}"
+            f"TransducerLoss: backend={backend}, blank_idx={blank_idx}, "
+            f"eos_idx={eos_idx}, star_idx={star_idx}"
         )
 
     @beartype
@@ -84,7 +126,8 @@ class ApexTransducerLoss(torch.nn.Module):
                 max_output_seq, vocab_size+1] if packed_input=False. Otherwise, logits
                 is a tensor of size [total_packed, K+1] where
                 total_packed = batch_offset[-1].
-                Precision is float16, or float32 when `--no_amp` is passed.
+                Precision is float16, or float32 when `--no_amp` is passed; every
+                backend dispatches on it.
             logit_lens: the length of logits tensor.
             y: text transcription tensor.
             y_lens: the length text tensor.
@@ -119,8 +162,8 @@ class ApexTransducerLoss(torch.nn.Module):
             star_idx=self.star_idx,
             batch_offset=batch_offset,
             max_f_len=max_f_len,
-            delay_penalty=loss_mods.delay_penalty,
-            eos_penalty=loss_mods.eos_penalty,
+            delay_penalty=loss_mods.dp_lam,
+            eos_penalty=loss_mods.eos_lam,
             star_penalty=loss_mods.star_penalty,
         ).mean()
 
@@ -152,6 +195,109 @@ class ApexTransducerLoss(torch.nn.Module):
             )
 
 
+@beartype
+class FusedProjAndLoss(torch.nn.Module):
+    """An alternative to ``ApexTransducerLoss`` that fuses the joint projection
+    into the loss: it takes the already-built, packed, post-ReLU/dropout
+    joint activation ``A`` (built by ``rnnt/joint_loss.py``'s
+    ``FusedJointLoss`` view) rather than already-projected logits.
+    """
+
+    def __init__(
+        self,
+        kernels: TileLangKernels,
+        blank_idx: int,
+        eos_idx: Optional[int],
+        dp_mu: float = 0.0,
+        dp_clamp: Optional[float] = None,
+    ):
+        super().__init__()
+        self.t_loss = TileLangProjAndLoss(
+            blank_idx=blank_idx,
+            kernels=kernels,
+            eos_idx=eos_idx,
+            dp_mu=dp_mu,
+            dp_clamp=dp_clamp,
+        )
+
+        print_once(
+            f"TransducerLoss: backend={kernels}, blank_idx={blank_idx}, "
+            f"eos_idx={eos_idx}"
+        )
+
+    def forward(
+        self,
+        A: torch.Tensor,
+        W: torch.Tensor,
+        b: torch.Tensor,
+        Label: torch.Tensor,
+        f_len: torch.Tensor,
+        y_len: torch.Tensor,
+        boff: torch.Tensor,
+        total: int,
+        loss_mods: LossModifiers = IDENTITY_LOSS_MODIFIERS,
+    ) -> torch.Tensor:
+        return self.t_loss(A, W, b, Label, f_len, y_len, boff, total, loss_mods)
+
+
+TransducerLossFn = Union[ApexTransducerLoss, FusedProjAndLoss]
+
+
+@beartype
+def _tilelang_kernels(spec: LossSpec) -> TileLangKernels:
+    assert spec.device.type == "cuda", "the tilelang joint+loss requires a GPU"
+    return select_tilelang_kernels(
+        spec.joint_n_hid,
+        spec.vocab_size,
+        spec.blank_idx,
+        spec.device,
+        spec.dtype,
+    )
+
+
+@beartype
+def prewarm_loss_kernels(spec: LossSpec, dtypes: tuple[torch.dtype, ...]) -> None:
+    if spec.backend != "tilelang":
+        return
+    for dtype in dtypes:
+        _tilelang_kernels(replace(spec, dtype=dtype))
+
+
+@beartype
+def build_loss_fn(spec: LossSpec) -> TransducerLossFn:
+    if spec.backend != "tilelang":
+        return ApexTransducerLoss(
+            backend=spec.backend,
+            blank_idx=spec.blank_idx,
+            eos_idx=spec.eos_idx,
+            star_idx=spec.star_idx,
+            packed_input=spec.packed_input,
+            dp_mu=spec.dp_mu,
+            dp_clamp=spec.dp_clamp,
+        )
+
+    kernels = _tilelang_kernels(spec)
+
+    if kernels.mode is Mode.fused:
+        return FusedProjAndLoss(
+            kernels=kernels,
+            blank_idx=spec.blank_idx,
+            eos_idx=spec.eos_idx,
+            dp_mu=spec.dp_mu,
+            dp_clamp=spec.dp_clamp,
+        )
+
+    return ApexTransducerLoss(
+        backend=kernels,
+        blank_idx=spec.blank_idx,
+        eos_idx=spec.eos_idx,
+        star_idx=spec.star_idx,
+        packed_input=spec.packed_input,
+        dp_mu=spec.dp_mu,
+        dp_clamp=spec.dp_clamp,
+    )
+
+
 def get_packing_meta_data(
     feat_lens: torch.Tensor,
     txt_lens: torch.Tensor,
@@ -161,7 +307,7 @@ def get_packing_meta_data(
     Return packing metadata for TransducerLoss and TransducerJoint
     """
     final_feat_lens = (feat_lens + enc_time_reduction - 1) // enc_time_reduction
-    batch_offset = torch.cumsum(final_feat_lens * (txt_lens + 1), dim=0)
+    batch_offset = packed_batch_offsets(final_feat_lens, txt_lens + 1)
     max_f_len = max(final_feat_lens).item()
 
     dict_meta_data = {

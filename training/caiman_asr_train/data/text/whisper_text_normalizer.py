@@ -127,6 +127,27 @@ class EnglishTextNormalizer:
             r"\bjr\b\.?": "junior ",
             r"\bsr\b\.?": "senior ",
             r"\besq\b\.?": "esquire ",
+            # also handled by the older ito/cleaners.py english_cleaners
+            # (kept in sync so MemoizedNormalize and MemoizedLowercase agree)
+            r"\bco\b\.?": "company ",
+            r"\bmaj\b\.?": "major ",
+            r"\bdrs\b\.?": "doctors ",
+            r"\bsgt\b\.?": "sergeant ",
+            r"\bltd\b\.?": "limited ",
+            r"\bft\b\.?": "fort ",
+        }
+        # Pronounceable punctuation, unconditionally expanded to words.
+        # Also handled by the older ito/cleaners.py expand_punctuation
+        # (used by lowercase_normalize), kept in sync for the same reason
+        # as self.replacers above.
+        self.punctuation_replacers = {
+            r"&": " and ",
+            r"#": " number ",
+            r"\+": " plus ",
+            r"%": " percent ",
+            r"@": " at ",
+            r"=": " equal ",
+            r":": " ",
         }
         # british to american english conversion
         self.standardize_spellings = EnglishSpellingNormalizer(
@@ -223,9 +244,12 @@ class EnglishTextNormalizer:
             s = s.lower()
 
         # remove words between brackets
-        s = re.sub(r"[<\[][^>\]]*[>\]]", "", s)
+        s = re.sub(r"[«<\[][^»>\]]*[»>\]]", "", s)
+        # remove angle quotes
+        s = re.sub(r"[«»]", "", s)
 
         s = self._apply_replacers(s, self.replacers, self.preserve_case)
+        s = self._apply_replacers(s, self.punctuation_replacers, self.preserve_case)
 
         if self.expand_contractions:
             s = self._apply_replacers(s, self.contractions, self.preserve_case)

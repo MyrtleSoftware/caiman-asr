@@ -1,0 +1,8 @@
+format: multilingual-jsonl
+languages:
+  en:
+    datasets:
+      - tests/test_data/peoples-speech-short.cuts.jsonl:
+  fr:
+    datasets:
+      - tests/test_data/common_voice-short.fr.cuts.jsonl:

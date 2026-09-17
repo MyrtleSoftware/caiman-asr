@@ -1,0 +1,13 @@
+
+[tool.black]
+line-length = 88
+skip-magic-trailing-comma = false
+
+
+[tool.isort]
+profile = "black"
+line_length = 88
+use_parentheses = true
+include_trailing_comma = true
+known_third_party = ["lhotse"]
+known_first_party = ["caiman_asr_train", "myrtle_asr_train"]

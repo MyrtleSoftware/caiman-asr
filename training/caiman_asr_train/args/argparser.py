@@ -42,7 +42,7 @@ class MyrtleArgumentParser(ArgumentParser):
 
 @beartype
 def is_close(x: str, y: str) -> bool:
-    cer, _, _ = word_error_rate([x], [y], error_rate=ErrorRate.CHAR, standardize=False)
+    cer = word_error_rate([x], [y], error_rate=ErrorRate.CHAR, lang_code="en").wer
     return cer < 0.5
 
 

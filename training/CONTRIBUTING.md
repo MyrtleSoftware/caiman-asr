@@ -14,7 +14,7 @@ which python3
 which pip3
 ```
 
-...and ensure that each returns a path. Python comes pre-installed on most Linux distributions so it's likely that even if you can't see it, it is on your system and can be added to your `$PATH`. If you don't have python3 installed you can install it on Ubuntu 18.04 or 20.04 by following [this tutorial](https://phoenixnap.com/kb/how-to-install-python-3-ubuntu).
+...and ensure that each returns a path. Python comes pre-installed on most Linux distributions so it's likely that even if you can't see it, it is on your system and can be added to your `$PATH`. If you don't have python3 installed, follow the official [Python setup guide for Unix platforms](https://docs.python.org/3/using/unix.html).
 
 Furthermore, please check that your Python version is 3.10 or higher by running:
 
@@ -91,8 +91,9 @@ __Plain jaxtyping:__
 
 ```python
 from beartype import beartype
-from jaxtyping import Float,  jaxtyped
+from jaxtyping import Float, jaxtyped
 from torch import Tensor
+
 
 @jaxtyped(typechecker=beartype)
 def transpose(x : Float[Tensor, "m n"]) -> Float[Tensor, "n m"]:
@@ -103,6 +104,7 @@ __With our aliases:__
 
 ```python
 from caiman_asr_train.utils.type import FT, bearjax
+
 
 @bearjax
 def transpose(x : FT["m n"]) -> FT["n m"]:

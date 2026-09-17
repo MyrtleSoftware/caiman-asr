@@ -35,6 +35,6 @@ be ignored. The minimal json file for inference (with 2 wav files) looks like th
 ```
 
 where "dummy" can be replaced by the ground-truth transcript for accurate word error rate calculation,
-where the filenames are relative to the `--data_dir` argument fed to (or defaulted to by) `val.sh`, and where
+where the filenames are relative to the `--val_data_dir` argument fed to (or defaulted to by) `val.sh`, and where
 the original_duration values are effectively ignored (compared to infinity) but must be present.
 Predictions can be generated using other checkpoints by specifying the `--checkpoint` argument.

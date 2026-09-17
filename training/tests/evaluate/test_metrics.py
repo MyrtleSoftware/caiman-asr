@@ -4,7 +4,7 @@ import random
 import pytest
 from hypothesis import given
 from hypothesis.strategies import text
-from levenshtein_rs import levenshtein_list as levenshtein
+from rapidfuzz.distance.Levenshtein import distance as levenshtein
 
 from caiman_asr_train.evaluate.error_rates import ErrorRate
 from caiman_asr_train.evaluate.metrics import (
@@ -55,20 +55,116 @@ def levenshtein_ref(a, b):
 
 
 @pytest.mark.parametrize(
-    "hypotheses, references, standardize, expected_wer",
+    "hypotheses, references, expected_wer",
     [
-        (["hello world"], ["hello world"], True, (0.0, 0, 2)),
-        (["hello world"], ["hi everyone"], True, (1.0, 2, 2)),
-        ([], [], True, (float("inf"), 0, 0)),
-        (["hello world"], ["hello new world"], True, (1 / 3, 1, 3)),
-        (["good morning earth"], ["good morning mars good morning"], True, (0.6, 3, 5)),
+        (["hello world"], ["hello world"], (0.0, 0, 2)),
+        (["hello world"], ["hi everyone"], (1.0, 2, 2)),
+        ([], [], (float("inf"), 0, 0)),
+        (["hello world"], ["hello new world"], (1 / 3, 1, 3)),
+        (["good morning earth"], ["good morning mars good morning"], (0.6, 3, 5)),
     ],
 )
-def test_word_error_rate(hypotheses, references, standardize, expected_wer):
-    wer, scores, words = word_error_rate(
-        hypotheses, references, standardize=standardize, error_rate=ErrorRate.WORD
+def test_word_error_rate(hypotheses, references, expected_wer):
+    wer_details = word_error_rate(
+        hypotheses,
+        references,
+        error_rate=ErrorRate.WORD,
+        lang_code="en",
     )
+    wer, scores, words = wer_details.wer, wer_details.scores, wer_details.words
     assert (wer, scores, words) == expected_wer, "WER calculation is incorrect"
+
+
+@pytest.mark.parametrize(
+    (
+        "hypotheses, references, lang_code, "
+        "expected_wer, expected_hyp_norm, expected_ref_norm"
+    ),
+    [
+        (
+            ["hello world"],
+            ["Hello World."],
+            "en",
+            (0.0, 0, 2),
+            "hello world",
+            "hello world",
+        ),
+        (
+            ["Eugène, est le cousé germais des mille luis Buronov."],
+            ["Eugène est le cousin germain d'Émile-Louis Burnouf."],
+            "fr",
+            (0.75, 6, 8),
+            "eugène est le cousé germais des mille luis buronov",
+            "eugène est le cousin germain d'émile louis burnouf",
+        ),
+        (
+            ["Eugène Burnouf, est le cousé  germais des mille luis Buronov."],
+            ["Eugène Burnouf  est le cousin germain d'Émile-Louis  Burnouf."],
+            "fr",
+            (2 / 3, 6, 9),
+            "eugène burnouf est le cousé germais des mille luis buronov",
+            "eugène burnouf est le cousin germain d'émile louis burnouf",
+        ),
+        ([], [], "en", (float("inf"), 0, 0), "", ""),
+        (
+            ["calificó de habladuría política y boberías a los rumores"],
+            ["calificó de «habladuría política y boberías» a los rumores"],
+            "es",
+            (0.0, 0, 9),
+            "calificó de habladuría política y boberías a los rumores",
+            "calificó de habladuría política y boberías a los rumores",
+        ),
+    ],
+)
+def test_word_error_rate_standardization(
+    hypotheses,
+    references,
+    lang_code,
+    expected_wer,
+    expected_hyp_norm,
+    expected_ref_norm,
+):
+    wer_details = word_error_rate(
+        hypotheses,
+        references,
+        error_rate=ErrorRate.WORD,
+        lang_code=lang_code,
+    )
+    print(wer_details)
+    wer, scores, words = wer_details.wer, wer_details.scores, wer_details.words
+    assert (wer, scores, words) == expected_wer, "WER calculation is incorrect"
+    assert (wer_details.norm_hyp, wer_details.norm_ref) == (
+        expected_hyp_norm,
+        expected_ref_norm,
+    ), "WER standardization is incorrect"
+
+
+@pytest.mark.parametrize(
+    "hypotheses, references, expected_subs, expected_ins, expected_dels",
+    [
+        (["hello world"], ["hello world"], 0, 0, 0),
+        (["a x c"], ["a b c"], 1, 0, 0),
+        (["a b c d"], ["a b c"], 0, 1, 0),
+        (["a b"], ["a b c"], 0, 0, 1),
+        (["a x c d"], ["a b c"], 1, 1, 0),
+        (["a x"], ["a b c"], 1, 0, 1),
+        (["a b c d"], ["a x c"], 1, 1, 0),
+        (["x y z", "a b"], ["a b c", "a b c"], 3, 0, 1),
+    ],
+)
+def test_word_error_rate_details(
+    hypotheses, references, expected_subs, expected_ins, expected_dels
+):
+    wer_details = word_error_rate(
+        hypotheses,
+        references,
+        error_rate=ErrorRate.WORD,
+        lang_code="en",
+    )
+    assert wer_details.substitutions == expected_subs
+    assert wer_details.insertions == expected_ins
+    assert wer_details.deletions == expected_dels
+    assert wer_details.scores == expected_subs + expected_ins + expected_dels
 
 
 def test_wer_unequal_lengths():
@@ -76,7 +172,10 @@ def test_wer_unequal_lengths():
     hypotheses = ["hello"]
     with pytest.raises(ValueError):
         word_error_rate(
-            hypotheses, references, standardize=True, error_rate=ErrorRate.WORD
+            hypotheses,
+            references,
+            error_rate=ErrorRate.WORD,
+            lang_code="en",
         )
 
 
@@ -90,12 +189,28 @@ def test_long_utterance():
 
 
 def test_mer():
-    assert word_error_rate(
-        ["One two four一二四"],
-        ["One two three一二三"],
-        standardize=False,
+    wer_details = word_error_rate(
+        ["One two four 一二四"],
+        ["One two three 一二三"],
         error_rate=ErrorRate.MIXTURE,
-    ) == (1 / 3, 2, 6)
+        lang_code="en",
+    )
+    wer, scores, words = wer_details.wer, wer_details.scores, wer_details.words
+    assert (wer, scores, words) == (1 / 3, 2, 6)
+
+
+def test_mer2():
+    """
+    The "One一" is treated as single word, as there is not space between the words.
+    """
+    wer_details = word_error_rate(
+        ["One一二四"],
+        ["One一二三"],
+        error_rate=ErrorRate.MIXTURE,
+        lang_code="en",
+    )
+    wer, scores, words = wer_details.wer, wer_details.scores, wer_details.words
+    assert (wer, scores, words) == (1 / 3, 1, 3)
 
 
 @pytest.mark.parametrize(
@@ -124,18 +239,20 @@ def test_mer():
     ],
 )
 def test_punctuation_error_rate(hypotheses, references, expected_per):
-    per, pun_symbols = punctuation_error_rate(hypotheses, references)
+    per_details = punctuation_error_rate(hypotheses, references)
+    per, pun_symbols = per_details.per, per_details.punc_symbols
     assert (per, pun_symbols) == expected_per, "PER calculation is incorrect"
 
 
 @pytest.mark.parametrize(
-    "hypotheses, references, keywords, normalize, expected_tp, expected_fp, expected_fn",
+    "hypotheses, references, keywords, lang_code, "
+    "expected_tp, expected_fp, expected_fn",
     [
         (
             ["hello world", "hello mars"],
             ["hello world", "hello mars"],
             ["hello"],
-            False,
+            "en",
             2,
             0,
             0,
@@ -144,7 +261,7 @@ def test_punctuation_error_rate(hypotheses, references, expected_per):
             ["hello march", "hello mars"],
             ["hello mars", "hello mars"],
             ["mars"],
-            False,
+            "en",
             1,
             0,
             1,
@@ -153,59 +270,8 @@ def test_punctuation_error_rate(hypotheses, references, expected_per):
             ["hello Mars", "hello mars"],
             ["hello Mars", "hello Mars"],
             ["Mars"],
-            False,
-            1,
-            0,
-            1,
-        ),
-        (
-            ["hello world", "hello mars"],
-            ["hello world", "hello mars"],
-            ["hello"],
-            True,
+            "en",
             2,
-            0,
-            0,
-        ),
-        (
-            ["hello march", "hello mars"],
-            ["hello mars", "hello mars"],
-            ["mars"],
-            True,
-            1,
-            0,
-            1,
-        ),
-        (
-            ["hello Mars", "hello mars"],
-            ["hello Mars", "hello Mars"],
-            ["Mars"],
-            True,
-            2,
-            0,
-            0,
-        ),
-        (
-            [
-                "this is caiman asr and this is caiman",
-                "this is caiman asr and this is cool",
-            ],
-            [
-                "this is caiman asr and this is cool",
-                " this is caiman asr and this is cool",
-            ],
-            ["caiman"],
-            False,
-            2,
-            1,
-            0,
-        ),
-        (
-            ["hello Dr. Schuyler, do you enjoy pathophysiology?"],
-            ["hello Dr. Schuyler, do you enjoy pathophysiology?"],
-            ["Schuyler", "pathophysiology"],
-            False,
-            0,
             0,
             0,
         ),
@@ -213,7 +279,7 @@ def test_punctuation_error_rate(hypotheses, references, expected_per):
             ["hello Dr. Schuyler, do you enjoy pathophysiology?"],
             ["hello Dr. Schuyler, do you enjoy pathophysiology?"],
             ["Schuyler", "pathophysiology"],
-            True,
+            "en",
             2,
             0,
             0,
@@ -222,7 +288,7 @@ def test_punctuation_error_rate(hypotheses, references, expected_per):
             ["hello Dr. Schuyler, do you enjoy pathology? Schuyler Schuyler"],
             ["hello Dr. Schuyler, do you enjoy pathophysiology?"],
             ["Schuyler", "pathophysiology"],
-            True,
+            "en",
             1,
             2,
             1,
@@ -231,7 +297,7 @@ def test_punctuation_error_rate(hypotheses, references, expected_per):
             ["hello Dr. Schuyler, do you enjoy pathology? Schuyler Schuyler"],
             ["hello Dr. Schuyler, do you enjoy pathology?"],
             ["Schuyler", "pathophysiology"],
-            True,
+            "en",
             1,
             2,
             0,
@@ -240,7 +306,7 @@ def test_punctuation_error_rate(hypotheses, references, expected_per):
             ["hello my name is Grayson Schuyler", "hello my name is Grayson School"],
             ["hello my name is Grayson Schuyler", "hello my name is Grayson Schuyler"],
             ["Grayson", "Schuyler"],
-            True,
+            "en",
             3,
             0,
             1,
@@ -251,7 +317,7 @@ def test_punctuation_error_rate(hypotheses, references, expected_per):
             [
                 "Grayson Schuyler"
             ],  # Doesn't currently support phrases (multi-word keywords)
-            True,
+            "en",
             0,
             0,
             0,
@@ -260,19 +326,32 @@ def test_punctuation_error_rate(hypotheses, references, expected_per):
             ["hello Dr. Schuyler, do you enjoy pathology? Schuyler Schuyler"],
             ["hello Dr. Schuyler. Schuyler, do you enjoy pathophysiology?"],
             ["Schuyler", "pathophysiology"],
-            True,
+            "en",
             1,
             2,
             2,
         ),
+        (
+            ["hyp", "", ""],
+            ["", "ref", ""],  # Test nothrow on empty reference
+            [],
+            "en",
+            0,
+            0,
+            0,
+        ),
     ],
 )
 def test_count_keyword_stats(
-    hypotheses, references, keywords, normalize, expected_tp, expected_fp, expected_fn
+    hypotheses,
+    references,
+    keywords,
+    lang_code,
+    expected_tp,
+    expected_fp,
+    expected_fn,
 ):
-    tp, fp, fn = count_keyword_stats(
-        hypotheses, references, keywords, normalize=normalize
-    )
+    tp, fp, fn = count_keyword_stats(hypotheses, references, keywords, lang_code)
     assert (tp, fp, fn) == (
         expected_tp,
         expected_fp,
@@ -281,13 +360,14 @@ def test_count_keyword_stats(
 
 
 @pytest.mark.parametrize(
-    "hypotheses, refs, keywords, normalize, expected_prec, expected_recall, expected_f1",
+    "hypotheses, refs, keywords, lang_code, "
+    "expected_prec, expected_recall, expected_f1",
     [
         (
             ["hello world", "hello mars"],
             ["hello world", "hello mars"],
             ["hello"],
-            False,
+            "en",
             1.0,
             1.0,
             1.0,
@@ -296,7 +376,7 @@ def test_count_keyword_stats(
             ["hello march", "hello mars"],
             ["hello mars", "hello mars"],
             ["mars"],
-            False,
+            "en",
             1.0,
             0.5,
             0.6666666666666666,
@@ -305,67 +385,16 @@ def test_count_keyword_stats(
             ["hello Mars", "hello mars"],
             ["hello Mars", "hello Mars"],
             ["Mars"],
-            False,
-            1.0,
-            0.5,
-            0.6666666666666666,
-        ),
-        (
-            ["hello world", "hello mars"],
-            ["hello world", "hello mars"],
-            ["hello"],
-            True,
+            "en",
             1.0,
             1.0,
             1.0,
-        ),
-        (
-            ["hello march", "hello mars"],
-            ["hello mars", "hello mars"],
-            ["mars"],
-            True,
-            1.0,
-            0.5,
-            0.6666666666666666,
-        ),
-        (
-            ["hello Mars", "hello mars"],
-            ["hello Mars", "hello Mars"],
-            ["Mars"],
-            True,
-            1.0,
-            1.0,
-            1.0,
-        ),
-        (
-            [
-                "this is caiman asr and this is caiman",
-                "this is caiman asr and this is cool",
-            ],
-            [
-                "this is caiman asr and this is cool",
-                " this is caiman asr and this is cool",
-            ],
-            ["caiman"],
-            False,
-            0.6666666666666666,
-            1.0,
-            0.8,
         ),
         (
             ["hello Dr. Schuyler, do you enjoy pathophysiology?"],
             ["hello Dr. Schuyler, do you enjoy pathophysiology?"],
             ["Schuyler", "pathophysiology"],
-            False,
-            0.0,
-            0.0,
-            0.0,
-        ),
-        (
-            ["hello Dr. Schuyler, do you enjoy pathophysiology?"],
-            ["hello Dr. Schuyler, do you enjoy pathophysiology?"],
-            ["Schuyler", "pathophysiology"],
-            True,
+            "en",
             1.0,
             1.0,
             1.0,
@@ -374,7 +403,7 @@ def test_count_keyword_stats(
             ["hello Dr. Schuyler, do you enjoy pathology? Schuyler Schuyler"],
             ["hello Dr. Schuyler, do you enjoy pathophysiology?"],
             ["Schuyler", "pathophysiology"],
-            True,
+            "en",
             0.3333333333333333,
             0.5,
             0.4,
@@ -383,7 +412,7 @@ def test_count_keyword_stats(
             ["hello Dr. Schuyler, do you enjoy pathology? Schuyler Schuyler"],
             ["hello Dr. Schuyler, do you enjoy pathology?"],
             ["Schuyler", "pathophysiology"],
-            True,
+            "en",
             0.3333333333333333,
             1.0,
             0.5,
@@ -394,13 +423,13 @@ def test_calculate_precision_recall_f1(
     hypotheses,
     refs,
     keywords,
-    normalize,
+    lang_code,
     expected_prec,
     expected_recall,
     expected_f1,
 ):
     precision, recall, f1 = calculate_precision_recall_f1(
-        hypotheses, refs, keywords, normalize
+        hypotheses, refs, keywords, lang_code
     )
     assert (precision, recall, f1) == (
         expected_prec,
@@ -410,48 +439,20 @@ def test_calculate_precision_recall_f1(
 
 
 @pytest.mark.parametrize(
-    "hypotheses, refs, keywords, standardize, expected_wers",
+    "hypotheses, refs, keywords, lang_code, expected_wers",
     [
         (
-            ["hello world", "hello mars"],
-            ["hello world", "hello mars"],
-            ["hello"],
-            False,
-            (0.0, None),
-        ),
-        (
-            ["hello world", "hello mars"],
-            ["hello world", "hello mars"],
-            ["mars"],
-            False,
-            (0.0, 0.0),
-        ),
-        (
             ["hello Mars", "hello mars"],
             ["hello Mars", "hello Mars"],
             ["Mars"],
-            False,
-            (0.25, None),
-        ),
-        (
-            ["hello Mars", "hello mars"],
-            ["hello Mars", "hello Mars"],
-            ["Mars"],
-            True,
+            "en",
             (0.0, None),
         ),
         (
             ["hello Dr. Schuyler, do you enjoy pathophysiology?"],
             ["hello Dr. Schuyler, do you enjoy pathophysiology?"],
             ["Schuyler", "pathophysiology"],
-            False,
-            (None, 0),
-        ),
-        (
-            ["hello Dr. Schuyler, do you enjoy pathophysiology?"],
-            ["hello Dr. Schuyler, do you enjoy pathophysiology?"],
-            ["Schuyler", "pathophysiology"],
-            True,
+            "en",
             (0.0, None),
         ),
         (
@@ -466,28 +467,28 @@ def test_calculate_precision_recall_f1(
                 "My name is Scooter",
             ],
             ["Schuyler", "pathophysiology"],
-            True,
+            "en",
             (0.1, 0.0),
         ),
         (
             ["hello Dr. Schuyler, do you enjoy pathology? Schuyler Schuyler"],
             ["hello Dr. Schuyler, do you enjoy pathophysiology?"],
             ["Schuyler", "pathophysiology"],
-            True,
+            "en",
             (3 / 7, None),
         ),
         (
             ["hello Dr. Schuyler, do you enjoy pathology? Schuyler Schuyler"],
             ["hello Dr. Schuyler, do you enjoy pathology?"],
             ["Schuyler", "pathophysiology"],
-            True,
+            "en",
             (2 / 7, None),
         ),
         (
             ["there are no keywords in this sentence"],
             ["there are no keywords in this sentence"],
             ["Schuyler", "pathophysiology"],
-            True,
+            "en",
             (None, 0.0),
         ),
         (
@@ -504,7 +505,7 @@ def test_calculate_precision_recall_f1(
                 "Myrtle is based in Cambridge",
             ],
             ["CAIMAN", "ASR"],
-            True,
+            "en",
             (0.0, 0.0),
         ),
         (
@@ -521,11 +522,11 @@ def test_calculate_precision_recall_f1(
                 "Myrtle is based in Cambridge",
             ],
             ["CAIMAN", "ASR"],
-            True,
+            "en",
             (0.4, 0.2),
         ),
     ],
 )
-def test_calculate_keyword_wers(hypotheses, refs, keywords, standardize, expected_wers):
-    b_wer, u_wer = calculate_keyword_wers(hypotheses, refs, keywords, standardize)
+def test_calculate_keyword_wers(hypotheses, refs, keywords, lang_code, expected_wers):
+    b_wer, u_wer = calculate_keyword_wers(hypotheses, refs, keywords, lang_code)
     assert (b_wer, u_wer) == expected_wers, "Keyword WER calculation is incorrect"

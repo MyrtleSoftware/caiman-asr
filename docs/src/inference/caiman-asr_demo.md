@@ -31,7 +31,7 @@ See the [Programming the card](./programming_the_fpga.md) section for instructio
    and `[card index]` is an optional integer list argument specifying which card indices to use, e.g. `0 1 2 3`.
    The default is 0.
 
-   The demo GUI webpage will then be served at <!-- markdown-link-check-disable -->[http://localhost](http://localhost).
+   The demo GUI webpage will then be served at [http://localhost](http://localhost).
 
 The latency may be much higher than usual during start-up. Refreshing the
 webpage will reset the scale on the latency chart.

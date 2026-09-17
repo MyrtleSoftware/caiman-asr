@@ -1,39 +1,69 @@
 import torch
 import torch.distributed as dist
 from beartype import beartype
-from beartype.typing import Dict, Optional, Tuple
+from beartype.typing import Dict, Optional
 
-from caiman_asr_train.evaluate.distributed_utils import (
-    multigpu_per,
-    multigpu_wer,
-    sum_across_gpus,
-)
+from caiman_asr_train.evaluate.distributed_utils import sum_across_gpus
 from caiman_asr_train.evaluate.error_rates import ErrorRate
-from caiman_asr_train.evaluate.wer_breakdown import print_wer_breakdown
+from caiman_asr_train.evaluate.metrics import (
+    PerDetails,
+    punctuation_error_rate,
+    word_error_rate,
+)
+
+
+@beartype
+def sync_aggregates_across_ranks(aggregates: Dict[str, list]) -> None:
+    """
+    All-gather aggregates so every rank holds the concatenated results from all peers.
+    """
+    if not dist.is_initialized():
+        return
+    gathered_results = [None] * dist.get_world_size()
+    dist.all_gather_object(gathered_results, aggregates)
+
+    for x in [
+        "user_perceived_timestamps",
+        "model_timestamps",
+        "finals_timestamps",
+        "wordstamps",
+        "preds",
+        "txts",
+        "fnames",
+        "all_wer_details",
+        "all_per_details",
+    ]:
+        if x in aggregates:
+            combined_data = [
+                data for results in gathered_results for data in results[x]
+            ]
+            aggregates[x] = combined_data
 
 
 @beartype
 def process_evaluation_epoch(
     aggregates: Dict[str, list],
-    standardize_wer: bool,
-    breakdown_wer: bool,
-    breakdown_chars: str,
+    lang_code: str,
     error_rate: ErrorRate,
+    calculate_per: bool,
     punctuation_marks: list[str],
     punctuation_normalization: bool = True,
-) -> Tuple[float, float, Optional[float]]:
+) -> Optional[float]:
     """
     Processes results from each worker at the end of evaluation and combine to final result
 
     Aggregates will be updated in-place to have timestamps, model_timestamps,
-    finals_timestamps and wordstamps from all processes.
+    finals_timestamps, wordstamps, preds, txts, fnames, all_wer_details,
+    all_per_details from all processes.
 
     Args:
         aggregates: dictionary containing information of entire evaluation
-        standardize_wer: whether to apply Whisper normalization rules to
         the transcripts
+        lang_code: language code of the transcripts
+        error_rate: type of error rate to compute (WORD/CHAR/MIXTURE)
+        punctuation_marks: list of punctuation marks to consider for PER
+        punctuation_normalization: whether to normalize punctuation for PER
     Return:
-        wer: final word error rate
         loss: final loss
     """
     if "losses" in aggregates:
@@ -44,38 +74,28 @@ def process_evaluation_epoch(
     hypotheses = aggregates["preds"]
     references = aggregates["txts"]
 
-    wer = multigpu_wer(hypotheses, references, error_rate, standardize_wer)
-    per = multigpu_per(
-        hypotheses, references, punctuation_marks, punctuation_normalization
-    )
-    if breakdown_wer:
-        print_wer_breakdown(hypotheses, references, breakdown_chars, error_rate)
+    all_wer_details = []
+    all_per_details = []
+
+    # Compute local WER/PER for this rank's data
+    for hyp, ref in zip(hypotheses, references):
+        wer_detail = word_error_rate([hyp], [ref], error_rate, lang_code)
+        all_wer_details.append(wer_detail)
+
+        if calculate_per:
+            per_detail = punctuation_error_rate(
+                [hyp], [ref], punctuation_marks, punctuation_normalization
+            )
+        else:
+            # Placeholder if PER is not calculated
+            per_detail = PerDetails(-1.0, 0, 0)
+        all_per_details.append(per_detail)
+    aggregates["all_wer_details"] = all_wer_details
+    aggregates["all_per_details"] = all_per_details
 
     multi_gpu = dist.is_initialized()
     if multi_gpu:
-        eloss /= dist.get_world_size()
-        eloss = sum_across_gpus(eloss)
+        eloss = sum_across_gpus(eloss / dist.get_world_size())
+        sync_aggregates_across_ranks(aggregates)
 
-        gathered_results = (
-            [None] * dist.get_world_size() if dist.get_rank() == 0 else None
-        )
-        # Gather aggregates dictionary across all workers
-        dist.gather_object(aggregates, gathered_results, dst=0)
-
-        # If rank 0 process, combine data from all processes
-        if dist.get_rank() == 0:
-            for x in [
-                "user_perceived_timestamps",
-                "model_timestamps",
-                "finals_timestamps",
-                "wordstamps",
-                "preds",
-                "txts",
-                "fnames",
-            ]:
-                if x in aggregates:
-                    combined_data = [
-                        data for results in gathered_results for data in results[x]
-                    ]
-                    aggregates[x] = combined_data
-    return wer, per, eloss
+    return eloss

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 
-import datetime
 import os
 from abc import ABC, abstractmethod
 from argparse import Namespace
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import torch
@@ -13,34 +12,39 @@ from beartype import beartype
 from beartype.typing import Callable, Dict, List, Optional, Tuple, Union
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from caiman_asr_train.data import features
-from caiman_asr_train.data.build_dataloader import build_dali_loader
-from caiman_asr_train.data.dali import sampler as dali_sampler
-from caiman_asr_train.data.dali.data_loader import DaliDataLoader
 from caiman_asr_train.data.tokenizer import Tokenizer
 from caiman_asr_train.evaluate.error_rates import ErrorRate, get_error_rate
 from caiman_asr_train.export.checkpointer import Checkpointer
+from caiman_asr_train.lhotse.config import DataConfig
+from caiman_asr_train.lhotse.config_build import build_from_legacy_sources
+from caiman_asr_train.lhotse.pipeline import LhotsePipeline, ResumeInfo
 from caiman_asr_train.lm.kenlm_ngram import NgramInfo, find_ngram_path
 from caiman_asr_train.rnnt import config
 from caiman_asr_train.rnnt.batched_greedy import RNNTBatchedGreedyDecoder
 from caiman_asr_train.rnnt.beam import RNNTBeamDecoder
 from caiman_asr_train.rnnt.decoder import RNNTDecoder
 from caiman_asr_train.rnnt.eos_strategy import EOSBlank, EOSIgnore, EOSPredict
-from caiman_asr_train.rnnt.loss import ApexTransducerLoss
+from caiman_asr_train.rnnt.joint_loss import JointLoss, build_joint_loss
+from caiman_asr_train.rnnt.loss import LossSpec, build_loss_fn, prewarm_loss_kernels
 from caiman_asr_train.rnnt.model import RNNT
 from caiman_asr_train.rnnt.parallel_decoder import ParallelDecoder, get_num_procs
 from caiman_asr_train.rnnt.sub_models import RNNTSubModels
-from caiman_asr_train.setup.core import CPU, TRAIN, VAL, PipelineType
-from caiman_asr_train.setup.dali import build_dali_yaml_config
-from caiman_asr_train.setup.mel_normalization import build_mel_feat_normalizer
-from caiman_asr_train.train_utils.distributed import print_once
+from caiman_asr_train.setup.core import CPU, CUDA, TRAIN, VAL, PipelineType
+from caiman_asr_train.train_utils.distributed import (
+    print_once,
+)
+from caiman_asr_train.train_utils.distributed import (
+    start_ddp_with_gpu as shared_start_ddp_with_gpu,
+)
 from caiman_asr_train.train_utils.grad_noise_scheduler import GradNoiseScheduler
 from caiman_asr_train.train_utils.optimizer import OptimizerWrapper
 from caiman_asr_train.train_utils.schedule import Schedule
 from caiman_asr_train.utils.frame_width import encoder_output_frame_width
-from caiman_asr_train.utils.select_transcripts import SelectTranscript
+from caiman_asr_train.utils.prefix import build_prefix_token_map
 from caiman_asr_train.utils.user_tokens import get_user_token
 from caiman_asr_train.utils.user_tokens_lite import get_all_user_tokens
+
+VAL_DTYPE = torch.float32
 
 
 @beartype
@@ -51,7 +55,6 @@ class TrainingOnly:
     checkpointer: Checkpointer
     grad_noise_scheduler: Optional[GradNoiseScheduler]
     optimizer_wrapper: OptimizerWrapper
-    train_step_fn: Callable
     dp_scheduler: Schedule
     star_scheduler: Schedule
 
@@ -59,7 +62,8 @@ class TrainingOnly:
 @beartype
 @dataclass
 class DataObject:
-    loader: DaliDataLoader
+    loader: LhotsePipeline
+    config: DataConfig
     dataset_kw: dict
     features_kw: dict
 
@@ -72,11 +76,10 @@ class BuiltObjects:
     ema_model: RNNT
     tokenizers: Dict[PipelineType, Tokenizer]
     tokenizers_kw: Dict[PipelineType, dict]
-    loss_fn: ApexTransducerLoss
+    val_joint_loss: JointLoss
     multi_gpu: bool
     cfg: dict
     world_size: int
-    feat_procs: Dict[PipelineType, torch.nn.Module]
     training_only: Optional[TrainingOnly]
     data_objects: Dict[PipelineType, DataObject]
     error_rate: ErrorRate
@@ -91,7 +94,7 @@ class Setup(ABC):
         """Initialise the objects required for each PipelineType."""
         # Must make output directory before the logging starts in initial_setup()
         os.makedirs(args.output_dir, exist_ok=True)
-        multi_gpu, world_size, np_rng, cfg, batch_sizes = self.initial_setup(args)
+        multi_gpu, world_size, np_rng, cfg = self.initial_setup(args)
         (
             tokenizers,
             blank_idx,
@@ -101,10 +104,36 @@ class Setup(ABC):
             default_tokenizer,
             default_tokenizer_kw,
         ) = self.build_all_tokenizers(args, cfg)
+        if cfg["rnnt"].get("conditional_encoder", False):
+            has_prefix_conditioning = any(
+                (
+                    args.pnc_prefix is not None,
+                    args.val_lang_prefix is not None,
+                    getattr(args, "conditional", False),
+                    getattr(args, "conditional_language", False),
+                )
+            )
+            assert has_prefix_conditioning, "Conditional encoder enabled but "
+            "no prefix specified, check the train / val arguments."
+            user_tokens, _ = get_all_user_tokens(cfg)
+            prefix_token_map = build_prefix_token_map(
+                user_tokens=user_tokens,
+                tokenizer=default_tokenizer,
+            )
+        else:
+            prefix_token_map = None
+        spec = self.build_loss_spec(args, blank_idx, eos_idx, star_idx, cfg)
+        prewarm_loss_kernels(spec, (spec.dtype, VAL_DTYPE))
         model, ema_model, training_only = self.build_model(
-            args, cfg, default_tokenizer, multi_gpu, default_tokenizer_kw
+            args,
+            cfg,
+            default_tokenizer,
+            multi_gpu,
+            default_tokenizer_kw,
+            spec,
+            prefix_token_map=prefix_token_map,
         )
-        decoder, loss_fn = self.build_evaluation_objects(
+        decoder = self.build_evaluation_objects(
             ema_model,
             args,
             cfg,
@@ -114,18 +143,21 @@ class Setup(ABC):
             default_tokenizer,
             world_size,
         )
-        data_objects, feat_procs = self.build_data_and_feat_proc(
-            args, np_rng, world_size, batch_sizes, cfg, tokenizers, training_only
+        data_objects = self.build_data_and_feat_proc(
+            args, np_rng, world_size, cfg, tokenizers, training_only
         )
         return BuiltObjects(
             decoder=decoder,
             model=model,
             tokenizers=tokenizers,
-            loss_fn=loss_fn,
+            val_joint_loss=build_joint_loss(
+                ema_model,
+                build_loss_fn(replace(spec, dtype=VAL_DTYPE)),
+                float(config.rnnt(cfg)["joint_dropout"]),
+            ).eval(),
             multi_gpu=multi_gpu,
             cfg=cfg,
             data_objects=data_objects,
-            feat_procs=feat_procs,
             ema_model=ema_model,
             world_size=world_size,
             tokenizers_kw=tokenizers_kw,
@@ -135,13 +167,12 @@ class Setup(ABC):
 
     def initial_setup(
         self, args: Namespace
-    ) -> Tuple[bool, int, np.random.Generator, dict, Dict[PipelineType, int]]:
+    ) -> Tuple[bool, int, np.random.Generator, dict]:
         self.torch_settings(args)
         multi_gpu, world_size = self.start_ddp(args)
         np_rng = self.seed_and_logging(args)
         cfg = self.build_cfg(args)
-        batch_sizes = self.get_batch_sizes(args)
-        return multi_gpu, world_size, np_rng, cfg, batch_sizes
+        return multi_gpu, world_size, np_rng, cfg
 
     def build_all_tokenizers(self, args: Namespace, cfg: dict) -> Tuple[
         Dict[PipelineType, Tokenizer],
@@ -193,11 +224,10 @@ class Setup(ABC):
         star_idx: Optional[int],
         default_tokenizer: Tokenizer,
         world_size: int,
-    ) -> Tuple[RNNTDecoder, ApexTransducerLoss]:
-        loss_fn = self.build_loss_fn(blank_idx, eos_idx, star_idx, cfg)
+    ) -> RNNTDecoder:
         ngram_info = self.build_ngram_info(args, cfg.get("ngram"))
         user_symbols_dict, _ = get_all_user_tokens(cfg)
-        decoder = self.build_decoder(
+        return self.build_decoder(
             ema_model,
             args,
             blank_idx,
@@ -208,7 +238,6 @@ class Setup(ABC):
             user_tokens=[i for i in [star_idx, eos_idx] if i is not None],
             user_symbols_dict=user_symbols_dict,
         )
-        return decoder, loss_fn
 
     @abstractmethod
     def build_model(
@@ -218,6 +247,8 @@ class Setup(ABC):
         tokenizer: Tokenizer,
         multi_gpu: bool,
         tokenizer_kw: dict,
+        spec: LossSpec,
+        prefix_token_map: Optional[dict],
     ) -> Tuple[Union[RNNT, DDP, RNNTSubModels], RNNT, Optional[TrainingOnly]]:
         pass
 
@@ -226,26 +257,18 @@ class Setup(ABC):
         args: Namespace,
         np_rng: np.random.Generator,
         world_size: int,
-        batch_sizes: Dict[PipelineType, int],
         cfg: dict,
         tokenizers: Dict[PipelineType, Tokenizer],
         training_only: Optional[TrainingOnly],
-    ) -> Tuple[Dict[PipelineType, DataObject], Dict[PipelineType, torch.nn.Module]]:
-        resume_step = self.get_pipeline_resume_step(args, training_only)
-        samplers = self.build_samplers(
-            args, np_rng, world_size, batch_sizes, resume_step
-        )
-        feat_procs = self.build_each_pipeline_type(self.build_a_feat_proc, args, cfg)
-        data_objects = self.build_each_pipeline_type(
+    ) -> Dict[PipelineType, DataObject]:
+        return self.build_each_pipeline_type(
             self.build_data_object,
             args,
             cfg,
             tokenizers,
-            batch_sizes,
-            samplers,
             world_size,
+            training_only,
         )
-        return data_objects, feat_procs
 
     def build_decoder(
         self,
@@ -273,14 +296,22 @@ class Setup(ABC):
         else:
             raise ValueError(f"Unknown EOS decoding strategy: {args.eos_decoding}")
 
-        if args.prefix is None:
-            prefix_token_ids = None
-        elif args.prefix == "pnc" or args.prefix == "nopnc":
-            prefix_token_ids = self._get_prefix_tokens(
-                args.prefix, user_symbols_dict, tokenizer
-            )
-        else:
-            raise ValueError(f"Unknown prefix: {args.prefix}")
+        def _ids(prefix):
+            return self._get_prefix_token(prefix, user_symbols_dict, tokenizer)
+
+        match args.pnc_prefix, args.val_lang_prefix:
+            case None, None:
+                prefix_token_ids = None
+            case str(pnc), None:
+                prefix_token_ids = _ids(pnc)
+            case None, str(lang):
+                prefix_token_ids = _ids(lang)
+            case str(pnc), str(lang):
+                prefix_token_ids = _ids(pnc) + _ids(lang)
+            case pnc_prefix, val_lang_prefix:
+                raise ValueError(
+                    f"Unknown prefix combination: {pnc_prefix}, {val_lang_prefix}"
+                )
 
         if args.decoder == "greedy":
             keyword_boost_context_score = (
@@ -358,62 +389,36 @@ class Setup(ABC):
 
             return RNNTBeamDecoder(**kwargs)
 
-    def build_loss_fn(
+    def build_loss_spec(
         self,
+        args: Namespace,
         blank_idx: int,
         eos_idx: Optional[int],
         star_idx: Optional[int],
         cfg: dict,
-    ) -> ApexTransducerLoss:
-        """set up the loss function: if the TransducerJoint has packed_output=True then the
-        input to the ApexTransducerLoss must have packed_input=True"""
+    ) -> LossSpec:
         rnnt_config = config.rnnt(cfg)
         rnnt_config["gpu_unavailable"] = self.preferred_device() == CPU
 
-        return ApexTransducerLoss(
+        return LossSpec(
+            backend=args.transducer_backend,
             blank_idx=blank_idx,
             eos_idx=eos_idx,
             star_idx=star_idx,
             packed_input=rnnt_config["joint_apex_transducer"] == "pack",
+            joint_n_hid=rnnt_config["joint_n_hid"],
+            device=self.preferred_device(),
+            dtype=torch.float32 if getattr(args, "no_amp", True) else torch.float16,
+            dp_mu=getattr(args, "dp_mu", 0.0),
+            dp_clamp=getattr(args, "dp_clamp", None),
         )
 
     def build_cfg(self, args: Namespace) -> dict:
-        return config.load(args.model_config)
+        cfg = config.load(args.model_config)
+        return cfg
 
     def pipeline_type_to_str(self, pipeline_type: PipelineType) -> str:
         return {TRAIN: "train", VAL: "val"}[pipeline_type]
-
-    def build_a_feat_proc(
-        self, pipeline_type: PipelineType, args: Namespace, cfg: dict
-    ) -> torch.nn.Module:
-        (dataset_kw, _, splice_kw, specaugm_kw) = config.input(
-            cfg, self.pipeline_type_to_str(pipeline_type)
-        )
-
-        if dataset_kw["append_EOI"]:
-            eoi_frames = (
-                splice_kw["frame_stacking"] * cfg["rnnt"]["enc_stack_time_factor"]
-            )
-        else:
-            if args.val_final_padding_secs == 0.0:
-                print_once(
-                    "WARNING: This model was trained without end-of-input tokens, "
-                    "but validation is running with --val_final_padding_secs=0.0. "
-                    "Legacy models typically require ~0.24s of silence padding "
-                    "to flush out all predictions. "
-                    "Please set --val_final_padding_secs accordingly to avoid degradation."
-                )
-            eoi_frames = 0
-
-        feat_proc = torch.nn.Sequential(
-            specaugm_kw
-            and features.SpecAugment(eoi_frames=eoi_frames, **specaugm_kw)
-            or torch.nn.Identity(),
-            features.FrameSplicing(**splice_kw),
-            features.PermuteAudio(),
-        )
-        feat_proc.to(self.preferred_device())
-        return feat_proc
 
     def build_data_object(
         self,
@@ -421,44 +426,57 @@ class Setup(ABC):
         args: Namespace,
         cfg: dict,
         tokenizers: Dict[PipelineType, Tokenizer],
-        batch_sizes: Dict[PipelineType, int],
-        samplers: Dict[PipelineType, Optional[dali_sampler.Sampler]],
         world_size: int,
+        training_only: Optional[TrainingOnly],
     ) -> DataObject:
         print_once("Setting up datasets...")
-        (dataset_kw, features_kw, splicing_kw, _) = config.input(
-            cfg, self.pipeline_type_to_str(pipeline_type)
-        )
-        user_symbols_dict, user_symbols = get_all_user_tokens(cfg)
-        use_transcript = SelectTranscript(cfg)
-        enc_stf = cfg["rnnt"]["enc_stack_time_factor"]
-        dali_yaml_config = build_dali_yaml_config(
-            config_data=dataset_kw,
-            config_features=features_kw,
-            user_symbols=user_symbols,
-            user_symbols_dict=user_symbols_dict,
-            select_transcripts=use_transcript,
-            total_time_stack_factor=enc_stf * splicing_kw["frame_stacking"],
-        )
-        mel_feat_normalizer = build_mel_feat_normalizer(
+
+        if pipeline_type == VAL and "loader_val_device" in args:
+            use_cuda = args.loader_val_device == "gpu"
+        elif pipeline_type == TRAIN and "loader_train_device" in args:
+            use_cuda = args.loader_train_device == "gpu"
+        else:
+            use_cuda = self.preferred_device() == CUDA
+
+        global_rank = dist.get_rank() if dist.is_initialized() else 0
+
+        conf, dataset_kw, features_kw = build_from_legacy_sources(
             args,
-            dali_yaml_config,
-            batch_size=batch_sizes[pipeline_type],
-            pipeline_type=pipeline_type,
+            cfg,
+            self.pipeline_type_to_str(pipeline_type),
+            use_cuda=use_cuda,
+            global_rank=global_rank,
+            world_size=world_size,
         )
 
-        loader = build_dali_loader(
-            args,
-            self.pipeline_type_to_str(pipeline_type),
-            batch_size=batch_sizes[pipeline_type],
-            dali_yaml_config=dali_yaml_config,
-            tokenizer=tokenizers[pipeline_type],
+        if training_only is None:
+            resume_info = ResumeInfo()
+        else:
+            resume_info = ResumeInfo(
+                # Divide by world size because each GPU would have only seen
+                # this fraction of the total training duration. Multiply by 3600
+                # as checkpoint stores duration in hours.
+                total_dur=training_only.meta["duration"] * 3600 / world_size,
+                # It is not possible to know how many iters were done because
+                # we don't know how many iters were used, this is currently
+                # only used for seeding so just use steps as a proxy for iters
+                total_its=training_only.meta["step"],
+            )
+
+        loader = LhotsePipeline(
+            config=conf,
+            global_rank=global_rank,
             world_size=world_size,
-            train_sampler=samplers[pipeline_type],
-            mel_feat_normalizer=mel_feat_normalizer,
-            cpu=self.preferred_device() == CPU,
+            tokenizer=tokenizers[pipeline_type],
+            resume_info=resume_info,
         )
-        return DataObject(loader=loader, dataset_kw=dataset_kw, features_kw=features_kw)
+
+        return DataObject(
+            loader=loader,
+            config=conf,
+            dataset_kw=dataset_kw,
+            features_kw=features_kw,
+        )
 
     def build_each_pipeline_type(self, builder: Callable, *other_args) -> dict:
         """For val, this returns {VAL: builder(VAL)}
@@ -498,17 +516,17 @@ class Setup(ABC):
             )
         return file
 
-    def _get_prefix_tokens(
+    def _get_prefix_token(
         self, prefix: str, user_symbols_dict: Dict[str, str], tokenizer: Tokenizer
     ) -> List[int]:
-        """Get the token IDs for the prefix (control tokens <pnc> or <nopnc>)."""
+        """Get the token IDs for the prefix."""
         assert prefix in user_symbols_dict, (
             f"`{prefix}` token not found in user_symbols_dict. "
             "Add it to `user_symbols` in the model config (.yaml)."
         )
         tokens = tokenizer.tokenize(user_symbols_dict[prefix])
         if tokens:
-            # 2 tokens: space token + control token (<pnc> or <nopnc>)
+            # 2 tokens: space token + control token
             assert (
                 len(tokens) == 2
             ), f"Expected 2 tokens for {prefix}, got {len(tokens)}"
@@ -520,27 +538,6 @@ class Setup(ABC):
     def build_tokenizer(
         self, cfg: dict
     ) -> Tuple[Dict[PipelineType, Tokenizer], int, Dict[PipelineType, dict]]:
-        pass
-
-    @abstractmethod
-    def get_batch_sizes(self, args: Namespace) -> Dict[PipelineType, int]:
-        pass
-
-    @abstractmethod
-    def get_pipeline_resume_step(
-        self, args: Namespace, training_only: Optional[TrainingOnly]
-    ) -> Dict[PipelineType, int]:
-        pass
-
-    @abstractmethod
-    def build_samplers(
-        self,
-        args: Namespace,
-        np_rng: np.random.Generator,
-        world_size: int,
-        batch_sizes: Dict[PipelineType, int],
-        resume_step: Dict[PipelineType, int],
-    ) -> Dict[PipelineType, Optional[dali_sampler.Sampler]]:
         pass
 
     @abstractmethod
@@ -572,22 +569,12 @@ class Setup(ABC):
         self, args: Namespace, multi_gpu: bool, timeout: Dict[str, int]
     ) -> Tuple[bool, int]:
         """Only called in val.py and train.py"""
-        assert torch.cuda.is_available()
-
-        # set up distributed processing
-        if multi_gpu:
-            torch.cuda.set_device(args.local_rank)
-            if not args.skip_init:
-                dist.init_process_group(
-                    backend="nccl",
-                    init_method="env://",
-                    timeout=datetime.timedelta(**timeout),
-                )
-            world_size = dist.get_world_size()
-            print_once(f"Distributed processing with {world_size} GPUs\n")
-        else:
-            world_size = 1
-        return multi_gpu, world_size
+        return shared_start_ddp_with_gpu(
+            multi_gpu,
+            args.local_rank,
+            getattr(args, "skip_init", False),
+            timeout,
+        )
 
     @property
     def multi_gpu(self) -> bool:

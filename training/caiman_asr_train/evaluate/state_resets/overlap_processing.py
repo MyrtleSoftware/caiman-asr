@@ -1,5 +1,6 @@
 import string
 import warnings
+from concurrent.futures import ProcessPoolExecutor, TimeoutError
 
 from beartype import beartype
 from beartype.typing import Callable, List, Optional, Tuple, TypeVar, Union
@@ -194,31 +195,38 @@ def get_unique_predictions(
             (i, s) for i, tok in enumerate(toks) if (s := denorm(tok, detokenize)) != ""
         ]
 
-    for i in range(len(pred) - 1):
-        #
-        acc = as_words(pred[i])
-        nxt = as_words(pred[i + 1])
+    # Spawn a separate CPU process for best_split (levenshtein), timeout for 60s
+    with ProcessPoolExecutor(max_workers=1) as executor:
+        for i in range(len(pred) - 1):
+            acc = as_words(pred[i])
+            nxt = as_words(pred[i + 1])
 
-        if len(acc) == 0 or len(nxt) == 0:
-            continue
+            if len(acc) == 0 or len(nxt) == 0:
+                continue
 
-        _, _, m, x, y = best_split(acc, nxt)
+            future = executor.submit(best_split, acc, nxt)
 
-        # Discard last m from acc,
-        # Discard first x + y from nxt
+            try:
+                _, _, m, x, y = future.result(timeout=60.0)
+            except TimeoutError:
+                executor.shutdown(wait=False, cancel_futures=True)
+                raise TimeoutError(f"best_split exceeded timeout at segment {i}")
 
-        keep_lhs_idx, _ = acc[len(acc) - m - 1]
-        keep_rhs_idx, _ = nxt[0 if x + y == 0 else x + y - 1]
+            # Discard last m from acc,
+            # Discard first x + y from nxt
 
-        pred[i] = pred[i][: keep_lhs_idx + 1]
-        pred[i + 1] = pred[i + 1][keep_rhs_idx + 1 :]
+            keep_lhs_idx, _ = acc[len(acc) - m - 1]
+            keep_rhs_idx, _ = nxt[0 if x + y == 0 else x + y - 1]
 
-        timestamps[i] = timestamps[i][: keep_lhs_idx + 1]
-        timestamps[i + 1] = timestamps[i + 1][keep_rhs_idx + 1 :]
+            pred[i] = pred[i][: keep_lhs_idx + 1]
+            pred[i + 1] = pred[i + 1][keep_rhs_idx + 1 :]
 
-        if probs:
-            probs[i] = probs[i][: keep_lhs_idx + 1]
-            probs[i + 1] = probs[i + 1][keep_rhs_idx + 1 :]
+            timestamps[i] = timestamps[i][: keep_lhs_idx + 1]
+            timestamps[i + 1] = timestamps[i + 1][keep_rhs_idx + 1 :]
+
+            if probs:
+                probs[i] = probs[i][: keep_lhs_idx + 1]
+                probs[i + 1] = probs[i + 1][keep_rhs_idx + 1 :]
 
     return pred, timestamps, probs
 

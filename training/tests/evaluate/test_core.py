@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 from argparse import Namespace
+from dataclasses import dataclass
 from datetime import timedelta
 
-import torch
-from hypothesis import given, settings
+from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from caiman_asr_train.evaluate.core import evaluate
 from caiman_asr_train.evaluate.error_rates import ErrorRate
+from caiman_asr_train.lhotse.config_build import build_from_legacy_sources
+from caiman_asr_train.lhotse.pipeline import LhotsePipeline
+from caiman_asr_train.rnnt import config
+from caiman_asr_train.rnnt.joint_loss import JointLoss
 from caiman_asr_train.rnnt.response import (
     DecodingResponse,
     FrameResponses,
@@ -15,9 +19,14 @@ from caiman_asr_train.rnnt.response import (
 )
 
 
+@dataclass
+class FakeConfig:
+    enc_stack_time_factor = 2
+
+
 class FakeModel:
     def __init__(self):
-        self.enc_stack_time_factor = 2
+        self.config = FakeConfig()
 
     def eval(self):
         pass
@@ -26,38 +35,18 @@ class FakeModel:
         pass
 
 
-class FakeLoader:
-    def __init__(self):
-        self.pipeline_type = "val"
-        self.data = [
-            "audio",
-            torch.tensor([0]),
-            "txt",
-            "txt_len",
-            ["raw_transcripts"],
-            ["fnames"],
-            ["prefix_lens"],
-        ]
+class FakeJointLoss(JointLoss):
+    """``calculate_loss`` is False here, so this must never be called."""
 
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        if data := self.data:
-            self.data = None
-            print(f"FakeLoader: {data}")
-            return data
-        raise StopIteration
-
-    def __len__(self):
-        return 1
+    def forward(self, f, g, t, loss_mods):
+        raise AssertionError("joint_loss must not run when calculate_loss is False")
 
 
 class FakeDecoder:
     def __init__(self, tokens):
         self.tokens = tokens
 
-    def decode(self, feats, feat_lens):
+    def decode(self, feats):
         return [{i: __class__._response(i, tok) for i, tok in enumerate(self.tokens)}]
 
     @property
@@ -87,23 +76,30 @@ class FakeDecoder:
 TOKENIZER_NUM_LABELS = 29
 
 
-@settings(deadline=timedelta(seconds=1))
+def maybe_suppress():
+    if hasattr(HealthCheck, "function_scoped_fixture"):
+        return dict(suppress_health_check=[HealthCheck.function_scoped_fixture])
+    else:
+        return dict()
+
+
+@settings(deadline=timedelta(seconds=1), **maybe_suppress())
 @given(st.lists(st.integers(min_value=0, max_value=TOKENIZER_NUM_LABELS - 1)))
-def test_unk_token(tokenizer, tokens):
+def test_unk_token(tokenizer, dataload_args, tokens):
     """The decoder should not crash even if an untrained model predicts '⁇'"""
     assert tokenizer.num_labels == TOKENIZER_NUM_LABELS
     args = Namespace(
-        breakdown_wer=False,
-        breakdown_chars="",
+        val_dataset_dir=dataload_args.val_dataset_dir,
         punctuation_marks=[",", ".", "?"],
         punctuation_normalization=True,
         output_dir="/tmp",
         timestamp="19700101",
-        dali_train_device="cuda",
-        dali_val_device="cuda",
+        loader_train_device="gpu",
+        loader_val_device="gpu",
         sr_segment=0,
         calculate_emission_latency=False,
-        model_config="/workspace/training/configs/testing-1023sp.yaml",
+        calculate_per=False,
+        model_config=dataload_args.model_config,
         eos_vad_threshold=float("inf"),
         eos_is_terminal=False,
         latency_head_offset=0.0,
@@ -115,18 +111,27 @@ def test_unk_token(tokenizer, tokens):
         keyword_boost_c0=0.3,
         keyword_boost_beta=0.9,
         keyword_boost_context_score=1.0,
+        val_standardizer_lang="en",
+    )
+
+    cfg = config.load(dataload_args.model_config)
+
+    conf, *_ = build_from_legacy_sources(
+        dataload_args,
+        cfg,
+        "val",
+        use_cuda=True,
     )
 
     evaluate(
         epoch=0,
         step=0,
-        val_loader=FakeLoader(),
-        val_feat_proc=lambda x: x,
+        val_loader=LhotsePipeline(conf, tokenizer=tokenizer),
         detokenize=tokenizer.detokenize,
         ema_model=FakeModel(),
-        loss_fn=None,
+        joint_loss=FakeJointLoss(),
         decoder=FakeDecoder(tokens),
-        cfg=None,
+        cfg=cfg,
         args=args,
         skip_logging=True,
         error_rate=ErrorRate.WORD,

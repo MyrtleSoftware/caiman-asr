@@ -20,25 +20,38 @@ set -Eeuo pipefail
 : ${CONFIG_NAME:=base-8703sp}
 : ${DATA_DIR:="/datasets/LibriSpeech"}
 : ${NGRAM_ORDER:=4}
-: ${TRAIN_MANIFESTS:="librispeech-train-clean-100-flac.json librispeech-train-clean-360-flac.json librispeech-train-other-500-flac.json"}
+: ${TRAIN_MANIFEST_YAML:="./configs/librispeech.yaml"}
+: ${NUM_GPUS:=1}
 : ${EXTRA_ARGS:=""}
 
 echo "Preparing LibriSpeech dataset"
 
 python caiman_asr_train/data/make_datasets/librispeech.py --data_dir $(dirname $DATA_DIR) $EXTRA_ARGS
 
+echo "Converting to lhotse-cutsest"
+
+for manifest in "$DATA_DIR"/*.json; do
+	python ./caiman_asr_train/lhotse/scripts/convert.py json2cuts \
+		"$manifest" \
+		"$DATA_DIR" \
+		--data-dir "$DATA_DIR"
+done
+
+# Transform manifests to include endpointing (EOS)
 echo "Segmenting manifests"
 
-# Transform TRAIN_MANIFESTS from something.json to something.eos.json
-EOS_MANIFESTS=$(echo $TRAIN_MANIFESTS | sed 's/.json/.eos.json/g')
-
 python scripts/eos_add.py \
-	--data_dir "$DATA_DIR" \
-	--output_dir "$DATA_DIR" \
-	--manifests $TRAIN_MANIFESTS \
-	--out_manifests $EOS_MANIFESTS
+	--manifests "$DATA_DIR" \
+	--output_dirs "$DATA_DIR" \
+	--overwrite
 
 echo "Creating JSON artifacts"
 
-./scripts/make_json_artifacts.sh "$DATASET_NAME_LOWER_CASE" "$MAX_DURATION_SECS" \
-	"$SPM_SIZE" "$CONFIG_NAME" "$DATA_DIR" "$NGRAM_ORDER" $EOS_MANIFESTS
+./scripts/make_json_artifacts.sh \
+	"$DATASET_NAME_LOWER_CASE" \
+	"$MAX_DURATION_SECS" \
+	"$SPM_SIZE" \
+	"$CONFIG_NAME" \
+	"$NGRAM_ORDER" \
+	"$TRAIN_MANIFEST_YAML" \
+	"$NUM_GPUS"

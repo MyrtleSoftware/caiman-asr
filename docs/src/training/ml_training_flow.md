@@ -22,13 +22,13 @@ git clone https://github.com/MyrtleSoftware/caiman-asr.git && cd caiman-asr/trai
 
 ## Data Preparation
 
-From inside the container, run the following command to download LibriSpeech, prepare JSON manifests, create a tokenizer, and a populated yaml configuration file `configs/base-8703sp_run.yaml`.
+From inside the container, run the following command to download LibriSpeech, prepare JSONL manifests, create a tokenizer, and a populated yaml configuration file `configs/base-8703sp_run.yaml`.
 
 ```bash
 ./scripts/prepare_librispeech.sh
 ```
 
-More details on preparing LibriSpeech into a JSON format can be found [here](json_format.md#prepare-librispeech-in-json-format).
+More details on preparing LibriSpeech into a JSONL format can be found [here](jsonl_format.md#prepare-librispeech-in-json-format).
 
 ## Training
 
@@ -37,14 +37,13 @@ A more detailed description of the training process can be found [here](training
 
 ```bash
 ./scripts/train.sh \
-  --data_dir /datasets/LibriSpeech \
-  --train_manifests librispeech-train-clean-100-flac.json librispeech-train-clean-360-flac.json librispeech-train-other-500-flac.json \
-  --val_manifests librispeech-dev-clean-flac.json \
-  --model_config configs/base-8703sp_run.yaml \
+  --train_dataset_yaml ./configs/librispeech.yaml \
+  --val_manifests librispeech-dev-clean.cuts.jsonl.gz \
+  --val_dataset_dir /datasets/LibriSpeech \
+  --model_config ./configs/base-8703sp_run.yaml \
   --num_gpus 2 \
-  --global_batch_size 1024 \
-  --grad_accumulation_batches 8 \
-  --batch_split_factor 8 \
+  --batch_duration 1800 \
+  --grad_accumulation_batches 5 \
   --val_batch_size 1 \
   --training_steps 42000
 ```
@@ -59,5 +58,9 @@ The following command will run the validation script and calculate the WER [%].
 See [here](validation.md#validation) for more details.
 
 ```bash
-./scripts/val.sh --model_config configs/base-8703sp_run.yaml
+./scripts/val.sh \
+    --model_config configs/base-8703sp_run.yaml \
+    --val_manifests librispeech-dev-clean.cuts.jsonl.gz \
+    --val_data_dir /datasets/LibriSpeech/ \
+    --val_batch_duration 3600
 ```

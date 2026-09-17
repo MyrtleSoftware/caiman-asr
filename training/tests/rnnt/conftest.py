@@ -38,7 +38,7 @@ def model_factory(
 
 
 @pytest.fixture()
-def legacy_model_factory(
+def conditional_encoder_model_factory(
     input_dim_fixture,
     n_classes_fixture,
     enc_n_hid_fixture,
@@ -46,15 +46,18 @@ def legacy_model_factory(
     joint_n_hid_fixture,
 ):
     def _gen_model(seed=0, local_rank=0):
+        prefix_token_map = {i: i for i in range(n_classes_fixture - 1)}
         return model_setup(
             input_dim_fixture,
             n_classes_fixture,
-            True,
+            False,
             enc_n_hid_fixture,
             pred_n_hid_fixture,
             joint_n_hid_fixture,
             seed=seed,
             local_rank=local_rank,
+            conditional_encoder=True,
+            prefix_token_map=prefix_token_map,
         )
 
     return _gen_model
@@ -84,6 +87,8 @@ def model_setup(
     joint_n_hid_fixture,
     seed=0,
     local_rank=0,
+    conditional_encoder=False,
+    prefix_token_map=None,
 ):
     set_seed(seed=seed, local_rank=local_rank)
     return RNNT(
@@ -103,7 +108,7 @@ def model_setup(
         joint_n_hid=joint_n_hid_fixture,
         joint_dropout=0.0,
         joint_net_lr_factor=1.0,
-        joint_apex_transducer=None,
+        joint_apex_transducer="pack",
         joint_apex_relu_dropout=False,
         forget_gate_bias=1.0,
         custom_lstm=True,
@@ -111,5 +116,7 @@ def model_setup(
         # Must have dropout 0.0 for deterministic results
         enc_rw_dropout=0.0,
         pred_rw_dropout=0.0,
+        conditional_encoder=conditional_encoder,
+        prefix_token_map=prefix_token_map,
         gpu_unavailable=gpu_unavailable,
     )

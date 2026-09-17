@@ -29,11 +29,19 @@ $$
 
 #### WER Standardization
 
-Before the calculation of the WER, when `standardize_wer: true` in the yaml config,
-the text of both hypotheses and references is standardized, so that the model accuracy is
+Before the calculation of the WER, the text of both hypotheses and references
+is always standardized, so that the model accuracy is
 not penalised for mistakes due to differences in capitalisation, punctuation, etc.
+This standardization cannot be disabled.
+The language code provided using `--val_standardizer_lang` is used to choose the standardizer
 
-Currently, CAIMAN-ASR uses the Whisper [EnglishSpellingNormalizer](https://github.com/openai/whisper/blob/main/whisper/normalizers/english.py).
+Because it cannot be disabled, there is no casing/punctuation error breakdown: such
+a breakdown is the difference between a standardized and an unstandardized score,
+and only the standardized one can be asked for. A `--breakdown_wer` flag used to
+print one; it was removed once it could only ever report zeros.
+
+Currently, CAIMAN-ASR uses the Whisper [EnglishSpellingNormalizer](https://github.com/openai/whisper/blob/main/whisper/normalizers/english.py) for English,
+and BasicTextNormalizer for other European languages.
 The Whisper standardization rules applied are the following:
 
 1. Remove text between brackets (`< >` or `[ ]`).
@@ -47,7 +55,7 @@ We additionally apply the following transformations:
 
 1. Remove diacritics ("café" becomes "cafe")
 2. Lowercase the text
-3. Expand digits and symbols into words ("\$1.02" becomes "one dollar two cents", "cats & dogs" becomes "cats and dogs")
+3. Expand digits and symbols into words ("\$1.02" becomes "one dollar two cents")
 4. Expand common abbreviations ("Dr. Smith" becomes "doctor smith")
 
 For example:
@@ -64,6 +72,13 @@ Hypothesis: that is what we will standardize in today's example
 Reference:  that is what we will standardize in today's example
 ```
 
+An internal basic standardizer is used for other European languages. Note that the basic standardizer:
+
+- Does not remove filler words
+- Does not substitute contractions
+- DOes not standardize spellings
+- Does not expand digits, symbols and abbreviations
+
 Which are identical, hence the WER=0%.
 
 #### Character error rate and mixture error rate
@@ -79,7 +94,7 @@ the Character Error Rate.
 To do this, change the `error_rate` key in the config:
 
 ```yaml
-    error_rate: char
+error_rate: char
 ```
 
 If your dataset contains both Chinese and English,
@@ -87,7 +102,7 @@ you may want to use the [Mixture Error Rate](https://arxiv.org/pdf/2007.05916).
 Set the config to:
 
 ```yaml
-    error_rate: mixture
+error_rate: mixture
 ```
 
 ```admonish

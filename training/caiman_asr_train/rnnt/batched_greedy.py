@@ -11,6 +11,8 @@ from beartype import beartype
 from beartype.typing import Dict, List, Optional, Tuple
 from torch import Tensor
 
+from caiman_asr_train.core.batches import BatchFirst
+from caiman_asr_train.core.model import Hidden, StatePred
 from caiman_asr_train.data.tokenizer import Tokenizer
 from caiman_asr_train.keywords.process import load_keywords
 from caiman_asr_train.lm.kenlm_ngram import KenLmModel, NgramInfo
@@ -21,6 +23,7 @@ from caiman_asr_train.rnnt.response import (
     FrameResponses,
     HypothesisResponse,
 )
+from caiman_asr_train.utils.prefix import broadcast_prefix
 
 
 class RNNTBatchedGreedyDecoder(RNNTCommonDecoder):
@@ -99,9 +102,7 @@ class RNNTBatchedGreedyDecoder(RNNTCommonDecoder):
 
     @torch.no_grad()
     @beartype
-    def _inner_decode(
-        self, encs: Tensor, enc_lens: Tensor
-    ) -> List[Dict[int, FrameResponses]]:
+    def _inner_decode(self, encs: BatchFirst) -> List[Dict[int, FrameResponses]]:
         """
         Run decoding loop given encoder features.
 
@@ -114,23 +115,39 @@ class RNNTBatchedGreedyDecoder(RNNTCommonDecoder):
         training_state = self.model.training
         self.model.eval()
 
-        B, _, jH = encs.shape  # Here jH = joint's hidden dimension.
+        encs_data, enc_lens = encs.as_tuple()
+
+        B, _, jH = encs_data.shape  # Here jH = joint's hidden dimension.
+
+        if self.prefix_token_ids:
+            prefix = broadcast_prefix(self.prefix_token_ids, B, encs_data.device)
+        else:
+            prefix = None
 
         # Make initial prediction/hidden state with prefix if available
-        g, (h, c), _ = self._pred_step_with_prefix(device=encs.device, batch_size=B)
+        g_t, state = self.model.predict(
+            state=self.model.sos_for(B),
+            prefix=prefix,
+            tokens=None,
+        )
 
-        g = g.expand(B, -1, -1).contiguous()  # (B, 1, jH)
-        h = h.expand(-1, B, -1).contiguous()  # (L, B, pH)
-        c = c.expand(-1, B, -1).contiguous()  # (L, B, pH)
+        assert state is not None
+
+        g = g_t.T.data
+
+        h = state.state.hidd
+        c = state.state.cell
+
+        e = state.embed
 
         L, _, pH = h.shape  # Here pH = prediction's hidden dimension.
 
-        enc_offset = torch.zeros((B, 1, 1), dtype=torch.int64, device=encs.device)
+        enc_offset = torch.zeros((B, 1, 1), dtype=torch.int64, device=encs_data.device)
         any_tok_per_step = torch.zeros_like(enc_offset)
         nb_per_sample = torch.zeros_like(enc_offset)
         advance = torch.zeros_like(enc_offset)
         done = torch.zeros_like(enc_offset, dtype=torch.bool)
-        f = torch.empty(B, 1, jH, dtype=encs.dtype, device=encs.device)
+        f = torch.empty(B, 1, jH, dtype=encs_data.dtype, device=encs_data.device)
 
         if self.ngram_lm:
             ngram_lm_states = self.ngram_lm.get_batch_initial_states(B)
@@ -148,7 +165,7 @@ class RNNTBatchedGreedyDecoder(RNNTCommonDecoder):
 
         while True:
             # Build this steps view of the encodings.
-            torch.gather(encs, 1, enc_offset.expand(-1, -1, jH), out=f)
+            torch.gather(encs_data, 1, enc_offset.expand(-1, -1, jH), out=f)
             # Make a prediction for every batch
             all_logprobs = self._joint_step(f, g, fuzzy=False)
             logprobs, k = all_logprobs.max(-1, keepdim=True)
@@ -232,23 +249,45 @@ class RNNTBatchedGreedyDecoder(RNNTCommonDecoder):
             if len(index_1D) == 0:
                 continue
 
-            index_3D = index_1D.unsqueeze(0).unsqueeze(2).expand(L, -1, pH)
+            index_3Dl = index_1D.unsqueeze(0).unsqueeze(2).expand(L, -1, pH)
+            index_3De = index_1D.unsqueeze(0).unsqueeze(2).expand(1, -1, pH)
 
             # Extract the y's and hidden states for the non-blank indexes.
             y = torch.gather(k, 0, index_1D.unsqueeze(1))
 
-            state = (
-                torch.gather(h, 1, index_3D),
-                torch.gather(c, 1, index_3D),
+            state = StatePred(
+                Hidden(
+                    torch.gather(h, 1, index_3Dl),
+                    torch.gather(c, 1, index_3Dl),
+                ),
+                torch.gather(e, 1, index_3De),
             )
 
+            unit_lens = torch.ones((y.shape[0],), dtype=torch.int, device=y.device)
+
             # Run the prediction network on the new non-blanks.
-            G, (HH, CC), _ = self._pred_step_raw(y, state)
+            out, state = self.model.predict(
+                state=state,
+                prefix=None,
+                tokens=BatchFirst(y, unit_lens).T,
+            )
+
+            # Ignore the SoS output, i.e. the +1 in U + 1
+            out.data = out.data[-1:]
+
+            assert state is not None
+            G = out.T.data
+
+            HH = state.state.hidd
+            CC = state.state.cell
+            EE = state.embed
 
             # Update g, h, c with the prediction net's new state.
             g.scatter_(0, index_1D.unsqueeze(1).unsqueeze(2).expand(-1, -1, jH), G)
-            h.scatter_(1, index_3D, HH)
-            c.scatter_(1, index_3D, CC)
+
+            h.scatter_(1, index_3Dl, HH)
+            c.scatter_(1, index_3Dl, CC)
+            e.scatter_(1, index_3De, EE)
 
             if self.keywords:
                 keyword_states = self._update_keyword_states(
@@ -394,7 +433,6 @@ class RNNTBatchedGreedyDecoder(RNNTCommonDecoder):
             state = keyword_states[batch_id]
 
             if state not in keyword_states_cache:
-
                 # Get keyword scores for the vocab
                 deltas = self._keyword_steps(self._detokenized_vocab, state)
 

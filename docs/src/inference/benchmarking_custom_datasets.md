@@ -31,17 +31,13 @@ with the transcripts and the paths to the audio files in the following format:
     ]
 ```
 
-Please refer to the documentation [here](../training/json_format.md),
-specifically the section [Convert your dataset to the JSON format](../training/json_format.md#other_datasets_json)
-for more information.
-
 ## CTM file
 
 In order to evaluate user-perceived latency, CAIMAN_ASR requires a CTM file, which contains the ground truth of when the speaker finished words. This can be generated according to the instructions
 [here](../training/emission_latency.md).
 
 See the instructions regarding launching the docker container [here](../training/ml_training_flow.md#environment-setup),
-and run the above command to generate the CTM file with the model config argument as: `--model_config configs/testing-1023sp_run.yaml`.
+and run the above command to generate the CTM file.
 
 ## Notes on the custom dataset format
 

@@ -6,7 +6,6 @@ from beartype import beartype
 
 from caiman_asr_train.data.text.has_spaces import (
     split_into_logical_tokens,
-    warn_about_characters,
 )
 
 
@@ -57,7 +56,6 @@ def error_rate_long(error_rate: ErrorRate) -> str:
 
 @beartype
 def decide_and_split(text: str, error_rate: ErrorRate) -> list[str]:
-    warn_about_characters(text)
     match error_rate:
         case ErrorRate.WORD:
             return text.split()

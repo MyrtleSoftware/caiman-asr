@@ -1,95 +1,71 @@
-import copy
 from argparse import Namespace
 from pathlib import Path
 
-from caiman_asr_train.data.decide_on_loader import DataSource
+import yaml
+from beartype import beartype
 
 
-def gen_dataload_args(test_data_dir) -> Namespace:
+@beartype
+def _make_test_config(test_data_dir: Path, path: str) -> dict:
+    with open(path, "r") as f:
+        template = yaml.safe_load(f)
+
+    # Replace placeholders for testing equivalents
+
+    template["use_transcripts"]["to_use"] = None
+    template["use_transcripts"]["on_missing"] = "raise_error"
+    template["input_train"]["audio_dataset"]["max_duration"] = float("inf")
+    template["input_train"]["audio_dataset"]["max_transcript_len"] = None
+    template["input_train"]["audio_dataset"]["min_tps"] = 0.0
+    template["input_train"]["audio_dataset"]["max_tps"] = float("inf")
+    template["langs"] = ["en"]
+
+    template["tokenizer"]["sentpiece_model"] = str(
+        test_data_dir / "librispeech62.eos.pnc-tag.model"
+    )
+
+    for x in ["train", "val"]:
+        template[f"input_{x}"]["filterbank_features"]["stats_path"] = str(test_data_dir)
+
+    return template
+
+
+def gen_dataload_args(test_data_dir, tmpdir) -> Namespace:
     """
     Produce a Namespace object with the default arguments for data loading tests.
 
     The default is the JSON format.
     """
-    manifest_fp = str(test_data_dir / "peoples-speech-short.json")
+
+    test_yaml = _make_test_config(test_data_dir, "configs/testing-1023sp.yaml")
+    test_config = tmpdir / "testing-1023sp.yaml"
+
+    with open(test_config, "w") as f:
+        yaml.dump(test_yaml, f)
+
     return Namespace(
-        grad_accumulation_batches=1,
-        val_manifests=[manifest_fp],
-        train_manifests=[manifest_fp],
-        local_rank=0,
-        num_buckets=6,
-        dataset_dir=str(test_data_dir),
-        dali_train_device="cpu",
-        dali_val_device="cpu",
-        prob_background_noise=0.0,
-        prob_babble_noise=0.0,
-        prob_microphone_aug=0.0,
-        prob_room_aug=0.0,
-        train_tar_files=None,
-        val_tar_files=None,
-        read_from_tar=False,
+        val_manifests=[str(test_data_dir / "peoples-speech-short.cuts.jsonl")],
+        val_dataset_dir=str(test_data_dir),
+        val_batch_size=1,
+        val_final_padding_secs=0.0,
+        model_config=str(test_config),
+        train_dataset_yaml=str(test_data_dir / "peoples-speech-short.yaml"),
         seed=1,
-        turn_off_initial_padding=True,
+        prob_background_noise=0.0,
+        conditional=False,
+        sampling_mode="1D-bucketing-dyn",
+        batch_duration=3600.0,
+        num_dur_buckets=20,
+        prob_room_aug=0.0,
+        loader_workers_per_gpu=None,
+        turn_off_initial_padding=False,
         inspect_audio=False,
-        prob_val_narrowband=0.0,
-        prob_train_narrowband=0.0,
-        output_dir=Path("/results"),
-        n_utterances_only=None,
-        noise_dataset=None,
-        room_dataset=None,
-        microphone_dataset=None,
-        use_noise_audio_folder=False,
-        noise_config=None,
-        val_from_dir=False,
-        val_audio_dir=None,
-        val_txt_dir=None,
-        dali_processes_per_cpu=1,
-        use_hugging_face=False,
-        hugging_face_val_dataset=None,
-        hugging_face_val_config=None,
-        hugging_face_val_split="validation",
-        hugging_face_val_transcript_key="text",
-        norm_ramp_start_step=None,
-        norm_ramp_end_step=None,
-        norm_starting_ratio=0.25,
+        inspect_memory_usage=None,
         norm_over_utterance=False,
         norm_use_global_stats=False,
-        warmup_steps=1000,
-        hold_steps=1000,
-        half_life_steps=1000,
-        val_final_padding_secs=0.0,
-        train_manifest_ratios=None,
-        relative_train_manifest_ratios=None,
-        global_batch_size=1024,
-        canary_exponent=None,
-        conditional=False,
-        pnc_prob=1.0,
+        norm_ramp_start=3600,
+        norm_ramp_end=3600 * 2,
+        eoi_drop_fraction=0.5,
+        feature_dump_dir=None,
+        val_standardizer_lang="en",
     )
-
-
-def update_dataload_args(args: Namespace, format: DataSource) -> Namespace:
-    """
-    Util for updating the args from gen_dataload_args() depending on the DataSource.
-    """
-    args = copy.deepcopy(args)
-    if format == DataSource.JSON:
-        # assumes the default is json
-        pass
-    elif format == DataSource.TARFILE:
-        # use all tar files in test_data_dir
-        args.val_from_dir = False
-        args.read_from_tar = True
-        args.use_hugging_face = False
-        args.train_tar_files = args.val_tar_files = ["webdataset-eg.tar"]
-    elif format == DataSource.HUGGINGFACE:
-        args.val_from_dir = False
-        args.read_from_tar = False
-        args.use_hugging_face = True
-        args.hugging_face_val_dataset = "distil-whisper/librispeech_asr_dummy"
-        args.hugging_face_val_split = "validation[:10]"
-    else:
-        raise ValueError(f"Unknown data source format: {format}")
-
-    args.model_config = "configs/testing-1023sp_run.yaml"
-
-    return args

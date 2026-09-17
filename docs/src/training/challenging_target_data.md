@@ -6,18 +6,15 @@ This page describes data augmentations that may help with these problems:
   - Solution: Train with background noise
 - Problem: Speakers in your target audio talk over each other
   - Solution: Train with babble noise
-- Problem: Your target audio was recorded at 8 kHz, e.g. a narrowband telephone connection
-  - Solution: Train with narrowband conversion
 - Problem: Your target audio is recorded on a poor-quality microphone
   - Solution: Train with microphone augmentations
 - Problem: Your target audio is in a different room environment to your training data
   - Solution: Train with room augmentations
 
-### Page contents
+## Page contents
 
 - [Background Noise](#background_noise) for training with background noise
 - [Babble Noise](#babble_noise) for training with babble noise
-- [Narrowband](#narrowband) for training with narrowband conversion
 - [Microphone and Room Augmentations](#mic-room-aug)
 - [Inspecting Augmentations](#inspect_audio) to listen to the effects of augmentations
 - [Random State Passing](#random_state_passing) for training on long sequences
@@ -25,54 +22,28 @@ This page describes data augmentations that may help with these problems:
 - [Label Smoothing](#label_smoothing) for training with label smoothing
 - [Gradient Noise](#gradient_noise) for training with gradient noise
 
-## Example Command
-
-The following command will train the base model on the LibriSpeech dataset on an `8 x A100 (80GB)` system with these settings:
-
-- applying background noise to 25% of samples
-- applying babble noise to 10% of samples
-- downsampling 50% of samples to 8 kHz
-- using the default noise schedule
-  - initial values 30–60dB
-  - noise delay of 4896 steps
-  - noise ramp of 4896 steps
-
-```bash
-./scripts/train.sh --model_config=configs/base-8703sp_run.yaml --num_gpus=8 \
-    --grad_accumulation_batches=1 --batch_split_factor=8 \
-    --training_steps=42000 --prob_background_noise=0.25 \
-    --prob_babble_noise=0.1 --prob_train_narrowband=0.5 \
-    --val_manifests=/datasets/LibriSpeech/librispeech-dev-other-flac.json
-```
-
-These augmentations are applied independently,
-so some samples will have all augmentation types applied.
-
 ## Background noise training <a name="background_noise"></a>
 
 Background noise is set via the `--prob_background_noise` argument.
 By default, `prob_background_noise` is `0.25`.
-Background noise takes a non-speech noise file and mixes it with the speech.
-
-On an `8 x A100 (80GB)` system, turning off background noise augmentation increases the base model's training throughput by ~17% and the large model's throughput by ~11%.
+Background noise takes a noise file and mixes it with the speech.
 
 ### Implementation
 
 The noise data is combined with speech data on-the-fly during training, using a
-signal to noise ratio (SNR) randomly chosen between internal variables `low` and `high`.
+signal to noise ratio (SNR) randomly chosen between internal variables `low`
+and `high`. The values for `low` and `high` can be specified (in dB) using the
+`--noise_snr_low` and `--noise_snr_high` arguments when calling `train.sh`.
 
-The initial values for `low` and `high` can be specified (in dB) using the `--noise_initial_low` and
-`--noise_initial_high` arguments when calling `train.sh`. This range is then maintained for the number of
-steps specified by the `--noise_delay_steps` argument after which the noise level is ramped up over
-`--noise_ramp_steps` to its final range.
-The final range for background noise is 0–30dB (taken from the Google paper "Streaming
-end-to-end speech recognition for mobile devices", [He et al., 2018](https://arxiv.org/abs/1811.06621)).
-
-Before combination, the noise audio will be duplicated to become at least as long as the speech utterance.
+Before combination, the noise audio will be duplicated to become at least as
+long as the speech utterance.
 
 ### Background noise dataset
 
-By default, background noise will use [Myrtle/CAIMAN-ASR-BackgroundNoise](https://huggingface.co/datasets/Myrtle/CAIMAN-ASR-BackgroundNoise) from the [Hugging Face Hub](https://huggingface.co/docs/hub/en/datasets-overview).
+By default, background noise will use
+[Myrtle/CAIMAN-ASR-BackgroundNoise](https://huggingface.co/datasets/Myrtle/CAIMAN-ASR-BackgroundNoise)
+from the [Hugging Face
+Hub](https://huggingface.co/docs/hub/en/datasets-overview).
 
 Note that this dataset will be cached in `~/.cache/huggingface/` in order to persist between containers.
 You can change this location like so: `HF_CACHE=[path] ./scripts/docker/launch.sh ...`.
@@ -80,69 +51,27 @@ You can change this location like so: `HF_CACHE=[path] ./scripts/docker/launch.s
 To change the default noise dataset, set `--noise_dataset` to an audio dataset on the Hugging Face Hub.
 The training script will use all the audios in the noise dataset's `train` split.
 
-If you instead wish to train with local noise files, make sure your noise is organized in the Hugging Face [AudioFolder](https://huggingface.co/docs/datasets/en/audio_dataset#audiofolder) format.
-Then set `--noise_dataset` to be the path to the directory containing your noise data (i.e. the parent of the `data` directory), and pass `--use_noise_audio_folder`.
-
 ## Babble noise training <a name="babble_noise"></a>
 
-Babble noise is set via the `--prob_babble_noise` argument.
-By default, `prob_babble_noise` is `0.0`.
-Babble is applied by taking other utterances from the same batch and mixing them with the speech.
+Babble noise can be emulated using the background noise mechanism whilst
+supplying noise data that includes human speech.
 
-### Implementation
+## Microphone and room augmentations <a name="mic-room-aug"></a>
 
-Babble noise is combined with speech in the same way that background noise is.
-The `--noise_initial_low`, `--noise_initial_high`, `--noise_delay_steps`, and `--noise_ramp_steps`
-arguments are shared between background noise and babble noise.
-
-The only difference is that the final range of babble noise is 15–30dB.
-
-## Narrowband training <a name="narrowband"></a>
-
-For some target domains, data is recorded at (or compressed to) 8 kHz (narrowband). For models trained with audio >8 kHz (16 kHz is the default) the audio will be upsampled to the higher sample rate before inference. This creates a mismatch between training and inference, since the model will partly rely on information from the higher frequency bands.
-
-This can be partly mitigated by resampling a part of the training data to narrowband and back to higher frequencies, so the model is trained on audio that more closely resembles the validation data.
-
-To apply this downsampling on-the-fly to a random half of batches, set `--prob_train_narrowband=0.5` in your training command.
-
-## Microphone and Room augmentations <a name="mic-room-aug"></a>
-
-Microphone and room augmentations are enabled by supplying non-zero values for:
-
-```sh
---prob_microphone_aug <value>
---prob_room_aug <value>
-```
-
-We recommend setting both to 0.2 for a fine tuning pass.
-
-These augmentations work by convolving an impulse response function which
-describes the frequency/time responses of the microphone/room with the audio
-signal.
-
-### Implementation
-
-The augmentations are applied on the fly by mixing the utterances with impulse
-responses. The impulse responses are loaded from:
-
-```sh
---microphone_dataset <path_to_directory>
---room_dataset <path_to_directory>
-```
+These are both created by convolving impulse response functions with the audio
+signal. Set `--prob_room_aug` to a non zero value to enable convolution with
+simulated room impulse responses. Alternatively, set `--room_dataset` to a path
+to a lhotse recording-set to use your own room impulse responses.
 
 We recommend using the room impulse response collection introduced by "A Study
 on Data Augmentation of Reverberant Speech for Robust Speech Recognition"
 
-<!-- markdown-link-check-disable -->
-
 For microphone augmentations, we recommend using the impulse responses from the
 ["Microphone impulse response project"](http://micirp.blogspot.com/)
 
-<!-- markdown-link-check-enable -->
-
 ## Inspecting augmentations <a name="inspect_audio"></a>
 
-To listen to the effects of augmentations, pass `--inspect_audio`. All audios will then be saved to `/results/augmented_audios` after augmentations have been applied. This is intended for debugging only—DALI is slower with this option, and a full epoch of saved audios will use as much disk space as the training dataset.
+To listen to the effects of augmentations, pass `--inspect_audio`. All audios will then be saved to `/results/augmented_audios` after augmentations have been applied. This is intended for debugging only—the data pipeline is slower with this option, and a full epoch of saved audios will use as much disk space as the training dataset.
 
 ## Random State Passing <a name="random_state_passing"></a>
 
@@ -168,11 +97,68 @@ RSP requires Myrtle.ai's custom LSTM which is why `custom_lstm: true` is set by 
 
 RSP is applied at training-time. An inference-time feature, [state resets](./state_resets.md) can be used in conjunction with RSP to further reduce WERs on long utterances.
 
+### Implementation notes
+
+Unintuitively, random state passing requires the penultimate hidden state and
+the last embedding token of the previous batch. Consider two utterances, with
+token sequences `[I, like, cats]` and `[You, love, dogs]`
+
+By training on the concatenation of these two utterances,
+the prediction net calculation looks like:
+
+```txt
+(A)
+SOS I like cats You love dogs
+  ↘  ↘    ↘   ↘   ↘   ↘   ↘
+0 ➡h1➡h2 ➡h3 ➡h4 ➡h5 ➡h6 ➡h7
+```
+
+Here 0 is the zero embedding vector which LSTMs use as the initial hidden state
+for SOS.
+
+By training on these utterances individually, the pred net calculations are:
+
+```txt
+(B)
+SOS I like cats
+  ↘  ↘   ↘    ↘
+0 ➡h1➡h2 ➡h3 ➡h4
+```
+
+And:
+
+```txt
+(C)
+SOS You love dogs
+  ↘    ↘   ↘   ↘
+0 ➡h1 ➡H2 ➡H3 ➡H4
+```
+
+Where H_i is a different state from h_i. Note that for the second utterance (C)
+the hidden states are different than in A, because the context of the first
+utterance is lost. This can be fixed by replacing (SOS, 0) in C with (cats, h3)
+from (B):
+
+```txt
+(D)
+cats You love dogs
+   ↘    ↘   ↘   ↘
+h3 ➡h4 ➡h5 ➡h6 ➡h7
+```
+
+Hence, (D) has the same hidden states as A since combining the tokens and states
+is done the same way as in (A).
+
+Thus, it's required to save the embedding of last token (e.g. cats) and the
+next-to-last state (e.g. h3) to make this work.
+
+For full details see the implementation in `training/caiman_asr_train/core/model.py`
+
 ## Tokens Sampling <a name="tokens_sampling"></a>
 
 Text needs to be in the form of tokens before it is processed by the RNNT. These tokens can represent words, characters, or
-subwords. CAIMAN-ASR uses subwords which are formed out of 28 characters, namely the lower-case english alphabet
-letters, along with the space and apostrophe characters. The tokens are derived from the tokenizer model
+subwords. CAIMAN-ASR uses subwords, formed out of the character set configured for the model
+(see [Changing the character set](changing_the_character_set.md)). The tokens are derived from the tokenizer model
 [SentencePiece](https://github.com/google/sentencepiece).
 A SentencePiece tokenizer model can be trained on raw text, and produces a vocabulary with the most probable subwords that
 emerge in the text. These derived vocabulary entries (i.e. the tokens) are scored according to the (negative log) probability

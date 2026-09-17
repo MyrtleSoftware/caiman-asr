@@ -7,14 +7,13 @@ import torch.distributed as dist
 from beartype import beartype
 from beartype.typing import Dict, List, Optional, Tuple
 
-from caiman_asr_train.latency.measure_latency import align_ctm_files
+from caiman_asr_train.latency.measure_latency import Latencies, align_ctm_files
 from caiman_asr_train.latency.measure_latency_lite import compute_latency_metrics
 from caiman_asr_train.latency.timestamp import (
     SequenceTimestamp,
     Termination,
     frame_to_time,
 )
-from caiman_asr_train.train_utils.distributed import print_once
 from caiman_asr_train.utils.frame_width import (
     encoder_output_frame_width,
     initial_padding,
@@ -49,6 +48,9 @@ def to_ctm(
     initial_padding
         Time (in seconds) padded to the beginning of the audio at inference time.
     """
+
+    assert audio_fp, "Empty audio file path provided."
+
     with open(output_fp, "a") as file:
         # Iterate over each word in sentence
         for word_align in map(
@@ -84,9 +86,7 @@ def manage_ctm_export(
     lst_seq_time: List[SequenceTimestamp],
     gt_ctm_fpaths: List[str],
     flist: List[str],
-) -> Tuple[
-    Dict[str, Optional[float]], dict[str, float], List[float], List[float], List[float]
-]:
+) -> Tuple[Dict[str, Optional[float]], dict[str, float], Latencies]:
     """
     Manages the export of word-level timestamps to a CTM file, accommodating different
     data sources and computing environments.
@@ -101,23 +101,20 @@ def manage_ctm_export(
     Returns:
         latency_metrics: A dict containing latency metrics (broadcast to all ranks).
         timestamp_metrics: A dict containing timestamp metrics (broadcast to all ranks).
-        latencies: A list of emission latencies (rank zero only).
-        sil_latency: A list of silence latencies (rank zero only).
-        eos_latency: A list of end-of-sentence latencies (rank zero only).
+        latencies: A Latencies objects (rank zero only), containing:
+            - raw_latencies: A list of emission latencies.
+            - fw_latency: A list of first-word latencies.
+            - sil_latency: A list of silence latencies.
+            - eos_latency: A list of end-of-sentence latencies.
     """
     latency_metrics = {}
     timestamp_metrics = {}
-    latencies = []
-    sil_latency = []
-    eos_latency = []
+    latencies = Latencies([], [], [], [])
 
     if not dist.is_initialized() or dist.get_rank() == 0:
         frame_width = encoder_output_frame_width(args.model_config)
 
-        if args.read_from_tar:
-            file_list = args.val_tar_files
-        else:
-            file_list = args.val_manifests
+        file_list = args.val_manifests
 
         base_name = "-".join([Path(x).stem for x in file_list])
 
@@ -134,8 +131,6 @@ def manage_ctm_export(
         (
             latencies,
             _,
-            sil_latency,
-            eos_latency,
             token_usage_rate,
             terminal_token_usage_rate,
             timestamp_metrics,
@@ -143,6 +138,7 @@ def manage_ctm_export(
             gt_ctm_fpaths,
             ctm_fpath,
             last_emit_time,
+            args.val_standardizer_lang,
             head_offset=args.latency_head_offset,
             tail_offset=args.latency_tail_offset,
         )
@@ -154,7 +150,11 @@ def manage_ctm_export(
             print(f"WARNING: {terminal_token_usage_rate=} is very low (below 50%).")
 
         latency_metrics = compute_latency_metrics(
-            latencies, sil_latency, eos_latency, frame_width=frame_width
+            latencies=latencies.raw_latency,
+            fw_latency=latencies.fw_latency,
+            sil_latency=latencies.sil_latency,
+            eos_latency=latencies.eos_latency,
+            frame_width=frame_width,
         )
 
         latency_metrics["token_usage_rate"] = token_usage_rate
@@ -163,35 +163,41 @@ def manage_ctm_export(
     if dist.is_initialized():
         dist.broadcast_object_list([latency_metrics, timestamp_metrics])
 
-    return latency_metrics, timestamp_metrics, latencies, sil_latency, eos_latency
+    return latency_metrics, timestamp_metrics, latencies
 
 
 @beartype
-def get_reference_ctms(args: Namespace, val_multiple: bool = False) -> List[str]:
+def man2ctm(man: str) -> str:
+    if man.endswith(".json"):
+        # Legacy json
+        return man[:-5] + ".ctm"
+    elif man.endswith(".cuts.jsonl.gz"):
+        # Lhotse cutset
+        return man[:-14] + ".ctm"
+    elif man.endswith(".cuts.jsonl"):
+        # Uncompressed Lhotse cutset
+        return man[:-11] + ".ctm"
+    else:
+        raise ValueError(f"Unsupported manifest file extension: {man}")
+
+
+@beartype
+def get_reference_manifest_files(
+    args: Namespace, val_multiple: bool = False
+) -> List[str]:
     """
-    Get reference ctms for validation manifests.
+    Get reference validation manifests.
     """
     if val_multiple:
         manifests_files = []
         for manifest, dataset_dir in zip(args.all_val_manifests, args.all_dataset_dirs):
             manifests_files.append(get_abs_path(dataset_dir, manifest))
-    elif args.read_from_tar:
-        manifests_files = get_abs_tar_paths(args.dataset_dir, args.val_tar_files)
     else:
-        manifests_files = get_abs_manifest_paths(args.dataset_dir, args.val_manifests)
+        manifests_files = get_abs_manifest_paths(
+            args.val_dataset_dir, args.val_manifests
+        )
 
-    ctms_files = []
-    for manifest_file in manifests_files:
-        ctm_file = os.path.splitext(manifest_file)[0] + ".ctm"
-
-        if os.path.exists(ctm_file):
-            ctms_files.append(ctm_file)
-        else:
-            print_once(
-                f"WARNING: CTM file {ctm_file} not found for manifest {manifest_file}."
-            )
-
-    return ctms_files
+    return manifests_files
 
 
 @beartype

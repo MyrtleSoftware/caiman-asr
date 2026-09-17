@@ -8,15 +8,15 @@ from beartype import beartype
 from beartype.typing import Dict, List, Optional, Tuple, Union
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from caiman_asr_train.data.dali import sampler as dali_sampler
 from caiman_asr_train.data.tokenizer import Tokenizer
 from caiman_asr_train.export.checkpointer import Checkpointer
 from caiman_asr_train.log.tb_dllogger import init_log
 from caiman_asr_train.log.tee import start_logging_stdout_and_stderr
 from caiman_asr_train.rnnt import config
 from caiman_asr_train.rnnt.config import get_tokenizer_conf
+from caiman_asr_train.rnnt.loss import LossSpec
 from caiman_asr_train.rnnt.model import RNNT
-from caiman_asr_train.setup.base import Setup, TrainingOnly
+from caiman_asr_train.setup.base import Setup
 from caiman_asr_train.setup.check_tokenizer import check_tokenizer_kw
 from caiman_asr_train.setup.core import CPU, CUDA, VAL, PipelineType
 from caiman_asr_train.train_utils.distributed import print_once
@@ -35,9 +35,16 @@ class BaseValSetup(Setup):
         tokenizer: Tokenizer,
         multi_gpu: bool,
         tokenizer_kw: dict,
+        spec: LossSpec,
+        prefix_token_map: Optional[dict] = None,
     ) -> Tuple[Union[RNNT, DDP], RNNT, None]:
         rnnt_config = config.rnnt(cfg)
         rnnt_config["gpu_unavailable"] = self.preferred_device() == CPU
+        if rnnt_config.get("conditional_encoder", False):
+            assert (
+                prefix_token_map is not None
+            ), "prefix_token_map must be provided for conditional encoder"
+            rnnt_config["prefix_token_map"] = prefix_token_map
         model_cls = self.get_model_cls(args)
         model = model_cls(n_classes=tokenizer.num_labels + 1, **rnnt_config)
         model.to(self.preferred_device())
@@ -82,14 +89,6 @@ class BaseValSetup(Setup):
 
         return ({VAL: tokenizer}, blank_idx, {VAL: tokenizer_kw})
 
-    def get_batch_sizes(self, args: Namespace) -> Dict[PipelineType, int]:
-        return {VAL: args.val_batch_size}
-
-    def get_pipeline_resume_step(
-        self, args: Namespace, training_only: Optional[TrainingOnly] = None
-    ) -> Dict[PipelineType, int]:
-        return {VAL: 0}
-
     def seed_and_logging(self, args: Namespace) -> np.random.Generator:
         np_rng = set_seed(args.seed, args.local_rank)
 
@@ -98,16 +97,6 @@ class BaseValSetup(Setup):
         if not args.skip_init:
             init_log(args)
         return np_rng
-
-    def build_samplers(
-        self,
-        args: Namespace,
-        np_rng: np.random.Generator,
-        world_size: int,
-        batch_sizes: Dict[PipelineType, int],
-        resume_step: Dict[PipelineType, int],
-    ) -> Dict[PipelineType, Optional[dali_sampler.Sampler]]:
-        return {VAL: None}
 
     def pipeline_types(self) -> List[PipelineType]:
         return [VAL]
